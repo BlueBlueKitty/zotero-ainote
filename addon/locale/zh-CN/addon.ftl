@@ -1,0 +1,11 @@
+startup-begin = AiNote 加载中
+startup-finish = AiNote 已就绪
+menuitem-label = AiNote
+menupopup-label = AiNote
+menuitem-submenulabel = AiNote
+menuitem-filemenulabel = AiNote
+prefs-title = AiNote
+prefs-table-title = 标题
+prefs-table-detail = 详情
+tabpanel-lib-tab-label = 库标签
+tabpanel-reader-tab-label = 阅读器标签

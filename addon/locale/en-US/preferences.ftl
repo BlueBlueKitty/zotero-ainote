@@ -1,0 +1,10 @@
+ainote-prefs-heading = AiNote Preferences
+ainote-prefs-apiKey = API Key:
+ainote-prefs-apiUrl = API URL:
+ainote-prefs-model = Model:
+ainote-prefs-temperature = Temperature (0-1):
+ainote-prefs-stream = Streaming Output:
+ainote-prefs-stream-hint = If enabled, output incrementally; otherwise, output once when complete.
+ainote-prefs-summaryPrompt = Summary Prompt Template:
+ainote-prefs-resetPrompt = Restore Default Prompt
+ainote-prefs-apiUrl-example = API URL example (OpenAI-compatible): https://api.openai.com/v1/chat/completions

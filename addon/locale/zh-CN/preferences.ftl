@@ -1,0 +1,10 @@
+ainote-prefs-heading = AiNote 设置
+ainote-prefs-apiKey = API Key：
+ainote-prefs-apiUrl = API URL：
+ainote-prefs-model = 模型：
+ainote-prefs-temperature = 温度 (0-1)：
+ainote-prefs-stream = 流式输出：
+ainote-prefs-stream-hint = 开启后逐步输出；关闭则一次性输出。
+ainote-prefs-summaryPrompt = 总结提示模板：
+ainote-prefs-resetPrompt = 恢复默认 Prompt
+ainote-prefs-apiUrl-example = API URL 示例（OpenAI 兼容）：https://api.openai.com/v1/chat/completions

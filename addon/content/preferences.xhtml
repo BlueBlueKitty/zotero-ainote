@@ -1,0 +1,105 @@
+<linkset>
+  <html:link rel="localization" href="__addonRef__-preferences.ftl" />
+</linkset>
+<script>
+<![CDATA[
+  console.log("[AiNote] preferences.xhtml script running");
+  console.log("[AiNote] window:", typeof window);
+  console.log("[AiNote] Zotero:", typeof Zotero);
+  
+  try {
+    // addonInstance should be "AiNote" based on package.json config
+    const addonInstance = Zotero.AiNote;
+    console.log("[AiNote] Zotero.AiNote:", typeof addonInstance);
+    
+    if (addonInstance && addonInstance.hooks) {
+      console.log("[AiNote] hooks found, calling onPrefsEvent");
+      addonInstance.hooks.onPrefsEvent("load", { window: window });
+    } else {
+      console.error("[AiNote] Zotero.AiNote or hooks not found");
+      console.error("[AiNote] Available Zotero properties:", Object.keys(Zotero).filter(k => k.includes("Note") || k.includes("Ai")));
+    }
+  } catch (e) {
+    console.error("[AiNote] Error in preferences script:", e);
+  }
+]]>
+</script>
+<groupbox>
+  <label><html:h2 data-l10n-id="ainote-prefs-heading"></html:h2></label>
+  
+  <!-- 单一 API 配置 -->
+
+  <!-- API Key -->
+  <hbox align="center">
+    <label data-l10n-id="ainote-prefs-apiKey" />
+    <html:input
+      type="password"
+      id="zotero-prefpane-__addonRef__-apiKey"
+      preference="__prefsPrefix__.apiKey"
+      style="flex: 1; width: 400px;"
+    />
+  </hbox>
+
+  <!-- API URL -->
+  <hbox align="center">
+    <label data-l10n-id="ainote-prefs-apiUrl" />
+    <html:input
+      type="text"
+      id="zotero-prefpane-__addonRef__-apiUrl"
+      preference="__prefsPrefix__.apiUrl"
+      style="flex: 1; width: 400px;"
+    />
+  </hbox>
+
+  <!-- Model -->
+  <hbox align="center">
+    <label data-l10n-id="ainote-prefs-model" />
+    <html:input
+      type="text"
+      id="zotero-prefpane-__addonRef__-model"
+      preference="__prefsPrefix__.model"
+      style="width: 200px;"
+    />
+  </hbox>
+
+  <!-- Temperature -->
+  <hbox align="center">
+    <label data-l10n-id="ainote-prefs-temperature" />
+    <html:input
+      type="number"
+      id="zotero-prefpane-__addonRef__-temperature"
+      preference="__prefsPrefix__.temperature"
+      min="0"
+      max="1"
+      step="0.1"
+      style="width: 100px;"
+    />
+  </hbox>
+
+  <!-- Stream toggle -->
+  <hbox align="center">
+    <label data-l10n-id="ainote-prefs-stream" />
+    <html:input
+      type="checkbox"
+      id="zotero-prefpane-__addonRef__-stream"
+      preference="__prefsPrefix__.stream"
+      style="width: 20px;"
+    />
+    <label data-l10n-id="ainote-prefs-stream-hint" />
+  </hbox>
+
+  <!-- Summary Prompt -->
+  <vbox>
+    <label data-l10n-id="ainote-prefs-summaryPrompt" />
+    <html:textarea
+      id="zotero-prefpane-__addonRef__-summaryPrompt"
+      preference="__prefsPrefix__.summaryPrompt"
+      rows="8"
+      style="width: 100%; font-family: monospace;"
+    />
+  </vbox>
+  
+  <separator class="thin" />
+  
+  <description data-l10n-id="ainote-prefs-apiUrl-example" style="color: #666;" />
+</groupbox>

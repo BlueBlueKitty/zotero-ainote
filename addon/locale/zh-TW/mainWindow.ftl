@@ -1,0 +1,20 @@
+menuitem-generateSummary = 生成AI總結筆記
+error-noItemsSelected = 未選擇任何條目
+error-noApiKey = API密鑰未配置，請在設定中配置。
+success-allComplete = 所有條目已成功處理！
+progress-extracting = 正在提取PDF文字...
+progress-generating = 正在生成AI總結...
+progress-creating = 正在建立筆記...
+progress-complete = 完成！
+
+item-section-example1-head-text =
+    .label = 外掛程式模板: 條目資訊
+item-section-example1-sidenav-tooltip =
+    .tooltiptext = 這是外掛程式模板面板(條目資訊)
+item-section-example2-head-text =
+    .label = 外掛程式模板: 閱讀器[{$status}]
+item-section-example2-sidenav-tooltip =
+    .tooltiptext = 這是外掛程式模板面板(閱讀器)
+item-section-example2-button-tooltip =
+    .tooltiptext = 移除此面板
+item-info-row-example-label = 範例行

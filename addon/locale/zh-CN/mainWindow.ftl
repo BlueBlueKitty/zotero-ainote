@@ -1,0 +1,20 @@
+menuitem-generateSummary = 生成AI总结笔记
+error-noItemsSelected = 未选择任何条目
+error-noApiKey = API密钥未配置，请在设置中配置。
+success-allComplete = 所有条目已成功处理！
+progress-extracting = 正在提取PDF文本...
+progress-generating = 正在生成AI总结...
+progress-creating = 正在创建笔记...
+progress-complete = 完成！
+
+item-section-example1-head-text =
+    .label = 插件模板: 条目信息
+item-section-example1-sidenav-tooltip =
+    .tooltiptext = 这是插件模板面板(条目信息)
+item-section-example2-head-text =
+    .label = 插件模板: 阅读器[{$status}]
+item-section-example2-sidenav-tooltip =
+    .tooltiptext = 这是插件模板面板(阅读器)
+item-section-example2-button-tooltip =
+    .tooltiptext = 移除此面板
+item-info-row-example-label = 示例行

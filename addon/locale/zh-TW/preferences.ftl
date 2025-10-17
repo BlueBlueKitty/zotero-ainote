@@ -1,0 +1,10 @@
+ainote-prefs-heading = AiNote 設定
+ainote-prefs-apiKey = API Key：
+ainote-prefs-apiUrl = API URL：
+ainote-prefs-model = 模型：
+ainote-prefs-temperature = 溫度 (0-1)：
+ainote-prefs-stream = 串流輸出：
+ainote-prefs-stream-hint = 開啟後逐步輸出；關閉則一次性輸出。
+ainote-prefs-summaryPrompt = 總結提示模板：
+ainote-prefs-resetPrompt = 恢復預設 Prompt
+ainote-prefs-apiUrl-example = API URL 範例（OpenAI 相容）：https://api.openai.com/v1/chat/completions

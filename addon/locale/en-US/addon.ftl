@@ -1,0 +1,11 @@
+startup-begin = AiNote is loading
+startup-finish = AiNote is ready
+menuitem-label = AiNote
+menupopup-label = AiNote
+menuitem-submenulabel = AiNote
+menuitem-filemenulabel = AiNote
+prefs-title = AiNote
+prefs-table-title = Title
+prefs-table-detail = Detail
+tabpanel-lib-tab-label = Lib Tab
+tabpanel-reader-tab-label = Reader Tab
