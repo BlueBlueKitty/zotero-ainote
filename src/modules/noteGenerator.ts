@@ -74,18 +74,12 @@ export class NoteGenerator {
         error
       );
 
-      // 如果出错，仍然尝试创建一个包含错误信息的笔记
-      if (!note) {
-        const errorMsg = `<h3>AI 总结</h3><p>错误: ${error.message}</p>`;
-        note = await this.createNote(item, errorMsg);
-        await note.saveTx();
-      }
-
       // 如果有输出窗口，显示错误
       if (outputWindow) {
         outputWindow.showError(itemTitle, error.message);
       }
 
+      // 不创建包含错误的笔记，直接抛出错误
       throw error;
     }
   }

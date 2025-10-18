@@ -1,0 +1,17 @@
+{
+  "addons": {
+    "ainote@zotero.org": {
+      "updates": [
+        {
+          "version": "1.0.0",
+          "update_link": "https://github.com/BlueBlueKitty/zotero-ainote/releases/download/v1.0.0/ainote.xpi",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "7.0.0"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
