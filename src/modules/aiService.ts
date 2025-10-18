@@ -27,9 +27,8 @@ export class AIService {
     const apiUrl = ((getPref("apiUrl" as any) as string) || "").trim();
     const model = ((getPref("model" as any) as string) || "gpt-3.5-turbo").trim();
     
-    // temperature 存储为整数 0-100，使用时除以 100 得到 0.0-1.0
-    const temperatureInt = (getPref("temperature") as number) ?? 70;
-    const temperature = temperatureInt / 100;
+    const temperatureStr = (getPref("temperature") as string) || "0.7";
+    const temperature = parseFloat(temperatureStr) || 0.7;
     const summaryPrompt = prompt || ((getPref("summaryPrompt") as string) || AIService.getDefaultPrompt());
     const streamEnabled = (getPref("stream") as boolean) ?? true;
 

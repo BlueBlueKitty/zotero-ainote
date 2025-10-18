@@ -11,7 +11,7 @@ declare namespace _ZoteroTypes {
       "apiKey": string;
       "apiUrl": string;
       "model": string;
-      "temperature": number;
+      "temperature": string;
       "stream": boolean;
       "summaryPrompt": string;
     };

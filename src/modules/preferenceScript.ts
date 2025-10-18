@@ -42,8 +42,7 @@ function updatePrefsUI(win: Window) {
   const apiKey = (getPref("apiKey") as string) || "";
   const apiUrl = (getPref("apiUrl") as string) || "https://api.openai.com/v1/chat/completions";
   const model = (getPref("model") as string) || "gpt-3.5-turbo";
-  // temperature 存储为整数 0-100，显示时除以 100
-  const temperatureInt = (getPref("temperature") as number) ?? 70;
+  const temperature = (getPref("temperature") as string) || "0.7";
   const savedPrompt = (getPref("summaryPrompt") as string) || "";
   const defaultPrompt = getDefaultPrompt();
   const stream = (getPref("stream") as boolean) ?? true;
@@ -51,7 +50,7 @@ function updatePrefsUI(win: Window) {
   if (apiKeyInput) apiKeyInput.value = apiKey;
   if (apiUrlInput) apiUrlInput.value = apiUrl;
   if (modelInput) modelInput.value = model;
-  if (temperatureInput) temperatureInput.value = String(temperatureInt / 100);
+  if (temperatureInput) temperatureInput.value = temperature;
   if (promptTextarea) {
     // 如果没有保存的 prompt，使用默认值
     promptTextarea.value = savedPrompt || defaultPrompt;
@@ -91,10 +90,8 @@ function bindPrefEvents(win: Window) {
   }
   if (temperatureInput) {
     const save = () => {
-      // 将浮点数 0.0-1.0 转换为整数 0-100 存储
-      const floatValue = parseFloat(temperatureInput.value) || 0.7;
-      const intValue = Math.round(floatValue * 100);
-      setPref("temperature", intValue);
+      const value = temperatureInput.value || "0.7";
+      setPref("temperature", value);
     };
     temperatureInput.addEventListener("input", save);
     temperatureInput.addEventListener("blur", save);
@@ -118,11 +115,7 @@ function bindPrefEvents(win: Window) {
     if (apiKeyInput) setPref("apiKey", apiKeyInput.value || "");
     if (apiUrlInput) setPref("apiUrl", apiUrlInput.value || "");
     if (modelInput) setPref("model", modelInput.value || "");
-    if (temperatureInput) {
-      const floatValue = parseFloat(temperatureInput.value) || 0.7;
-      const intValue = Math.round(floatValue * 100);
-      setPref("temperature", intValue);
-    }
+    if (temperatureInput) setPref("temperature", temperatureInput.value || "0.7");
     if (promptTextarea) setPref("summaryPrompt", promptTextarea.value || getDefaultPrompt());
     if (streamCheckbox) setPref("stream", !!streamCheckbox.checked);
   });
