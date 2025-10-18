@@ -42,35 +42,3 @@ export function showToast(
 export function getWindow() {
   return Zotero.getMainWindow();
 }
-
-export function getNoteEditorWindowByNoteId(
-  noteId: number
-): Window | undefined {
-  try {
-    const mainWindow = getWindow();
-    const Zotero_Tabs = mainWindow.Zotero_Tabs as any;
-    
-    if (!Zotero_Tabs || !Zotero_Tabs._tabs) {
-      return undefined;
-    }
-    
-    // 获取所有标签页
-    const tabs = Zotero_Tabs._tabs;
-    
-    for (let i = 0; i < tabs.length; i++) {
-      const tab = tabs[i] as any;
-      if (
-        tab &&
-        tab.type === "note" &&
-        tab.note?.id === noteId &&
-        tab.noteEditor?.isLoaded
-      ) {
-        return tab.noteEditor.editor.contentWindow;
-      }
-    }
-  } catch (error) {
-    console.error("Error getting note editor window:", error);
-  }
-  
-  return undefined;
-}

@@ -1,6 +1,10 @@
 # AiNote for Zotero
 
-[中文版说明请点击这里](doc/README-zhCN.md)
+<img src="imgs/ainote.png" alt="AiNote Logo" width="150" height="150" />
+
+<p align="center">
+    <a href="doc/README-zhCN.md">中文版说明请点击这里</a>
+</p>
 
 ## Introduction
 
@@ -9,8 +13,9 @@ AiNote is a Zotero plugin that leverages AI services (OpenAI, DeepSeek, or custo
 ## Features
 
 - **AI-powered PDF summarization**: Generate concise notes for academic papers using your preferred AI model.
-- **Streaming output**: Output the content summarized by AI to notes in real time.
-- **Batch processing**: Select multiple items and generate notes in one click.
+- **Real-time streaming display**: View AI-generated content in a popup window with live streaming output.
+- **Batch processing**: Select multiple items and generate notes in one click, with clear separation between items.
+- **Automatic note creation**: After streaming completes, content is automatically saved to notes.
 - **Customizable prompts and models**: Adjust prompts, model, and API endpoint as needed.
 
 ## Installation
@@ -28,8 +33,10 @@ AiNote is a Zotero plugin that leverages AI services (OpenAI, DeepSeek, or custo
 
 - Select one or more PDF items in Zotero.
 - Right-click and choose `Generate AI Summary Note`.
-- The plugin will create summary notes using the configured AI service.
-- Progress and streaming output are shown in real time.
+- A popup window will appear showing the AI-generated content in real-time.
+- For multiple items, each item's content is clearly separated and labeled.
+- Once processing completes, all summaries are automatically saved to notes.
+- You can close the output window at any time.
 
 ---
 

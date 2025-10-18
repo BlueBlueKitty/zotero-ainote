@@ -18,8 +18,9 @@ function initZToolkit(_ztoolkit: ReturnType<typeof createZToolkit>) {
   const env = __env__;
   _ztoolkit.basicOptions.log.prefix = `[${config.addonName}]`;
   _ztoolkit.basicOptions.log.disableConsole = env === "production";
-  _ztoolkit.UI.basicOptions.ui.enableElementJSONLog = __env__ === "development";
-  _ztoolkit.UI.basicOptions.ui.enableElementDOMLog = __env__ === "development";
+  // 禁用 UI 元素的详细日志输出，减少控制台噪音
+  _ztoolkit.UI.basicOptions.ui.enableElementJSONLog = false;
+  _ztoolkit.UI.basicOptions.ui.enableElementDOMLog = false;
   // Getting basicOptions.debug will load global modules like the debug bridge.
   // since we want to deprecate it, should avoid using it unless necessary.
   // _ztoolkit.basicOptions.debug.disableDebugBridgePassword =

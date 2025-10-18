@@ -67,6 +67,8 @@ export class AIService {
       let processedLength = 0; // 已处理的响应长度，避免重复解析
       let partialLine = "";   // 进度事件之间可能存在被截断的半行 JSON
       let streamComplete = false; // 流是否正常结束
+      let abortedDueToError = false; // 是否因错误而中止
+      let errorFromProgress: Error | null = null; // 从 onprogress 中捕获的错误
 
       try {
         await Zotero.HTTP.request("POST", apiUrl, {
@@ -81,6 +83,36 @@ export class AIService {
             xmlhttp.timeout = 300000; // 5 分钟
             
             xmlhttp.onprogress = (e: any) => {
+              const status = e.target.status;
+              
+              // 检查 HTTP 状态码，如果是错误状态，尝试解析错误信息
+              if (status >= 400) {
+                try {
+                  const errorResponse = e.target.response;
+                  if (errorResponse) {
+                    // 尝试解析错误 JSON
+                    const parsed = JSON.parse(errorResponse);
+                    const err = parsed?.error || parsed;
+                    const code = err?.code || `HTTP ${status}`;
+                    const msg = err?.message || "请求失败";
+                    const errorMessage = `${code}: ${msg}`;
+                    AIService.notifyError(errorMessage);
+                    // 设置错误标志
+                    abortedDueToError = true;
+                    errorFromProgress = new Error(errorMessage);
+                    // 中止请求
+                    xmlhttp.abort();
+                  }
+                } catch (parseErr) {
+                  const errorMessage = `HTTP ${status}: 请求失败`;
+                  AIService.notifyError(errorMessage);
+                  abortedDueToError = true;
+                  errorFromProgress = new Error(errorMessage);
+                  xmlhttp.abort();
+                }
+                return;
+              }
+              
               try {
                 const resp: string = e.target.response || "";
                 if (resp.length > processedLength) {
@@ -98,7 +130,6 @@ export class AIService {
                     if (jsonStr === "[DONE]") {
                       // 收到结束信号：标记完成
                       streamComplete = true;
-                      ztoolkit.log("[AiNote] Stream completed with [DONE] signal");
                       return;
                     }
                     
@@ -114,7 +145,7 @@ export class AIService {
                           const newChunk = current.slice(delivered);
                           delivered = current.length;
                           Promise.resolve(onProgress(newChunk)).catch((err) => {
-                            ztoolkit.log("[AiNote] onProgress error:", err);
+                            ztoolkit.log("[AiNote] onProgress callback error:", err);
                           });
                         }
                       }
@@ -128,46 +159,75 @@ export class AIService {
               }
             };
             
+            xmlhttp.onerror = () => {
+              // XMLHttpRequest error
+            };
+            
+            xmlhttp.ontimeout = () => {
+              // XMLHttpRequest timeout
+            };
+            
             xmlhttp.onloadend = () => {
-              // 当请求结束时，如果收到了 [DONE] 则标记为成功
-              if (streamComplete) {
-                ztoolkit.log("[AiNote] Stream request completed successfully");
+              const status = xmlhttp.status;
+              
+              // 检查 HTTP 状态码
+              if (status >= 400) {
+                // 错误会在外层 catch 中处理
+                return;
               }
             };
           },
         });
       } catch (error: any) {
+        // 检查是否是因为错误而主动中止的
+        if (abortedDueToError && errorFromProgress) {
+          throw errorFromProgress;
+        }
+        
         // 检查是否是正常的流结束（有些API在收到[DONE]后会关闭连接导致"错误"）
         if (streamComplete && gotAnyDelta) {
-          ztoolkit.log("[AiNote] Stream ended normally after [DONE]");
           return chunks.join("");
         }
         
-        // 真正的错误
+        // 真正的错误 - 记录完整错误信息
+        ztoolkit.log("[AiNote] Stream request failed:", {
+          status: error?.xmlhttp?.status,
+          statusText: error?.xmlhttp?.statusText,
+          response: error?.xmlhttp?.response,
+          message: error?.message
+        });
+        
+        // 解析并显示错误
+        let errorMessage = "未知错误";
         try {
-          const parsed = JSON.parse(error?.xmlhttp?.response);
-          const err = parsed?.error || parsed;
-          const code = err?.code || "Error";
-          const msg = err?.message || error?.message || String(error);
-          AIService.notifyError(`${code}: ${msg}`);
-        } catch {
-          AIService.notifyError(error?.message || String(error));
+          const responseText = error?.xmlhttp?.response || error?.xmlhttp?.responseText;
+          if (responseText) {
+            const parsed = JSON.parse(responseText);
+            const err = parsed?.error || parsed;
+            const code = err?.code || "Error";
+            const msg = err?.message || error?.message || String(error);
+            errorMessage = `${code}: ${msg}`;
+          } else {
+            errorMessage = error?.message || String(error);
+          }
+        } catch (parseError) {
+          errorMessage = error?.message || error?.xmlhttp?.statusText || String(error);
         }
-        throw error;
+        
+        AIService.notifyError(errorMessage);
+        throw new Error(errorMessage);
       }
 
       const streamed = chunks.join("");
       if (gotAnyDelta && streamed) {
-        ztoolkit.log("[AiNote] Stream completed, total length:", streamed.length);
         return streamed;
       }
 
       // 若未拿到任何增量，回退到非流式
-      ztoolkit.log("[AiNote] No stream delta received, falling back to non-stream.");
-      return await AIService.nonStreamCompletion(apiUrl, apiKey, basePayload);
+      return await AIService.nonStreamCompletion(apiUrl, apiKey, basePayload, onProgress);
     } else {
-      // 非流式：一次性拿到完整文本
-      return await AIService.nonStreamCompletion(apiUrl, apiKey, basePayload);
+      // 非流式：一次性拿到完整文本（也传递 onProgress 以支持弹出窗口显示）
+      return await AIService.nonStreamCompletion(apiUrl, apiKey, basePayload, onProgress);
     }
   }
 
@@ -196,7 +256,7 @@ export class AIService {
       .show();
   }
 
-  private static async nonStreamCompletion(apiUrl: string, apiKey: string, payload: any): Promise<string> {
+  private static async nonStreamCompletion(apiUrl: string, apiKey: string, payload: any, onProgress?: ProgressCb): Promise<string> {
     try {
       const res = await Zotero.HTTP.request("POST", apiUrl, {
         headers: {
@@ -209,18 +269,38 @@ export class AIService {
       const data = res.response || res;
       // OpenAI 兼容：choices[0].message.content
       const text = data?.choices?.[0]?.message?.content || "";
-      return typeof text === "string" ? text : JSON.stringify(text);
-    } catch (error: any) {
-      try {
-        const parsed = JSON.parse(error?.xmlhttp?.response);
-        const err = parsed?.error || parsed;
-        const code = err?.code || "Error";
-        const msg = err?.message || error?.message || String(error);
-        AIService.notifyError(`${code}: ${msg}`);
-      } catch {
-        AIService.notifyError(error?.message || String(error));
+      const result = typeof text === "string" ? text : JSON.stringify(text);
+      
+      // 如果有 onProgress 回调，也调用它（模拟流式输出，一次性传递完整内容）
+      if (onProgress && result) {
+        try {
+          await onProgress(result);
+        } catch (err) {
+          ztoolkit.log("[AiNote] onProgress error in non-stream mode:", err);
+        }
       }
-      throw error;
+      
+      return result;
+    } catch (error: any) {
+      // 解析并显示错误
+      let errorMessage = "未知错误";
+      try {
+        const responseText = error?.xmlhttp?.response || error?.xmlhttp?.responseText;
+        if (responseText) {
+          const parsed = typeof responseText === 'string' ? JSON.parse(responseText) : responseText;
+          const err = parsed?.error || parsed;
+          const code = err?.code || "Error";
+          const msg = err?.message || error?.message || String(error);
+          errorMessage = `${code}: ${msg}`;
+        } else {
+          errorMessage = error?.message || String(error);
+        }
+      } catch (parseError) {
+        errorMessage = error?.message || error?.xmlhttp?.statusText || String(error);
+      }
+      
+      AIService.notifyError(errorMessage);
+      throw new Error(errorMessage);
     }
   }
 }
