@@ -1,6 +1,8 @@
 # AiNote for Zotero 插件
 
-<img src="../imgs/ainote.png" alt="AiNote Logo" width="150" height="150" />
+<p align="center">
+    <img src="../imgs/ainote.png" alt="AiNote Logo" width="150" height="150" />
+</p>
 
 <p align="center">
     <a href="../README.md">English README</a>
