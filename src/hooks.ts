@@ -3,6 +3,7 @@ import { registerPrefsScripts } from "./modules/preferenceScript";
 import { createZToolkit } from "./utils/ztoolkit";
 import { NoteGenerator } from "./modules/noteGenerator";
 import { config } from "../package.json";
+import { getPref, setPref } from "./utils/prefs";
 
 async function onStartup() {
   await Promise.all([
@@ -12,6 +13,9 @@ async function onStartup() {
   ]);
 
   initLocale();
+
+  // 在插件启动时立即初始化默认配置
+  initializeDefaultPrefsOnStartup();
 
   // Register preferences pane
   registerPrefsPane();
@@ -65,6 +69,57 @@ function registerPrefsPane() {
     defaultXUL: true,
   };
   Zotero.PreferencePanes.register(prefOptions);
+}
+
+/**
+ * 在插件启动时初始化默认配置
+ * 确保即使 prefs.js 没有加载，也能有默认值
+ */
+function initializeDefaultPrefsOnStartup() {
+  const getDefaultPrompt = () => `你是一名学术研究助理，请对下面的学术论文进行全面、结构化的总结。
+
+请包含：
+1. 研究目标与问题
+2. 研究方法与技术路线
+3. 主要发现与结果
+4. 结论与启示
+5. 局限性与未来方向
+
+要求：条理清晰、要点明确、使用中文回答。`;
+
+  const defaults: Record<string, any> = {
+    apiKey: "",
+    apiUrl: "https://api.openai.com/v1/chat/completions",
+    model: "gpt-3.5-turbo",
+    temperature: "0.7",
+    stream: true,
+    summaryPrompt: getDefaultPrompt(),
+  };
+
+  for (const [key, defaultValue] of Object.entries(defaults)) {
+    try {
+      // 使用 Zotero.Prefs.get 直接检查
+      const currentValue = getPref(key as any);
+      
+      if (currentValue === undefined || currentValue === null) {
+        const preview = typeof defaultValue === 'string' && defaultValue.length > 50 
+          ? defaultValue.substring(0, 50) + '...' 
+          : defaultValue;
+        ztoolkit.log(`[AiNote] 启动时初始化配置: ${key} = ${preview}`);
+        setPref(key as any, defaultValue);
+      } else if (typeof defaultValue === 'string' && typeof currentValue === 'string' && !currentValue.trim()) {
+        ztoolkit.log(`[AiNote] 启动时重置空配置: ${key}`);
+        setPref(key as any, defaultValue);
+      }
+    } catch (error) {
+      ztoolkit.log(`[AiNote] 启动时初始化配置失败: ${key}`, error);
+      try {
+        setPref(key as any, defaultValue);
+      } catch (e) {
+        ztoolkit.log(`[AiNote] 启动时强制设置配置失败: ${key}`, e);
+      }
+    }
+  }
 }
 
 /**

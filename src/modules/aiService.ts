@@ -29,7 +29,10 @@ export class AIService {
     
     const temperatureStr = (getPref("temperature") as string) || "0.7";
     const temperature = parseFloat(temperatureStr) || 0.7;
-    const summaryPrompt = prompt || ((getPref("summaryPrompt") as string) || AIService.getDefaultPrompt());
+    
+    // 获取 prompt，确保不会是 undefined
+    const savedPrompt = getPref("summaryPrompt") as string;
+    const summaryPrompt = prompt || (savedPrompt && savedPrompt.trim() ? savedPrompt : AIService.getDefaultPrompt());
     const streamEnabled = (getPref("stream") as boolean) ?? true;
 
     // 基本校验

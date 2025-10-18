@@ -18,6 +18,12 @@ export async function registerPrefsScripts(_window: Window) {
     console.log("[AiNote][Prefs] Calling migrateToGlobalOnce");
     migrateToGlobalOnce();
     
+    console.log("[AiNote][Prefs] Calling initializeDefaultPrefs");
+    initializeDefaultPrefs();
+    
+    console.log("[AiNote][Prefs] Calling diagnosePrefs");
+    diagnosePrefs();
+    
     console.log("[AiNote][Prefs] Calling updatePrefsUI");
     updatePrefsUI(_window);
     
@@ -43,8 +49,8 @@ function updatePrefsUI(win: Window) {
   const apiUrl = (getPref("apiUrl") as string) || "https://api.openai.com/v1/chat/completions";
   const model = (getPref("model") as string) || "gpt-3.5-turbo";
   const temperature = (getPref("temperature") as string) || "0.7";
-  const savedPrompt = (getPref("summaryPrompt") as string) || "";
   const defaultPrompt = getDefaultPrompt();
+  const savedPrompt = getPref("summaryPrompt") as string;
   const stream = (getPref("stream") as boolean) ?? true;
 
   if (apiKeyInput) apiKeyInput.value = apiKey;
@@ -52,9 +58,11 @@ function updatePrefsUI(win: Window) {
   if (modelInput) modelInput.value = model;
   if (temperatureInput) temperatureInput.value = temperature;
   if (promptTextarea) {
-    // 如果没有保存的 prompt，使用默认值
-    promptTextarea.value = savedPrompt || defaultPrompt;
-    if (!savedPrompt) {
+    // 如果没有保存的 prompt 或者是 undefined/空字符串，使用默认值
+    const finalPrompt = savedPrompt && savedPrompt.trim() ? savedPrompt : defaultPrompt;
+    promptTextarea.value = finalPrompt;
+    // 确保保存默认值到配置中
+    if (!savedPrompt || !savedPrompt.trim()) {
       setPref("summaryPrompt", defaultPrompt);
     }
   }
@@ -132,6 +140,79 @@ function getDefaultPrompt(): string {
 5. 局限性与未来方向
 
 要求：条理清晰、要点明确、使用中文回答。`;
+}
+
+/**
+ * 初始化默认配置 - 在插件加载时立即执行
+ * 确保即使 prefs.js 没有加载，也能有默认值
+ */
+function initializeDefaultPrefs() {
+  const defaults: Record<string, any> = {
+    apiKey: "",
+    apiUrl: "https://api.openai.com/v1/chat/completions",
+    model: "gpt-3.5-turbo",
+    temperature: "0.7",
+    stream: true,
+    summaryPrompt: getDefaultPrompt(),
+  };
+
+  // 遍历所有默认配置
+  for (const [key, defaultValue] of Object.entries(defaults)) {
+    try {
+      const currentValue = getPref(key as any);
+      
+      // 如果配置不存在或为空，则设置默认值
+      if (currentValue === undefined || currentValue === null) {
+        const preview = typeof defaultValue === 'string' && defaultValue.length > 50 
+          ? defaultValue.substring(0, 50) + '...' 
+          : defaultValue;
+        console.log(`[AiNote][Prefs] 初始化配置: ${key} = ${preview}`);
+        setPref(key as any, defaultValue);
+      } else if (typeof defaultValue === 'string' && typeof currentValue === 'string' && !currentValue.trim()) {
+        // 对于字符串类型，如果是空字符串也重置
+        console.log(`[AiNote][Prefs] 重置空配置: ${key}`);
+        setPref(key as any, defaultValue);
+      }
+    } catch (error) {
+      console.error(`[AiNote][Prefs] 初始化配置失败: ${key}`, error);
+      // 如果读取失败，尝试强制设置
+      try {
+        setPref(key as any, defaultValue);
+      } catch (e) {
+        console.error(`[AiNote][Prefs] 强制设置配置失败: ${key}`, e);
+      }
+    }
+  }
+}
+
+/**
+ * 诊断配置问题 - 在控制台输出详细信息
+ */
+function diagnosePrefs() {
+  console.log("[AiNote][Prefs] ========== 配置诊断开始 ==========");
+  
+  const keys = ["apiKey", "apiUrl", "model", "temperature", "stream", "summaryPrompt"];
+  
+  for (const key of keys) {
+    try {
+      const value = getPref(key as any);
+      const valueType = typeof value;
+      const valueLength = typeof value === 'string' ? value.length : 'N/A';
+      const valuePreview = typeof value === 'string' && value.length > 100 
+        ? value.substring(0, 100) + '...' 
+        : value;
+      
+      console.log(`[AiNote][Prefs] 配置项: ${key}`);
+      console.log(`  - 值: ${valuePreview}`);
+      console.log(`  - 类型: ${valueType}`);
+      console.log(`  - 长度: ${valueLength}`);
+      console.log(`  - 是否为空: ${value === undefined || value === null || (typeof value === 'string' && !value.trim())}`);
+    } catch (error) {
+      console.error(`[AiNote][Prefs] 读取配置失败: ${key}`, error);
+    }
+  }
+  
+  console.log("[AiNote][Prefs] ========== 配置诊断结束 ==========");
 }
 
 // One-time migration from provider-scoped or misspelled keys back to global keys
