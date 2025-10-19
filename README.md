@@ -1,45 +1,48 @@
-# AiNote for Zotero
+# AiNote for Zotero 插件
 
 <p align="center">
-    <img src="imgs/ainote.png" alt="AiNote Logo" width="150" height="150" />
+    <img src="./imgs/ainote.png" alt="AiNote Logo" width="150" height="150" />
 </p>
 
 <p align="center">
-    <a href="doc/README-zhCN.md">中文版说明请点击这里</a>
+    <a href="./doc/README_en-US.md">English README</a>
 </p>
 
-## Introduction
+## 简介
 
-AiNote is a Zotero plugin that leverages AI services (OpenAI, DeepSeek, or custom API) to automatically generate summary notes for your PDF literature. It supports streaming output and batch processing.
+AiNote 是一款 Zotero 插件，通过 AI 自动为 PDF 文献生成总结笔记，插件支持流式输出、批量处理。
 
-## Features
+## 功能亮点
 
-- **AI-powered PDF summarization**: Generate concise notes for academic papers using your preferred AI model.
-- **Real-time streaming display**: View AI-generated content in a popup window with live streaming output.
-- **Batch processing**: Select multiple items and generate notes in one click, with clear separation between items.
-- **Automatic note creation**: After streaming completes, content is automatically saved to notes.
-- **Customizable prompts and models**: Adjust prompts, model, and API endpoint as needed.
+- **AI 智能总结 PDF**：一键生成学术论文的精炼笔记，支持多种 AI 服务。
+- **实时流式显示**：在弹出窗口中实时查看 AI 生成的内容，支持流式输出。
+- **批量处理**：可批量选择文献，统一生成笔记，每个条目内容清晰分隔。
+- **自动保存笔记**：流式输出完成后，内容自动保存到 Zotero 笔记中。
+- **自定义模型与提示词**：可灵活调整模型、API 地址和提示词。
 
-## Installation
+## 安装方法
 
-1. Download the latest release from the [GitHub repository](#).
-2. In Zotero, go to `Tools > Add-ons` and install the AiNote plugin.
-3. Restart Zotero if needed.
+1. 从 [GitHub 仓库](https://github.com/BlueBlueKitty/zotero-ainote/releases) 下载最新版本。
+2. 在 Zotero 中进入 `工具 > 插件`，安装 AiNote 插件。
+3. 如有需要，重启 Zotero。
 
-## Configuration
+## 配置说明
 
-- Go to `AiNote Preferences` in Zotero.
-- Set your **API Key**, **API URL**, and **Model**. These settings are global and will be used for all AI requests.
+- 在 Zotero 的 `AiNote 偏好设置` 中填写 **API Key**、**API URL** 和 **Model**。
+- 所有 AI 请求均使用这套全局参数，无需为每个服务商单独配置。
+- 注意，填写**API URL**时，可能要加上`/chat/completions`，如：https://api.openai.com/v1/chat/completions
 
-## Usage
+## 使用方法
 
-- Select one or more PDF items in Zotero.
-- Right-click and choose `Generate AI Summary Note`.
-- A popup window will appear showing the AI-generated content in real-time.
-- For multiple items, each item's content is clearly separated and labeled.
-- Once processing completes, all summaries are automatically saved to notes.
-- You can close the output window at any time.
+- 在 Zotero 中选中一个或多个 PDF 文献。
+- 右键选择 `生成AI总结笔记`。
+- 插件会弹出一个输出窗口，实时显示 AI 生成的内容。
+- 处理多个条目时，每个条目的内容会清晰标注并分隔显示。
+- 处理完成后，所有总结内容会自动保存到对应的 Zotero 笔记中。
+- 您可以随时关闭输出窗口。
 
----
-
-[中文说明文档](doc/README-zhCN.md)
+<div align="center">
+    <span style="display:inline-block; border-radius:12px; overflow:hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.18);">
+        <img src="./imgs/example.gif" alt="usage example" style="display:block;" />
+    </span>
+</div>
