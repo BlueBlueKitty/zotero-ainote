@@ -1,4 +1,5 @@
 import { config } from "../../package.json";
+import { marked } from "marked";
 
 /**
  * OutputWindow - 用于显示流式 AI 输出的对话框窗口
@@ -402,6 +403,18 @@ export class OutputWindow {
    */
   public finishItem(): void {
     if (this.currentItemContainer) {
+      // 输出调试日志：AI 总结的原始 Markdown 内容
+      ztoolkit.log("=".repeat(80));
+      ztoolkit.log("[AiNote][DEBUG] AI 总结的原始 Markdown 内容:");
+      ztoolkit.log(this.currentItemBuffer);
+      ztoolkit.log("=".repeat(80));
+      
+      // 输出调试日志：转换后的 HTML 内容
+      const convertedHTML = this.convertMarkdownToHTML(this.currentItemBuffer);
+      ztoolkit.log("[AiNote][DEBUG] 转换后的 HTML 内容:");
+      ztoolkit.log(convertedHTML);
+      ztoolkit.log("=".repeat(80));
+      
       // 完成后渲染公式
       this.renderMath();
       
@@ -767,144 +780,131 @@ export class OutputWindow {
   }
 
   /**
-   * 自定义 Markdown 渲染器（替代 marked）
+   * 自定义 Markdown 渲染器（使用 marked 库）
    * @param markdown Markdown 文本
    * @returns HTML 字符串
    */
   private static parseMarkdownToHTML(markdown: string): string {
-    let html = markdown;
-    
-    // 1. 先处理代码块（避免代码内容被后续处理）
-    const codeBlocks: string[] = [];
-    html = html.replace(/```([\s\S]*?)```/g, (match, code) => {
-      const placeholder = `ⒸⓄⒹⒺ_BLOCK_${codeBlocks.length}`;
-      const escaped = code.trim()
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-      codeBlocks.push(`<pre style="background: rgba(0,0,0,0.1); padding: 10px; border-radius: 4px; overflow-x: auto; margin: 10px 0;"><code>${escaped}</code></pre>`);
-      return placeholder;
-    });
-    
-    // 2. 处理行内代码
-    const inlineCodes: string[] = [];
-    html = html.replace(/`([^`]+)`/g, (match, code) => {
-      const placeholder = `ⒸⓄⒹⒺ_INLINE_${inlineCodes.length}`;
-      const escaped = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      inlineCodes.push(`<code style="background: rgba(0,0,0,0.1); padding: 2px 4px; border-radius: 2px;">${escaped}</code>`);
-      return placeholder;
-    });
-    
-    // 3. 处理水平线 ---
-    html = html.replace(/^---+$/gm, "<hr style='border: none; border-top: 1px solid rgba(89, 192, 188, 0.3); margin: 20px 0;'>");
-    
-    // 4. 处理标题（从 h6 到 h1，避免误匹配）
-    const headingSizes = ['20px', '18px', '16px', '15px', '14px', '13px'];
-    const headingMargins = ['16px', '14px', '12px', '10px', '8px', '6px'];
-    const headingWeights = ['bold', 'bold', '600', '600', 'normal', 'normal'];
-    
-    for (let level = 6; level >= 1; level--) {
-      const hashes = '#'.repeat(level);
-      const regex = new RegExp(`^${hashes}\\s+(.+)$`, 'gm');
-      html = html.replace(regex, (match, text) => {
-        const processedText = OutputWindow.processInlineMarkdown(text.trim());
-        return `<h${level} style="margin: ${headingMargins[level-1]} 0 10px 0; font-size: ${headingSizes[level-1]}; font-weight: ${headingWeights[level-1]}; color: #59c0bc;">${processedText}</h${level}>`;
+    try {
+      // 预处理：修复 AI 输出的格式问题
+      
+      // 1. 移除标题行末尾的空格（避免影响后续处理）
+      markdown = markdown.replace(/(^#+\s+.+?)\s+$/gm, '$1');
+      
+      // 2. 修复 Setext 标题误判问题：确保 --- 上方有空行
+      // 将 "段落\n---" 转换为 "段落\n\n---"，避免段落被误判为 H2
+      markdown = markdown.replace(/([^\n])\n(---+|===+)\s*$/gm, '$1\n\n$2');
+      
+      // 3. 确保标题后有空行（避免段落被误判为标题）
+      // 匹配：标题行 + 单个换行 + 非标题/非列表/非空行的内容
+      markdown = markdown.replace(/(^#+\s+.+)\n(?!\n|#+|\s*[-*]|\s*\d+\.)/gm, '$1\n\n');
+      
+      // 4. 移除标题中的粗体标记（Markdown 规范中标题不应包含格式）
+      markdown = markdown.replace(/(^#+\s+.*?)\*\*(.+?)\*\*(.*?$)/gm, '$1$2$3');
+      
+      // 配置 marked 选项
+      marked.setOptions({
+        breaks: true,        // 支持 GFM 换行
+        gfm: true,          // 启用 GitHub Flavored Markdown
       });
+
+      // 自定义渲染器以添加样式
+      const renderer = new marked.Renderer();
+
+      // 标题样式
+      const headingSizes = ['20px', '18px', '16px', '15px', '14px', '13px'];
+      const headingMargins = ['16px', '14px', '12px', '10px', '8px', '6px'];
+      const headingWeights = ['bold', 'bold', '600', '600', 'normal', 'normal'];
+      
+      const originalHeading = renderer.heading.bind(renderer);
+      renderer.heading = (token: any) => {
+        const text = token.text;
+        const depth = token.depth;
+        const level = Math.min(Math.max(depth, 1), 6);
+        const size = headingSizes[level - 1];
+        const margin = headingMargins[level - 1];
+        const weight = headingWeights[level - 1];
+        return `<h${level} style="margin: ${margin} 0 10px 0; font-size: ${size}; font-weight: ${weight}; color: #59c0bc;">${text}</h${level}>`;
+      };
+
+      // 段落样式
+      const originalParagraph = renderer.paragraph.bind(renderer);
+      renderer.paragraph = (token: any) => {
+        const text = token.text;
+        return `<p style="margin: 8px 0; line-height: 1.8; font-size: 14px; font-weight: normal;">${text}</p>`;
+      };
+
+      // 列表样式 - 使用原始渲染器处理嵌套
+      const originalList = renderer.list.bind(renderer);
+      renderer.list = (token: any) => {
+        const ordered = token.ordered;
+        // 使用原始渲染器渲染列表项，然后添加样式
+        const body = originalList(token);
+        // 提取 <ol> 或 <ul> 的内容
+        const match = body.match(/<(ol|ul)>([\s\S]*)<\/(ol|ul)>/);
+        if (match) {
+          const tag = match[1];
+          const content = match[2];
+          return `<${tag} style="margin: 10px 0; padding-left: 30px; line-height: 1.8;">${content}</${tag}>`;
+        }
+        return body;
+      };
+
+      const originalListitem = renderer.listitem.bind(renderer);
+      renderer.listitem = (token: any) => {
+        // 使用原始渲染器渲染列表项内容
+        const text = originalListitem(token);
+        // 提取 <li> 的内容并添加样式
+        const match = text.match(/<li>([\s\S]*)<\/li>/);
+        if (match) {
+          return `<li style="margin: 5px 0; font-size: 14px;">${match[1]}</li>`;
+        }
+        return `<li style="margin: 5px 0; font-size: 14px;">${text}</li>`;
+      };
+
+      // 代码块样式
+      const originalCode = renderer.code.bind(renderer);
+      renderer.code = (token: any) => {
+        const text = token.text;
+        const escaped = text
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        return `<pre style="background: rgba(0,0,0,0.1); padding: 10px; border-radius: 4px; overflow-x: auto; margin: 10px 0;"><code>${escaped}</code></pre>`;
+      };
+
+      // 行内代码样式
+      const originalCodespan = renderer.codespan.bind(renderer);
+      renderer.codespan = (token: any) => {
+        const text = token.text;
+        const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        return `<code style="background: rgba(0,0,0,0.1); padding: 2px 4px; border-radius: 2px;">${escaped}</code>`;
+      };
+
+      // 水平线样式
+      const originalHr = renderer.hr.bind(renderer);
+      renderer.hr = (token: any) => {
+        return "<hr style='border: none; border-top: 1px solid rgba(89, 192, 188, 0.3); margin: 20px 0;'>";
+      };
+
+      // 链接样式
+      const originalLink = renderer.link.bind(renderer);
+      renderer.link = (token: any) => {
+        const href = token.href;
+        const text = token.text;
+        return `<a href="${href}" style="color: #59c0bc; text-decoration: underline;">${text}</a>`;
+      };
+
+      // 使用自定义渲染器
+      const html = marked(markdown, { renderer }) as string;
+      return html;
+    } catch (error) {
+      ztoolkit.log("[AiNote][OutputWindow] Parse error:", error);
+      // 如果解析失败，返回转义后的原始内容
+      return `<p>${OutputWindow.escapeHtmlStatic(markdown)}</p>`;
     }
-    
-    // 5. 处理有序列表
-    html = html.replace(/^(\d+\.\s+.+)(\n\d+\.\s+.+)*/gm, (match) => {
-      const items = match.trim().split('\n').map(line => {
-        const text = line.replace(/^\d+\.\s+/, '');
-        return `<li style="margin: 5px 0; font-size: 14px;">${OutputWindow.processInlineMarkdown(text)}</li>`;
-      }).join('');
-      return `<ol style="margin: 10px 0; padding-left: 30px; line-height: 1.8;">${items}</ol>`;
-    });
-    
-    // 6. 处理无序列表
-    html = html.replace(/^(-|\*)\s+.+(\n(-|\*)\s+.+)*/gm, (match) => {
-      const items = match.trim().split('\n').map(line => {
-        const text = line.replace(/^(-|\*)\s+/, '');
-        return `<li style="margin: 5px 0; font-size: 14px;">${OutputWindow.processInlineMarkdown(text)}</li>`;
-      }).join('');
-      return `<ul style="margin: 10px 0; padding-left: 30px; line-height: 1.8;">${items}</ul>`;
-    });
-    
-    // 7. 处理段落（按双换行分隔）
-    const blocks = html.split(/\n\n+/);
-    html = blocks.map(block => {
-      block = block.trim();
-      if (!block) return '';
-      
-      // 如果已经是 HTML 标签（标题、列表、hr等），直接返回
-      if (block.startsWith('<h') || block.startsWith('<ul') || block.startsWith('<ol') || 
-          block.startsWith('<hr') || block.startsWith('<pre') || block.startsWith('Ⓒ')) {
-        return block;
-      }
-      
-      // 处理单换行为 <br>
-      const withBreaks = block.split('\n').map(line => {
-        return OutputWindow.processInlineMarkdown(line.trim());
-      }).join('<br>');
-      
-      // 包装为段落
-      return `<p style="margin: 8px 0; line-height: 1.8; font-size: 14px; font-weight: normal;">${withBreaks}</p>`;
-    }).join('\n');
-    
-    // 8. 恢复行内代码
-    html = html.replace(/ⒸⓄⒹⒺ_INLINE_(\d+)/g, (match, index) => {
-      return inlineCodes[parseInt(index)] || match;
-    });
-    
-    // 9. 恢复代码块
-    html = html.replace(/ⒸⓄⒹⒺ_BLOCK_(\d+)/g, (match, index) => {
-      return codeBlocks[parseInt(index)] || match;
-    });
-    
-    return html;
   }
   
-  /**
-   * 处理行内 Markdown 格式（粗体、斜体等）
-   * @param text 文本
-   * @returns 处理后的 HTML
-   */
-  private static processInlineMarkdown(text: string): string {
-    // 先保护公式占位符，避免被误处理
-    const formulaPlaceholders: string[] = [];
-    text = text.replace(/ⒻⓄⓇⓂⓊⓁⒶ_(BLOCK|INLINE)_(\d+)/g, (match) => {
-      const placeholder = `ⓅⒽ_${formulaPlaceholders.length}`;
-      formulaPlaceholders.push(match);
-      return placeholder;
-    });
-    
-    // 转义 HTML 特殊字符
-    text = text.replace(/&/g, '&amp;');
-    text = text.replace(/</g, '&lt;');
-    text = text.replace(/>/g, '&gt;');
-    
-    // 粗体 **text** 或 __text__（必须在斜体之前处理）
-    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    text = text.replace(/__(.+?)__/g, '<strong>$1</strong>');
-    
-    // 斜体 *text* 或 _text_（注意：避免匹配连续下划线）
-    text = text.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
-    text = text.replace(/(?<!\w)_([^_]+?)_(?!\w)/g, '<em>$1</em>');
-    
-    // 删除线 ~~text~~
-    text = text.replace(/~~(.+?)~~/g, '<del>$1</del>');
-    
-    // 链接 [text](url)
-    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: #59c0bc; text-decoration: underline;">$1</a>');
-    
-    // 恢复公式占位符
-    text = text.replace(/ⓅⒽ_(\d+)/g, (match, index) => {
-      return formulaPlaceholders[parseInt(index)] || match;
-    });
-    
-    return text;
-  }
-
   /**
    * 注入 MathJax 用于公式渲染
    */
@@ -1038,22 +1038,14 @@ export class OutputWindow {
    * @returns 转换后的 HTML（带样式，用于弹出窗口显示）
    */
   public static convertMarkdownToHTMLCore(markdown: string): string {
-    // 先保护公式，避免被处理
+    // ===== 步骤 1: 保护公式，避免被 marked 误处理 =====
     const formulas: string[] = [];
     let html = markdown;
     
-    // 第一步：处理转义的列表标记 \- → -
-    html = html.replace(/\\-/g, '-');
-    
-    // 第二步：修复列表项换行问题
-    // 将 "- **数据来源**：...内容... - **实验流程**：..." 转换为两行
-    html = html.replace(/(- \*\*[^*]+\*\*[^-\n]+?)(\s+- \*\*)/g, '$1\n\n$2');
-    
-    // 第三步:转换 LaTeX 公式格式并保护:\[...\] → $$...$$
+    // 转换并保护 LaTeX 块级公式: \[...\] → $$...$$
     html = html.replace(/\\\[([\s\S]*?)\\\]/g, (match, formula) => {
       const placeholder = `ⒻⓄⓇⓂⓊⓁⒶ_BLOCK_${formulas.length}`;
-      const cleanFormula = formula.trim();
-      formulas.push(`$$${cleanFormula}$$`);
+      formulas.push(`$$${formula.trim()}$$`);
       return placeholder;
     });
     
@@ -1064,7 +1056,7 @@ export class OutputWindow {
       return placeholder;
     });
     
-    // 转换并保护行内公式:\(...\) → $...$
+    // 转换并保护 LaTeX 行内公式: \(...\) → $...$
     html = html.replace(/\\\((.*?)\\\)/g, (match, formula) => {
       const placeholder = `ⒻⓄⓇⓂⓊⓁⒶ_INLINE_${formulas.length}`;
       formulas.push(`$${formula}$`);
@@ -1079,7 +1071,7 @@ export class OutputWindow {
       return placeholder;
     });
 
-    // 使用自定义渲染器转换 Markdown 为 HTML
+    // ===== 步骤 2: 使用 marked 转换 Markdown 为 HTML =====
     try {
       html = OutputWindow.parseMarkdownToHTML(html);
     } catch (error) {
@@ -1088,7 +1080,7 @@ export class OutputWindow {
       html = `<p>${OutputWindow.escapeHtmlStatic(html)}</p>`;
     }
     
-    // 恢复所有公式（按索引替换）
+    // ===== 步骤 3: 恢复所有公式 =====
     html = html.replace(/ⒻⓄⓇⓂⓊⓁⒶ_(BLOCK|INLINE)_(\d+)/g, (match, type, index) => {
       const formula = formulas[parseInt(index)];
       return formula || match;
