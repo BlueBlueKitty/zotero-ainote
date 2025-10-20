@@ -1,7 +1,7 @@
 {
   "name": "ainote",
   "type": "module",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "AI-powered note generation for Zotero items",
   "config": {
     "addonName": "AiNote",
@@ -30,6 +30,8 @@
     "update-deps": "npm update --save"
   },
   "dependencies": {
+    "@types/marked": "^5.0.2",
+    "marked": "^16.4.1",
     "mathjax": "^3.2.2",
     "zotero-plugin-toolkit": "^5.1.0-beta.4"
   },
