@@ -14,12 +14,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      GITHUB_TOKEN: ${{ secrets.GitHub_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -33,10 +34,40 @@ jobs:
         run: |
           npm run build
 
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
       - name: Release to GitHub
         run: |
           npm run release
           sleep 1s
+
+      - name: Update update.json
+        run: |
+          node scripts/update-json.js ${{ steps.version.outputs.VERSION }}
+          echo "Updated update.json:"
+          cat update.json
+
+      - name: Check if update.json changed
+        id: check_changes
+        run: |
+          if git diff --quiet update.json; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No changes to update.json"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "update.json has been updated"
+          fi
+
+      - name: Commit and push update.json
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add update.json
+          git commit -m "chore: update update.json to version ${{ steps.version.outputs.VERSION }}"
+          git push origin HEAD:main
 
       - name: Notify release
         uses: apexskier/github-release-commenter@v1

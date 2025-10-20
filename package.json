@@ -4,10 +4,10 @@
   "version": "1.0.2",
   "description": "AI-powered note generation for Zotero items",
   "config": {
-    "addonName": "AiNote",
+    "addonName": "ainote",
     "addonID": "ainote@zotero.org",
     "addonRef": "ainote",
-    "addonInstance": "AiNote",
+    "addonInstance": "ainote",
     "prefsPrefix": "extensions.zotero.ainote"
   },
   "repository": {
