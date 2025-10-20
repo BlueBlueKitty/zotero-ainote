@@ -14,6 +14,8 @@ export class OutputWindow {
   private stopButton: any = null; // 停止按钮引用
   private mathJaxReady: boolean = false; // MathJax 是否就绪
   private renderMathTimer: ReturnType<typeof setTimeout> | null = null; // 公式渲染节流定时器
+  private userHasScrolled: boolean = false; // 用户是否手动滚动过
+  private lastScrollTop: number = 0; // 上次滚动位置
 
   /**
    * 打开输出窗口
@@ -191,6 +193,14 @@ export class OutputWindow {
         });
       }
       
+      // 添加滚动监听器，检测用户是否手动滚动
+      const scrollContainer = this.outputContainer?.parentElement;
+      if (scrollContainer) {
+        scrollContainer.addEventListener("scroll", () => {
+          this.handleUserScroll();
+        });
+      }
+      
       // 应用主题样式
       this.applyTheme();
       
@@ -305,6 +315,9 @@ export class OutputWindow {
     // 重置 buffer
     this.currentItemBuffer = "";
 
+    // 重置滚动状态，允许新条目自动滚动
+    this.resetScrollState();
+
     // 检查是否是暗色主题
     const isDark = this.isDarkTheme();
     
@@ -377,7 +390,8 @@ export class OutputWindow {
     const html = this.convertMarkdownToHTML(this.currentItemBuffer);
     this.currentItemContainer.innerHTML = html;
 
-    // 不在流式输出时渲染公式，等完成后再渲染
+    // 注意：不在流式输出时渲染公式，避免频繁闪烁
+    // 公式渲染推迟到 finishItem() 中一次性完成
     
     // 滚动到底部
     this.scrollToBottom();
@@ -700,6 +714,11 @@ export class OutputWindow {
       return;
     }
 
+    // 只有在用户没有手动滚动时才自动滚动到底部
+    if (this.userHasScrolled) {
+      return;
+    }
+
     // 使用 setTimeout 确保在 DOM 更新后滚动
     setTimeout(() => {
       if (!this.outputContainer) return;
@@ -707,9 +726,183 @@ export class OutputWindow {
       // 滚动到容器底部（现在需要滚动父容器）
       const scrollContainer = this.outputContainer.parentElement;
       if (scrollContainer) {
+        this.lastScrollTop = scrollContainer.scrollHeight;
         scrollContainer.scrollTop = scrollContainer.scrollHeight;
       }
     }, 10); // 增加延迟确保渲染完成
+  }
+
+  /**
+   * 处理用户滚动事件
+   */
+  private handleUserScroll(): void {
+    if (!this.outputContainer) return;
+    
+    const scrollContainer = this.outputContainer.parentElement;
+    if (!scrollContainer) return;
+
+    const scrollTop = scrollContainer.scrollTop;
+    const scrollHeight = scrollContainer.scrollHeight;
+    const clientHeight = scrollContainer.clientHeight;
+
+    // 检测用户是否向上滚动（滚动位置减小）
+    if (scrollTop < this.lastScrollTop - 10) { // 10px 的容差避免误判
+      this.userHasScrolled = true;
+    }
+
+    // 检测用户是否滚动到接近底部（在底部 50px 范围内）
+    if (scrollHeight - scrollTop - clientHeight < 50) {
+      this.userHasScrolled = false; // 重新启用自动滚动
+    }
+
+    this.lastScrollTop = scrollTop;
+  }
+
+  /**
+   * 重置用户滚动状态（在开始新条目时调用）
+   */
+  private resetScrollState(): void {
+    this.userHasScrolled = false;
+    this.lastScrollTop = 0;
+  }
+
+  /**
+   * 自定义 Markdown 渲染器（替代 marked）
+   * @param markdown Markdown 文本
+   * @returns HTML 字符串
+   */
+  private static parseMarkdownToHTML(markdown: string): string {
+    let html = markdown;
+    
+    // 1. 先处理代码块（避免代码内容被后续处理）
+    const codeBlocks: string[] = [];
+    html = html.replace(/```([\s\S]*?)```/g, (match, code) => {
+      const placeholder = `ⒸⓄⒹⒺ_BLOCK_${codeBlocks.length}`;
+      const escaped = code.trim()
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+      codeBlocks.push(`<pre style="background: rgba(0,0,0,0.1); padding: 10px; border-radius: 4px; overflow-x: auto; margin: 10px 0;"><code>${escaped}</code></pre>`);
+      return placeholder;
+    });
+    
+    // 2. 处理行内代码
+    const inlineCodes: string[] = [];
+    html = html.replace(/`([^`]+)`/g, (match, code) => {
+      const placeholder = `ⒸⓄⒹⒺ_INLINE_${inlineCodes.length}`;
+      const escaped = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      inlineCodes.push(`<code style="background: rgba(0,0,0,0.1); padding: 2px 4px; border-radius: 2px;">${escaped}</code>`);
+      return placeholder;
+    });
+    
+    // 3. 处理水平线 ---
+    html = html.replace(/^---+$/gm, "<hr style='border: none; border-top: 1px solid rgba(89, 192, 188, 0.3); margin: 20px 0;'>");
+    
+    // 4. 处理标题（从 h6 到 h1，避免误匹配）
+    const headingSizes = ['20px', '18px', '16px', '15px', '14px', '13px'];
+    const headingMargins = ['16px', '14px', '12px', '10px', '8px', '6px'];
+    const headingWeights = ['bold', 'bold', '600', '600', 'normal', 'normal'];
+    
+    for (let level = 6; level >= 1; level--) {
+      const hashes = '#'.repeat(level);
+      const regex = new RegExp(`^${hashes}\\s+(.+)$`, 'gm');
+      html = html.replace(regex, (match, text) => {
+        const processedText = OutputWindow.processInlineMarkdown(text.trim());
+        return `<h${level} style="margin: ${headingMargins[level-1]} 0 10px 0; font-size: ${headingSizes[level-1]}; font-weight: ${headingWeights[level-1]}; color: #59c0bc;">${processedText}</h${level}>`;
+      });
+    }
+    
+    // 5. 处理有序列表
+    html = html.replace(/^(\d+\.\s+.+)(\n\d+\.\s+.+)*/gm, (match) => {
+      const items = match.trim().split('\n').map(line => {
+        const text = line.replace(/^\d+\.\s+/, '');
+        return `<li style="margin: 5px 0; font-size: 14px;">${OutputWindow.processInlineMarkdown(text)}</li>`;
+      }).join('');
+      return `<ol style="margin: 10px 0; padding-left: 30px; line-height: 1.8;">${items}</ol>`;
+    });
+    
+    // 6. 处理无序列表
+    html = html.replace(/^(-|\*)\s+.+(\n(-|\*)\s+.+)*/gm, (match) => {
+      const items = match.trim().split('\n').map(line => {
+        const text = line.replace(/^(-|\*)\s+/, '');
+        return `<li style="margin: 5px 0; font-size: 14px;">${OutputWindow.processInlineMarkdown(text)}</li>`;
+      }).join('');
+      return `<ul style="margin: 10px 0; padding-left: 30px; line-height: 1.8;">${items}</ul>`;
+    });
+    
+    // 7. 处理段落（按双换行分隔）
+    const blocks = html.split(/\n\n+/);
+    html = blocks.map(block => {
+      block = block.trim();
+      if (!block) return '';
+      
+      // 如果已经是 HTML 标签（标题、列表、hr等），直接返回
+      if (block.startsWith('<h') || block.startsWith('<ul') || block.startsWith('<ol') || 
+          block.startsWith('<hr') || block.startsWith('<pre') || block.startsWith('Ⓒ')) {
+        return block;
+      }
+      
+      // 处理单换行为 <br>
+      const withBreaks = block.split('\n').map(line => {
+        return OutputWindow.processInlineMarkdown(line.trim());
+      }).join('<br>');
+      
+      // 包装为段落
+      return `<p style="margin: 8px 0; line-height: 1.8; font-size: 14px; font-weight: normal;">${withBreaks}</p>`;
+    }).join('\n');
+    
+    // 8. 恢复行内代码
+    html = html.replace(/ⒸⓄⒹⒺ_INLINE_(\d+)/g, (match, index) => {
+      return inlineCodes[parseInt(index)] || match;
+    });
+    
+    // 9. 恢复代码块
+    html = html.replace(/ⒸⓄⒹⒺ_BLOCK_(\d+)/g, (match, index) => {
+      return codeBlocks[parseInt(index)] || match;
+    });
+    
+    return html;
+  }
+  
+  /**
+   * 处理行内 Markdown 格式（粗体、斜体等）
+   * @param text 文本
+   * @returns 处理后的 HTML
+   */
+  private static processInlineMarkdown(text: string): string {
+    // 先保护公式占位符，避免被误处理
+    const formulaPlaceholders: string[] = [];
+    text = text.replace(/ⒻⓄⓇⓂⓊⓁⒶ_(BLOCK|INLINE)_(\d+)/g, (match) => {
+      const placeholder = `ⓅⒽ_${formulaPlaceholders.length}`;
+      formulaPlaceholders.push(match);
+      return placeholder;
+    });
+    
+    // 转义 HTML 特殊字符
+    text = text.replace(/&/g, '&amp;');
+    text = text.replace(/</g, '&lt;');
+    text = text.replace(/>/g, '&gt;');
+    
+    // 粗体 **text** 或 __text__（必须在斜体之前处理）
+    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/__(.+?)__/g, '<strong>$1</strong>');
+    
+    // 斜体 *text* 或 _text_（注意：避免匹配连续下划线）
+    text = text.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
+    text = text.replace(/(?<!\w)_([^_]+?)_(?!\w)/g, '<em>$1</em>');
+    
+    // 删除线 ~~text~~
+    text = text.replace(/~~(.+?)~~/g, '<del>$1</del>');
+    
+    // 链接 [text](url)
+    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: #59c0bc; text-decoration: underline;">$1</a>');
+    
+    // 恢复公式占位符
+    text = text.replace(/ⓅⒽ_(\d+)/g, (match, index) => {
+      return formulaPlaceholders[parseInt(index)] || match;
+    });
+    
+    return text;
   }
 
   /**
@@ -840,31 +1033,40 @@ export class OutputWindow {
   }
 
   /**
-   * 将 Markdown 转换为 HTML（简化版）
+   * 将 Markdown 转换为 HTML - 静态核心方法（可被外部调用）
+   * @param markdown Markdown 文本
+   * @returns 转换后的 HTML（带样式，用于弹出窗口显示）
    */
-  private convertMarkdownToHTML(markdown: string): string {
-    let html = markdown;
-
-    // 先保护公式，避免被其他 Markdown 语法破坏
+  public static convertMarkdownToHTMLCore(markdown: string): string {
+    // 先保护公式，避免被处理
     const formulas: string[] = [];
+    let html = markdown;
     
-    // 转换 LaTeX 公式格式并保护：\[...\] → $$...$$
+    // 第一步：处理转义的列表标记 \- → -
+    html = html.replace(/\\-/g, '-');
+    
+    // 第二步：修复列表项换行问题
+    // 将 "- **数据来源**：...内容... - **实验流程**：..." 转换为两行
+    html = html.replace(/(- \*\*[^*]+\*\*[^-\n]+?)(\s+- \*\*)/g, '$1\n\n$2');
+    
+    // 第三步:转换 LaTeX 公式格式并保护:\[...\] → $$...$$
     html = html.replace(/\\\[([\s\S]*?)\\\]/g, (match, formula) => {
-      const placeholder = `___FORMULA_BLOCK_${formulas.length}___`;
-      formulas.push(`$$${formula}$$`);
+      const placeholder = `ⒻⓄⓇⓂⓊⓁⒶ_BLOCK_${formulas.length}`;
+      const cleanFormula = formula.trim();
+      formulas.push(`$$${cleanFormula}$$`);
       return placeholder;
     });
     
     // 保护已有的 $$ $$ 块级公式
-    html = html.replace(/\$\$([\s\S]*?)\$\$/g, (match, formula) => {
-      const placeholder = `___FORMULA_BLOCK_${formulas.length}___`;
-      formulas.push(match); // 保持原样
+    html = html.replace(/\$\$([\s\S]*?)\$\$/g, (match) => {
+      const placeholder = `ⒻⓄⓇⓂⓊⓁⒶ_BLOCK_${formulas.length}`;
+      formulas.push(match);
       return placeholder;
     });
     
-    // 转换并保护行内公式：\(...\) → $...$
+    // 转换并保护行内公式:\(...\) → $...$
     html = html.replace(/\\\((.*?)\\\)/g, (match, formula) => {
-      const placeholder = `___FORMULA_INLINE_${formulas.length}___`;
+      const placeholder = `ⒻⓄⓇⓂⓊⓁⒶ_INLINE_${formulas.length}`;
       formulas.push(`$${formula}$`);
       return placeholder;
     });
@@ -872,112 +1074,24 @@ export class OutputWindow {
     // 保护已有的 $ $ 行内公式
     // eslint-disable-next-line no-useless-escape
     html = html.replace(/\$([^\$\n]+?)\$/g, (match) => {
-      const placeholder = `___FORMULA_INLINE_${formulas.length}___`;
-      formulas.push(match); // 保持原样
+      const placeholder = `ⒻⓄⓇⓂⓊⓁⒶ_INLINE_${formulas.length}`;
+      formulas.push(match);
       return placeholder;
     });
 
-    // 处理水平分隔线（在处理列表之前）
-    html = html.replace(/^---+$/gm, "<hr style='border: none; border-top: 1px solid rgba(89, 192, 188, 0.3); margin: 20px 0;'>");
-    html = html.replace(/^\*\*\*+$/gm, "<hr style='border: none; border-top: 1px solid rgba(89, 192, 188, 0.3); margin: 20px 0;'>");
-    html = html.replace(/^___+$/gm, "<hr style='border: none; border-top: 1px solid rgba(89, 192, 188, 0.3); margin: 20px 0;'>");
-
-    // 处理标题
-    html = html.replace(/^#### (.*$)/gim, "<h4>$1</h4>");
-    html = html.replace(/^### (.*$)/gim, "<h3>$1</h3>");
-    html = html.replace(/^## (.*$)/gim, "<h2>$1</h2>");
-    html = html.replace(/^# (.*$)/gim, "<h1>$1</h1>");
-
-    // 处理粗体（现在不会破坏公式了）
-    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    
-    // 处理斜体
-    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-
-    // 处理代码块
-    html = html.replace(/```[\s\S]*?```/g, (match) => {
-      const code = match.replace(/```\w*\n?/, "").replace(/```$/, "");
-      return `<pre style="background: rgba(0,0,0,0.1); padding: 10px; border-radius: 4px; overflow-x: auto;"><code>${this.escapeHtmlSimple(code)}</code></pre>`;
-    });
-
-    // 处理行内代码
-    html = html.replace(/`(.+?)`/g, '<code style="background: rgba(0,0,0,0.1); padding: 2px 4px; border-radius: 2px;">$1</code>');
-
-    // 处理段落和列表
-    const paragraphs = html.split(/\n\n+/);
-    const processed = paragraphs.map((para) => {
-      para = para.trim();
-      if (!para) return "";
-      
-      if (para.startsWith("<h") || para.startsWith("<pre>")) {
-        return para;
-      }
-
-      const lines = para.split("\n");
-      let inList = false;
-      let listType = "";
-      let result = "";
-
-      for (let line of lines) {
-        line = line.trim();
-        if (!line) continue;
-
-        // 跳过已经转换的 HTML 标签（如分隔线）
-        if (line.startsWith("<")) {
-          if (inList) {
-            result += `</${listType}>`;
-            inList = false;
-          }
-          result += line;
-          continue;
-        }
-
-        // 无序列表（确保不是分隔线）
-        if (line.match(/^[-*+]\s+/) && !line.match(/^[-*_]{3,}$/)) {
-          if (!inList || listType !== "ul") {
-            if (inList) result += `</${listType}>`;
-            result += "<ul style='margin: 10px 0; padding-left: 30px;'>";
-            inList = true;
-            listType = "ul";
-          }
-          result += `<li style='margin: 5px 0;'>${line.replace(/^[-*+]\s+/, "")}</li>`;
-        }
-        // 有序列表
-        else if (line.match(/^\d+\.\s+/)) {
-          if (!inList || listType !== "ol") {
-            if (inList) result += `</${listType}>`;
-            result += "<ol style='margin: 10px 0; padding-left: 30px;'>";
-            inList = true;
-            listType = "ol";
-          }
-          result += `<li style='margin: 5px 0;'>${line.replace(/^\d+\.\s+/, "")}</li>`;
-        }
-        // 普通文本
-        else {
-          if (inList) {
-            result += `</${listType}>`;
-            inList = false;
-          }
-          if (line.startsWith("<")) {
-            result += line;
-          } else {
-            result += `<p style='margin: 8px 0;'>${line}</p>`;
-          }
-        }
-      }
-
-      if (inList) {
-        result += `</${listType}>`;
-      }
-
-      return result;
-    });
-
-    html = processed.join("");
+    // 使用自定义渲染器转换 Markdown 为 HTML
+    try {
+      html = OutputWindow.parseMarkdownToHTML(html);
+    } catch (error) {
+      ztoolkit.log("[AiNote][OutputWindow] Parse error:", error);
+      // 如果解析失败，返回原始内容（添加段落标签）
+      html = `<p>${OutputWindow.escapeHtmlStatic(html)}</p>`;
+    }
     
     // 恢复所有公式（按索引替换）
-    html = html.replace(/___FORMULA_(BLOCK|INLINE)_(\d+)___/g, (match, type, index) => {
-      return formulas[parseInt(index)] || match;
+    html = html.replace(/ⒻⓄⓇⓂⓊⓁⒶ_(BLOCK|INLINE)_(\d+)/g, (match, type, index) => {
+      const formula = formulas[parseInt(index)];
+      return formula || match;
     });
 
     return html;
@@ -993,5 +1107,26 @@ export class OutputWindow {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
+  }
+
+  /**
+   * 静态的 HTML 转义方法
+   */
+  private static escapeHtmlStatic(text: string): string {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  /**
+   * 实例方法：将 Markdown 转换为 HTML（调用静态核心方法）
+   * @param markdown Markdown 文本
+   * @returns 转换后的 HTML（带样式，用于弹出窗口显示）
+   */
+  public convertMarkdownToHTML(markdown: string): string {
+    return OutputWindow.convertMarkdownToHTMLCore(markdown);
   }
 }

@@ -94,142 +94,37 @@ export class NoteGenerator {
     itemTitle: string,
     summary: string
   ): string {
-    const htmlContent = this.convertMarkdownToHTML(summary);
+    // 转换为笔记格式
+    const htmlContent = this.convertMarkdownToNoteHTML(summary);
     return `<h2>AI 总结 - ${this.escapeHtml(itemTitle)}</h2>
 <div>${htmlContent}</div>`;
   }
 
   /**
-   * Convert Markdown text to simple HTML
-   * @param markdown Markdown text
-   * @returns HTML string
+   * 将 Markdown 转换为适合 Zotero 笔记的 HTML 格式
+   * @param markdown Markdown 文本
+   * @returns 转换后的 HTML（无样式，公式格式适配 Zotero）
    */
-  private static convertMarkdownToHTML(markdown: string): string {
-    let html = markdown;
-
-    // 转换 LaTeX 公式格式为 Zotero 识别的 HTML 格式
-    // 块级公式：\[ ... \] → <pre class="math">$$...$$</pre>
-    html = html.replace(/\\\[([\s\S]*?)\\\]/g, (match, formula) => {
+  private static convertMarkdownToNoteHTML(markdown: string): string {
+    // 复用 OutputWindow 的转换方法（会保护公式并转换 Markdown）
+    let html = OutputWindow.convertMarkdownToHTMLCore(markdown);
+    
+    // 移除所有内联样式
+    html = html.replace(/\s+style="[^"]*"/g, '');
+    
+    // 将 MathJax 格式的公式转换为 Zotero 笔记格式
+    // 块级公式：$$...$$ → <pre class="math">$$...$$</pre>
+    html = html.replace(/\$\$([\s\S]*?)\$\$/g, (_match: string, formula: string) => {
       return `<pre class="math">$$${formula}$$</pre>`;
     });
-    // 块级公式：$$ ... $$ → <pre class="math">$$...$$</pre>
-    html = html.replace(/\$\$([\s\S]*?)\$\$/g, (match, formula) => {
-      return `<pre class="math">$$${formula}$$</pre>`;
-    });
-
-    // 行内公式：\( ... \) → <span class="math">$...$</span>
-    html = html.replace(/\\\((.*?)\\\)/g, (match, formula) => {
-      return `<span class="math">$${formula}$</span>`;
-    });
-    // 行内公式：$ ... $ → <span class="math">$...$</span>
+    
+    // 行内公式：$...$ → <span class="math">$...$</span>
     // eslint-disable-next-line no-useless-escape
-    html = html.replace(/\$([^\$\n]+?)\$/g, (match, formula) => {
+    html = html.replace(/\$([^\$\n]+?)\$/g, (_match: string, formula: string) => {
       return `<span class="math">$${formula}$</span>`;
     });
-
-    // 处理转义字符
-    html = html
-      .replace(/\\\*/g, "&#42;") // 转义的星号
-      .replace(/\\_/g, "&#95;"); // 转义的下划线
-
-    // 处理水平分隔线（在处理其他内容之前）
-    html = html.replace(/^---+$/gm, "<hr style='border: none; border-top: 2px solid #59c0bc; margin: 20px 0;'>");
-    html = html.replace(/^\*\*\*+$/gm, "<hr style='border: none; border-top: 2px solid #59c0bc; margin: 20px 0;'>");
-    html = html.replace(/^___+$/gm, "<hr style='border: none; border-top: 2px solid #59c0bc; margin: 20px 0;'>");
-
-    // 处理标题（从长到短，避免误匹配）
-    html = html.replace(/^#### (.*$)/gim, "<h4>$1</h4>");
-    html = html.replace(/^### (.*$)/gim, "<h3>$1</h3>");
-    html = html.replace(/^## (.*$)/gim, "<h2>$1</h2>");
-    html = html.replace(/^# (.*$)/gim, "<h1>$1</h1>");
-
-    // 处理粗体（先处理，避免与斜体冲突）
-    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    html = html.replace(/__(.+?)__/g, "<strong>$1</strong>");
-
-    // 处理斜体
-    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-    html = html.replace(/_(.+?)_/g, "<em>$1</em>");
-
-    // 处理代码块
-    html = html.replace(/```[\s\S]*?```/g, (match) => {
-      const code = match.replace(/```\w*\n?/, "").replace(/```$/, "");
-      return `<pre><code>${this.escapeHtml(code)}</code></pre>`;
-    });
-
-    // 处理行内代码
-    html = html.replace(/`(.+?)`/g, "<code>$1</code>");
-
-    // 分段处理
-    const paragraphs = html.split(/\n\n+/);
-    const processedParagraphs = paragraphs.map((para) => {
-      para = para.trim();
-      if (!para) return "";
-
-      // 已经是 HTML 标签的跳过
-      if (
-        para.startsWith("<h") ||
-        para.startsWith("<pre>") ||
-        para.startsWith("<ul>") ||
-        para.startsWith("<ol>")
-      ) {
-        return para;
-      }
-
-      // 处理列表
-      const lines = para.split("\n");
-      let inList = false;
-      let listType = "";
-      let result = "";
-
-      for (let line of lines) {
-        line = line.trim();
-        if (!line) continue;
-
-        // 无序列表
-        if (line.match(/^[-*+]\s+/)) {
-          if (!inList || listType !== "ul") {
-            if (inList) result += `</${listType}>`;
-            result += "<ul>";
-            inList = true;
-            listType = "ul";
-          }
-          result += `<li>${line.replace(/^[-*+]\s+/, "")}</li>`;
-        }
-        // 有序列表
-        else if (line.match(/^\d+\.\s+/)) {
-          if (!inList || listType !== "ol") {
-            if (inList) result += `</${listType}>`;
-            result += "<ol>";
-            inList = true;
-            listType = "ol";
-          }
-          result += `<li>${line.replace(/^\d+\.\s+/, "")}</li>`;
-        }
-        // 普通文本
-        else {
-          if (inList) {
-            result += `</${listType}>`;
-            inList = false;
-            listType = "";
-          }
-          // 如果是标题或其他 HTML 标签，直接添加
-          if (line.startsWith("<")) {
-            result += line;
-          } else {
-            result += `<p>${line.replace(/\n/g, "<br>")}</p>`;
-          }
-        }
-      }
-
-      if (inList) {
-        result += `</${listType}>`;
-      }
-
-      return result;
-    });
-
-    return processedParagraphs.join("\n");
+    
+    return html;
   }
 
   /**

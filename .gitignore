@@ -19,3 +19,5 @@ other_plugins
 .vscode
 test
 releases
+update_docs
+*.backup

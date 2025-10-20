@@ -1,4 +1,9 @@
 import { getPref } from "../utils/prefs";
+import { 
+  getDefaultSummaryPrompt, 
+  SYSTEM_ROLE_PROMPT, 
+  buildUserMessage 
+} from "../utils/prompts";
 
 type ProgressCb = (chunk: string) => Promise<void> | void;
 
@@ -32,7 +37,7 @@ export class AIService {
     
     // 获取 prompt，确保不会是 undefined
     const savedPrompt = getPref("summaryPrompt") as string;
-    const summaryPrompt = prompt || (savedPrompt && savedPrompt.trim() ? savedPrompt : AIService.getDefaultPrompt());
+    const summaryPrompt = prompt || (savedPrompt && savedPrompt.trim() ? savedPrompt : getDefaultSummaryPrompt());
     const streamEnabled = (getPref("stream") as boolean) ?? true;
 
     // 基本校验
@@ -238,17 +243,12 @@ export class AIService {
   private static buildMessages(prompt: string, text: string) {
     // 与参考插件一致使用 chat messages 结构。这里提供简单的 system+user。
     return [
-      { role: "system", content: "You are a helpful academic assistant." },
-      {
-        role: "user",
-        content: `${prompt}\n\n请用中文回答。\n\n<Paper>\n${text}\n</Paper>`,
-      },
+      { role: "system", content: SYSTEM_ROLE_PROMPT },
+      { role: "user", content: buildUserMessage(prompt, text) },
     ];
   }
 
-  private static getDefaultPrompt(): string {
-    return `你是一名学术研究助理，请对下面的学术论文进行全面、结构化的中文总结。\n\n请包含：\n1. 研究目标与问题\n2. 研究方法与技术路线\n3. 主要发现与结果\n4. 结论与启示\n5. 局限性与未来方向\n\n要求：条理清晰、要点明确、使用中文回答。`;
-  }
+  // getDefaultPrompt 方法已移除，使用 prompts.ts 中的函数
 
   // 默认提供商预设已移除
 

@@ -1,4 +1,5 @@
 import { getPref, setPref, clearPref } from "../utils/prefs";
+import { getDefaultSummaryPrompt, PROMPT_VERSION, shouldUpdatePrompt } from "../utils/prompts";
 
 export async function registerPrefsScripts(_window: Window) {
   // 最简单的立即执行日志
@@ -49,7 +50,7 @@ function updatePrefsUI(win: Window) {
   const apiUrl = (getPref("apiUrl") as string) || "https://api.openai.com/v1/chat/completions";
   const model = (getPref("model") as string) || "gpt-3.5-turbo";
   const temperature = (getPref("temperature") as string) || "0.7";
-  const defaultPrompt = getDefaultPrompt();
+  const defaultPrompt = getDefaultSummaryPrompt();
   const savedPrompt = getPref("summaryPrompt") as string;
   const stream = (getPref("stream") as boolean) ?? true;
 
@@ -106,7 +107,7 @@ function bindPrefEvents(win: Window) {
     temperatureInput.addEventListener("change", save);
   }
   if (promptTextarea) {
-    const save = () => setPref("summaryPrompt", promptTextarea.value || getDefaultPrompt());
+    const save = () => setPref("summaryPrompt", promptTextarea.value || getDefaultSummaryPrompt());
     promptTextarea.addEventListener("input", save);
     promptTextarea.addEventListener("blur", save);
     promptTextarea.addEventListener("change", save);
@@ -124,23 +125,12 @@ function bindPrefEvents(win: Window) {
     if (apiUrlInput) setPref("apiUrl", apiUrlInput.value || "");
     if (modelInput) setPref("model", modelInput.value || "");
     if (temperatureInput) setPref("temperature", temperatureInput.value || "0.7");
-    if (promptTextarea) setPref("summaryPrompt", promptTextarea.value || getDefaultPrompt());
+    if (promptTextarea) setPref("summaryPrompt", promptTextarea.value || getDefaultSummaryPrompt());
     if (streamCheckbox) setPref("stream", !!streamCheckbox.checked);
   });
 }
 
-function getDefaultPrompt(): string {
-  return `你是一名学术研究助理，请对下面的学术论文进行全面、结构化的总结。
-
-请包含：
-1. 研究目标与问题
-2. 研究方法与技术路线
-3. 主要发现与结果
-4. 结论与启示
-5. 局限性与未来方向
-
-要求：条理清晰、要点明确、使用中文回答。`;
-}
+// getDefaultPrompt 函数已移除，使用 prompts.ts 中的函数
 
 /**
  * 初始化默认配置 - 在插件加载时立即执行
@@ -153,13 +143,28 @@ function initializeDefaultPrefs() {
     model: "gpt-3.5-turbo",
     temperature: "0.7",
     stream: true,
-    summaryPrompt: getDefaultPrompt(),
+    summaryPrompt: getDefaultSummaryPrompt(),
+    promptVersion: PROMPT_VERSION,
   };
 
   // 遍历所有默认配置
   for (const [key, defaultValue] of Object.entries(defaults)) {
     try {
       const currentValue = getPref(key as any);
+      
+      // 特殊处理提示词更新
+      if (key === "summaryPrompt") {
+        const currentPromptVersion = getPref("promptVersion" as any) as number | undefined;
+        const currentPrompt = currentValue as string | undefined;
+        
+        // 检查是否需要更新提示词
+        if (shouldUpdatePrompt(currentPromptVersion, currentPrompt)) {
+          console.log(`[AiNote][Prefs] 更新提示词到版本 ${PROMPT_VERSION}`);
+          setPref("summaryPrompt" as any, defaultValue);
+          setPref("promptVersion" as any, PROMPT_VERSION);
+          continue;
+        }
+      }
       
       // 如果配置不存在或为空，则设置默认值
       if (currentValue === undefined || currentValue === null) {

@@ -4,6 +4,7 @@ import { createZToolkit } from "./utils/ztoolkit";
 import { NoteGenerator } from "./modules/noteGenerator";
 import { config } from "../package.json";
 import { getPref, setPref } from "./utils/prefs";
+import { getDefaultSummaryPrompt, PROMPT_VERSION, shouldUpdatePrompt } from "./utils/prompts";
 
 async function onStartup() {
   await Promise.all([
@@ -76,30 +77,34 @@ function registerPrefsPane() {
  * 确保即使 prefs.js 没有加载，也能有默认值
  */
 function initializeDefaultPrefsOnStartup() {
-  const getDefaultPrompt = () => `你是一名学术研究助理，请对下面的学术论文进行全面、结构化的总结。
-
-请包含：
-1. 研究目标与问题
-2. 研究方法与技术路线
-3. 主要发现与结果
-4. 结论与启示
-5. 局限性与未来方向
-
-要求：条理清晰、要点明确、使用中文回答。`;
-
   const defaults: Record<string, any> = {
     apiKey: "",
     apiUrl: "https://api.openai.com/v1/chat/completions",
     model: "gpt-3.5-turbo",
     temperature: "0.7",
     stream: true,
-    summaryPrompt: getDefaultPrompt(),
+    summaryPrompt: getDefaultSummaryPrompt(),
+    promptVersion: PROMPT_VERSION, // 添加版本号配置
   };
 
   for (const [key, defaultValue] of Object.entries(defaults)) {
     try {
       // 使用 Zotero.Prefs.get 直接检查
       const currentValue = getPref(key as any);
+      
+      // 特殊处理提示词更新
+      if (key === "summaryPrompt") {
+        const currentPromptVersion = getPref("promptVersion" as any) as number | undefined;
+        const currentPrompt = currentValue as string | undefined;
+        
+        // 检查是否需要更新提示词
+        if (shouldUpdatePrompt(currentPromptVersion, currentPrompt)) {
+          ztoolkit.log(`[AiNote] 更新提示词到版本 ${PROMPT_VERSION}`);
+          setPref("summaryPrompt" as any, defaultValue);
+          setPref("promptVersion" as any, PROMPT_VERSION);
+          continue;
+        }
+      }
       
       if (currentValue === undefined || currentValue === null) {
         const preview = typeof defaultValue === 'string' && defaultValue.length > 50 
