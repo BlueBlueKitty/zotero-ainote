@@ -182,7 +182,6 @@ export class NoteGenerator {
 
     // 设置停止回调
     outputWindow.setOnStop(() => {
-      ztoolkit.log("[AiNote] User stopped processing");
       stopped = true;
     });
 

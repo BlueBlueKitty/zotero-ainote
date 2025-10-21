@@ -2,36 +2,13 @@ import { getPref, setPref, clearPref } from "../utils/prefs";
 import { getDefaultSummaryPrompt, PROMPT_VERSION, shouldUpdatePrompt } from "../utils/prompts";
 
 export async function registerPrefsScripts(_window: Window) {
-  // 最简单的立即执行日志
-  console.log("=== [AiNote][Prefs] registerPrefsScripts START ===");
-  console.error("=== [AiNote][Prefs] registerPrefsScripts START (error level) ===");
-  
-  try {
-    if (typeof Zotero !== 'undefined' && Zotero.debug) {
-      Zotero.debug("=== [AiNote][Prefs] registerPrefsScripts START (Zotero.debug) ===");
-    }
-  } catch (e) {
-    console.error("[AiNote][Prefs] Zotero.debug failed:", e);
-  }
-  
   // 先不用任何延迟，直接执行
   try {
-    console.log("[AiNote][Prefs] Calling migrateToGlobalOnce");
     migrateToGlobalOnce();
-    
-    console.log("[AiNote][Prefs] Calling initializeDefaultPrefs");
     initializeDefaultPrefs();
-    
-    console.log("[AiNote][Prefs] Calling diagnosePrefs");
-    diagnosePrefs();
-    
-    console.log("[AiNote][Prefs] Calling updatePrefsUI");
+    // diagnosePrefs(); // 仅在需要调试配置问题时启用
     updatePrefsUI(_window);
-    
-    console.log("[AiNote][Prefs] Calling bindPrefEvents");
     bindPrefEvents(_window);
-    
-    console.log("=== [AiNote][Prefs] registerPrefsScripts END ===");
   } catch (error) {
     console.error("[AiNote][Prefs] Error in registerPrefsScripts:", error);
   }
@@ -168,14 +145,14 @@ function initializeDefaultPrefs() {
       
       // 如果配置不存在或为空，则设置默认值
       if (currentValue === undefined || currentValue === null) {
-        const preview = typeof defaultValue === 'string' && defaultValue.length > 50 
-          ? defaultValue.substring(0, 50) + '...' 
-          : defaultValue;
-        console.log(`[AiNote][Prefs] 初始化配置: ${key} = ${preview}`);
+        // const preview = typeof defaultValue === 'string' && defaultValue.length > 50 
+        //   ? defaultValue.substring(0, 50) + '...' 
+        //   : defaultValue;
+        // console.log(`[AiNote][Prefs] 初始化配置: ${key} = ${preview}`);
         setPref(key as any, defaultValue);
       } else if (typeof defaultValue === 'string' && typeof currentValue === 'string' && !currentValue.trim()) {
         // 对于字符串类型，如果是空字符串也重置
-        console.log(`[AiNote][Prefs] 重置空配置: ${key}`);
+        // console.log(`[AiNote][Prefs] 重置空配置: ${key}`);
         setPref(key as any, defaultValue);
       }
     } catch (error) {
@@ -191,7 +168,8 @@ function initializeDefaultPrefs() {
 }
 
 /**
- * 诊断配置问题 - 在控制台输出详细信息
+ * 诊断配置问题 - 在控制台输出详细信息（仅在调试时使用）
+ * 取消注释 registerPrefsScripts 中的调用来启用
  */
 function diagnosePrefs() {
   console.log("[AiNote][Prefs] ========== 配置诊断开始 ==========");

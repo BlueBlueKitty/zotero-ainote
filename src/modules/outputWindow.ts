@@ -403,17 +403,17 @@ export class OutputWindow {
    */
   public finishItem(): void {
     if (this.currentItemContainer) {
-      // 输出调试日志：AI 总结的原始 Markdown 内容
-      ztoolkit.log("=".repeat(80));
-      ztoolkit.log("[AiNote][DEBUG] AI 总结的原始 Markdown 内容:");
-      ztoolkit.log(this.currentItemBuffer);
-      ztoolkit.log("=".repeat(80));
+      // // 输出调试日志：AI 总结的原始 Markdown 内容
+      // ztoolkit.log("=".repeat(80));
+      // ztoolkit.log("[AiNote][DEBUG] AI 总结的原始 Markdown 内容:");
+      // ztoolkit.log(this.currentItemBuffer);
+      // ztoolkit.log("=".repeat(80));
       
-      // 输出调试日志：转换后的 HTML 内容
-      const convertedHTML = this.convertMarkdownToHTML(this.currentItemBuffer);
-      ztoolkit.log("[AiNote][DEBUG] 转换后的 HTML 内容:");
-      ztoolkit.log(convertedHTML);
-      ztoolkit.log("=".repeat(80));
+      // // 输出调试日志：转换后的 HTML 内容
+      // const convertedHTML = this.convertMarkdownToHTML(this.currentItemBuffer);
+      // ztoolkit.log("[AiNote][DEBUG] 转换后的 HTML 内容:");
+      // ztoolkit.log(convertedHTML);
+      // ztoolkit.log("=".repeat(80));
       
       // 完成后渲染公式
       this.renderMath();

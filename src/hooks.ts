@@ -99,7 +99,7 @@ function initializeDefaultPrefsOnStartup() {
         
         // 检查是否需要更新提示词
         if (shouldUpdatePrompt(currentPromptVersion, currentPrompt)) {
-          ztoolkit.log(`[AiNote] 更新提示词到版本 ${PROMPT_VERSION}`);
+          // ztoolkit.log(`[AiNote] 更新提示词到版本 ${PROMPT_VERSION}`);
           setPref("summaryPrompt" as any, defaultValue);
           setPref("promptVersion" as any, PROMPT_VERSION);
           continue;
@@ -107,13 +107,13 @@ function initializeDefaultPrefsOnStartup() {
       }
       
       if (currentValue === undefined || currentValue === null) {
-        const preview = typeof defaultValue === 'string' && defaultValue.length > 50 
-          ? defaultValue.substring(0, 50) + '...' 
-          : defaultValue;
-        ztoolkit.log(`[AiNote] 启动时初始化配置: ${key} = ${preview}`);
+        // const preview = typeof defaultValue === 'string' && defaultValue.length > 50 
+        //   ? defaultValue.substring(0, 50) + '...' 
+        //   : defaultValue;
+        // ztoolkit.log(`[AiNote] 启动时初始化配置: ${key} = ${preview}`);
         setPref(key as any, defaultValue);
       } else if (typeof defaultValue === 'string' && typeof currentValue === 'string' && !currentValue.trim()) {
-        ztoolkit.log(`[AiNote] 启动时重置空配置: ${key}`);
+        // ztoolkit.log(`[AiNote] 启动时重置空配置: ${key}`);
         setPref(key as any, defaultValue);
       }
     } catch (error) {
@@ -153,7 +153,7 @@ function registerContextMenuItem() {
 async function handleGenerateSummary() {
   // Check if API is configured (global only)
   const apiKey = Zotero.Prefs.get(`${config.prefsPrefix}.apiKey`, true) as string;
-  ztoolkit.log(`[AiNote] handleGenerateSummary - API Key: ${apiKey ? `exists (${apiKey.length} chars)` : 'missing'}`);
+  // ztoolkit.log(`[AiNote] handleGenerateSummary - API Key: ${apiKey ? `exists (${apiKey.length} chars)` : 'missing'}`);
 
   if (!apiKey) {
     new ztoolkit.ProgressWindow("AiNote", {
@@ -284,8 +284,8 @@ async function handleGenerateSummary() {
                 })
                 .show();
               
-              // 同时在控制台输出详细错误
-              ztoolkit.log("[AiNote] Failed items details:", failedItems);
+              // 同时在控制台输出详细错误（仅在调试时使用）
+              // ztoolkit.log("[AiNote] Failed items details:", failedItems);
             }, 2000);
           }
           
@@ -325,16 +325,16 @@ async function onNotify(
   extraData: { [key: string]: any },
 ) {
   // Placeholder for future notify handlers
-  ztoolkit.log("notify", event, type, ids, extraData);
+  // ztoolkit.log("notify", event, type, ids, extraData);
 }
 
 async function onPrefsEvent(type: string, data: { [key: string]: any }) {
-  console.log("[AiNote] onPrefsEvent called, type:", type);
-  ztoolkit.log("[AiNote] onPrefsEvent called, type:", type, "data:", data);
+  // console.log("[AiNote] onPrefsEvent called, type:", type);
+  // ztoolkit.log("[AiNote] onPrefsEvent called, type:", type, "data:", data);
   
   switch (type) {
     case "load":
-      console.log("[AiNote] Calling registerPrefsScripts");
+      // console.log("[AiNote] Calling registerPrefsScripts");
       registerPrefsScripts(data.window);
       break;
     default:
