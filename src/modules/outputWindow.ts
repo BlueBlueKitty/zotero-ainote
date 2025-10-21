@@ -817,8 +817,9 @@ export class OutputWindow {
       const headingWeights = ['bold', 'bold', '600', '600', 'normal', 'normal'];
       
       const originalHeading = renderer.heading.bind(renderer);
-      renderer.heading = (token: any) => {
-        const text = token.text;
+      renderer.heading = function(token: any) {
+        // 使用 parser.parseInline 来解析标题中的行内元素
+        const text = this.parser.parseInline(token.tokens);
         const depth = token.depth;
         const level = Math.min(Math.max(depth, 1), 6);
         const size = headingSizes[level - 1];
@@ -829,8 +830,9 @@ export class OutputWindow {
 
       // 段落样式
       const originalParagraph = renderer.paragraph.bind(renderer);
-      renderer.paragraph = (token: any) => {
-        const text = token.text;
+      renderer.paragraph = function(token: any) {
+        // 使用 parser.parseInline 来解析段落中的行内元素（如加粗、斜体、链接等）
+        const text = this.parser.parseInline(token.tokens);
         return `<p style="margin: 8px 0; line-height: 1.8; font-size: 14px; font-weight: normal;">${text}</p>`;
       };
 
@@ -893,6 +895,18 @@ export class OutputWindow {
         const href = token.href;
         const text = token.text;
         return `<a href="${href}" style="color: #59c0bc; text-decoration: underline;">${text}</a>`;
+      };
+
+      // 加粗样式
+      renderer.strong = function(token: any) {
+        const text = this.parser.parseInline(token.tokens);
+        return `<strong>${text}</strong>`;
+      };
+
+      // 斜体样式
+      renderer.em = function(token: any) {
+        const text = this.parser.parseInline(token.tokens);
+        return `<em>${text}</em>`;
       };
 
       // 使用自定义渲染器
