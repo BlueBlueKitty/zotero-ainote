@@ -70,8 +70,8 @@
       id="zotero-prefpane-__addonRef__-temperature"
       preference="__prefsPrefix__.temperature"
       min="0"
-      max="2"
-      step="0.01"
+      max="1"
+      step="0.1"
       style="width: 100px;"
     />
   </hbox>
@@ -86,6 +86,21 @@
       style="width: 20px;"
     />
     <label data-l10n-id="ainote-prefs-stream-hint" />
+  </hbox>
+
+  <!-- Truncate Length -->
+  <hbox align="center">
+    <label data-l10n-id="ainote-prefs-truncateLength" />
+    <html:input
+      type="number"
+      id="zotero-prefpane-__addonRef__-truncateLength"
+      preference="__prefsPrefix__.truncateLength"
+      min="1"
+      max="100"
+      step="1"
+      style="width: 150px;"
+    />
+    <label data-l10n-id="ainote-prefs-truncateLength-hint" />
   </hbox>
 
   <!-- Summary Prompt -->

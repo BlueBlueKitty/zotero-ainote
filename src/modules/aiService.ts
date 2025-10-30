@@ -86,8 +86,8 @@ export class AIService {
           body,
           responseType: "text",
           requestObserver: (xmlhttp: XMLHttpRequest) => {
-            // 设置较长超时，避免网络异常时无限挂起
-            xmlhttp.timeout = 300000; // 5 分钟
+            // 设置超时时间为 120 秒，配合动态重置机制避免流式响应超时
+            xmlhttp.timeout = 300000; // 300 秒（5 分钟）
             
             xmlhttp.onprogress = (e: any) => {
               const status = e.target.status;
@@ -163,6 +163,11 @@ export class AIService {
                 }
               } catch (err) {
                 ztoolkit.log("[AiNote] stream parse error:", err);
+              }
+              
+              // 每次收到数据时重置超时计时器，避免长时间流式响应被误判为超时
+              if (e.target.timeout) {
+                e.target.timeout = 0;
               }
             };
             

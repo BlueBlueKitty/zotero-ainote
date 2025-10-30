@@ -2,6 +2,7 @@ import { config } from "../../package.json";
 import { PDFExtractor } from "./pdfExtractor";
 import AIService from "./aiService";
 import { OutputWindow } from "./outputWindow";
+import { getPref } from "../utils/prefs";
 
 export class NoteGenerator {
   /**
@@ -27,7 +28,32 @@ export class NoteGenerator {
       // Extract PDF text
       const fullText = await PDFExtractor.extractTextFromItem(item);
       const cleanedText = PDFExtractor.cleanText(fullText);
-      const truncatedText = PDFExtractor.truncateText(cleanedText);
+      
+      // 获取用户配置的截断长度（单位：万字符）
+      const truncateLengthStr = (getPref("truncateLength") as string) || "10";
+      const truncateLengthInWan = parseInt(truncateLengthStr) || 10;
+      const truncateLength = truncateLengthInWan * 10000; // 转换为实际字符数
+      
+      const truncatedText = PDFExtractor.truncateText(cleanedText, truncateLength);
+
+      // 检查文本是否被截断并提示用户
+      if (cleanedText.length > truncateLength) {
+        const truncationMessage = `文献内容过长（${cleanedText.length} 字符），已截断至前 ${truncateLength.toLocaleString()} 字符（${truncateLengthInWan} 万字符）进行处理`;
+        ztoolkit.log(`[AiNote] ${truncationMessage}`);
+        
+        // 在输出窗口显示提示
+        if (outputWindow) {
+          outputWindow.appendContent(`\n\n> **注意**: ${truncationMessage}\n\n`);
+        }
+        
+        // 添加弹出窗口提醒
+        new ztoolkit.ProgressWindow("AiNote - 内容截断提醒", { closeTime: 5000 })
+          .createLine({ text: truncationMessage, type: "fail" })
+          .show();
+        
+        // 进度回调提示
+        progressCallback?.(truncationMessage, 30);
+      }
 
       progressCallback?.("正在生成AI总结...", 40);
 
@@ -100,7 +126,7 @@ export class NoteGenerator {
 <div>${htmlContent}</div>`;
   }
 
-  /**
+    /**
    * 将 Markdown 转换为适合 Zotero 笔记的 HTML 格式
    * @param markdown Markdown 文本
    * @returns 转换后的 HTML（无样式，公式格式适配 Zotero）

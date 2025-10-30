@@ -13,6 +13,8 @@ export type FluentMessageId =
   | 'ainote-prefs-stream-hint'
   | 'ainote-prefs-summaryPrompt'
   | 'ainote-prefs-temperature'
+  | 'ainote-prefs-truncateLength'
+  | 'ainote-prefs-truncateLength-hint'
   | 'error-noApiKey'
   | 'error-noItemsSelected'
   | 'item-info-row-example-label'
