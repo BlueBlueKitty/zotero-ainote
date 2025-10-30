@@ -30,7 +30,7 @@
     "update-deps": "npm update --save"
   },
   "dependencies": {
-    "@types/marked": "^5.0.2",
+    "@types/marked": "^6.0.0",
     "marked": "^16.4.1",
     "mathjax": "^3.2.2",
     "zotero-plugin-toolkit": "^5.1.0-beta.4"
