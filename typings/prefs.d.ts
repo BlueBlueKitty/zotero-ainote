@@ -14,6 +14,7 @@ declare namespace _ZoteroTypes {
       "temperature": string;
       "stream": boolean;
       "summaryPrompt": string;
+      "promptVersion": number;
       "truncateLength": string;
     };
   }

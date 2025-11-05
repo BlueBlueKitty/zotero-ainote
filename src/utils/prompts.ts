@@ -7,7 +7,7 @@
  * 提示词版本号
  * 每次修改默认提示词时，增加此版本号，可以触发已有用户的提示词更新
  */
-export const PROMPT_VERSION = 1;
+export const PROMPT_VERSION = 2;
 
 /**
  * 默认的论文总结提示词
@@ -18,6 +18,10 @@ export const DEFAULT_SUMMARY_PROMPT =
 
 # 任务
 请对下方提供的学术论文，进行一个包含两部分的综合性总结。
+第一步：标题翻译
+首先，检查论文标题的语言。如果标题不是中文，请先将其准确翻译为中文。请直接以以下格式显示处理结果：
+1.如果标题需要翻译，直接显示：【论文标题：翻译后的中文标题】。
+2.如果标题原本就是中文，直接显示：【论文标题：原标题】。
 第一部分：全文核心摘要
 首先，请提供一个对全文内容的高度概括。这个摘要应该在一个段落内，精准地捕捉论文的核心研究问题、使用的方法、关键发现以及主要结论，让人能快速了解论文全貌。
 第二部分：分章节详细解析
@@ -71,6 +75,6 @@ export function shouldUpdatePrompt(currentPromptVersion?: number, currentPrompt?
         return true;
     }
 
-    // 如果有版本号但版本低于当前版本，则需要更新（仅当用户没有自定义时）
+    // 如果有版本号但版本低于当前版本，则需要更新
     return currentPromptVersion < PROMPT_VERSION;
 }
