@@ -201,6 +201,7 @@ export class NoteGenerator {
     let failedCount = 0;
     let stopped = false; // 标记是否被用户停止
     let windowClosed = false; // 标记输出窗口是否被关闭
+    let allCompleted = false; // 标记是否所有处理已完成
 
     // 创建并打开输出窗口
     const outputWindow = new OutputWindow();
@@ -214,13 +215,15 @@ export class NoteGenerator {
     // 设置窗口关闭回调
     outputWindow.setOnClose(() => {
       windowClosed = true;
-      // 显示后台继续处理的通知
-      new ztoolkit.ProgressWindow("AiNote", { closeTime: 3000 })
-        .createLine({
-          text: "输出窗口已关闭,AI 生成将在后台继续进行",
-          type: "default",
-        })
-        .show();
+      // 只有在处理未完成时才显示后台继续处理的通知
+      if (!allCompleted) {
+        new ztoolkit.ProgressWindow("AiNote", { closeTime: 3000 })
+          .createLine({
+            text: "输出窗口已关闭,AI 生成将在后台继续进行",
+            type: "default",
+          })
+          .show();
+      }
     });
 
     // 等待窗口完全初始化
@@ -275,6 +278,9 @@ export class NoteGenerator {
           progressCallback?.(total, total, 100, `${successCount} 个成功，${failedCount} 个失败`);
         }
       }
+      
+      // 标记为所有处理已完成
+      allCompleted = true;
     } catch (error: any) {
       // 禁用停止按钮
       outputWindow.disableStopButton(false);
