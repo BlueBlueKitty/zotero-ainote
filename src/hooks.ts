@@ -187,6 +187,7 @@ async function handleGenerateSummary() {
   // Create progress window
   const progressWin = new ztoolkit.ProgressWindow("AiNote", {
     closeOnClick: false,
+    closeTime: -1, // 不自动关闭,直到处理完成
   });
 
   try {

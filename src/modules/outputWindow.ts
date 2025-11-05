@@ -12,6 +12,7 @@ export class OutputWindow {
   private currentItemBuffer: string = ""; // 累积当前条目的完整内容
   private isOpen: boolean = false;
   private onStopCallback: (() => void) | null = null; // 停止生成的回调
+  private onCloseCallback: (() => void) | null = null; // 窗口关闭的回调
   private stopButton: any = null; // 停止按钮引用
   private mathJaxReady: boolean = false; // MathJax 是否就绪
   private renderMathTimer: ReturnType<typeof setTimeout> | null = null; // 公式渲染节流定时器
@@ -32,6 +33,10 @@ export class OutputWindow {
         this.applyTheme();
       },
       unloadCallback: () => {
+        // 触发关闭回调
+        if (this.onCloseCallback) {
+          this.onCloseCallback();
+        }
         this.cleanup();
       },
     };
@@ -695,6 +700,14 @@ export class OutputWindow {
    */
   public setOnStop(callback: () => void): void {
     this.onStopCallback = callback;
+  }
+
+  /**
+   * 设置窗口关闭回调
+   * @param callback 窗口关闭时的回调函数
+   */
+  public setOnClose(callback: () => void): void {
+    this.onCloseCallback = callback;
   }
 
   /**

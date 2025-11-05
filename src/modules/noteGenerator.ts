@@ -84,7 +84,6 @@ export class NoteGenerator {
       // 创建笔记并保存内容
       const noteContent = this.formatNoteContent(itemTitle, fullContent);
       note = await this.createNote(item, noteContent);
-      await note.saveTx();
 
       // 如果有输出窗口，标记完成
       if (outputWindow) {
@@ -201,6 +200,7 @@ export class NoteGenerator {
     let successCount = 0;
     let failedCount = 0;
     let stopped = false; // 标记是否被用户停止
+    let windowClosed = false; // 标记输出窗口是否被关闭
 
     // 创建并打开输出窗口
     const outputWindow = new OutputWindow();
@@ -209,6 +209,18 @@ export class NoteGenerator {
     // 设置停止回调
     outputWindow.setOnStop(() => {
       stopped = true;
+    });
+
+    // 设置窗口关闭回调
+    outputWindow.setOnClose(() => {
+      windowClosed = true;
+      // 显示后台继续处理的通知
+      new ztoolkit.ProgressWindow("AiNote", { closeTime: 3000 })
+        .createLine({
+          text: "输出窗口已关闭,AI 生成将在后台继续进行",
+          type: "default",
+        })
+        .show();
     });
 
     // 等待窗口完全初始化
