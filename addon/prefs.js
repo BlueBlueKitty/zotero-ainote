@@ -2,7 +2,6 @@
 // 注意：默认提示词统一在 src/utils/prompts.ts 中管理
 // 本文件中的 summaryPrompt 为备用默认值，实际使用时会被 src/hooks.ts 和 src/modules/preferenceScript.ts 中的初始化逻辑覆盖
 
-pref("__prefsPrefix__.provider", "openai");
 pref("__prefsPrefix__.apiKey", "");
 pref("__prefsPrefix__.apiUrl", "https://api.openai.com/v1/chat/completions");
 pref("__prefsPrefix__.model", "gpt-3.5-turbo");
