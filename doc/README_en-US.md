@@ -12,6 +12,8 @@
 
 AiNote is a Zotero plugin that automatically generate summary notes for your PDF literature. It supports streaming output and batch processing.
 
+The current build configuration supports `Zotero 7` through `Zotero 9`.
+
 ## Features
 
 - **AI-powered PDF summarization**: Generate concise notes for academic papers using your preferred AI model.
