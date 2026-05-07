@@ -2,6 +2,11 @@ import { getString, initLocale } from "./utils/locale";
 import { registerPrefsScripts } from "./modules/preferenceScript";
 import { createZToolkit } from "./utils/ztoolkit";
 import { NoteGenerationTarget, NoteGenerator } from "./modules/noteGenerator";
+import {
+  formatSelectedNote,
+  NOTE_FORMAT_ACTIONS,
+  NoteFormatActionType,
+} from "./modules/noteFormatter";
 import { config } from "../package.json";
 import { getPref, setPref } from "./utils/prefs";
 import {
@@ -12,9 +17,14 @@ import {
   PROMPT_TEMPLATES_VERSION,
   serializePromptTemplates,
 } from "./utils/prompts";
-import { createProfile, migrateToProfilesV3, parseProfiles } from "./modules/llmProfiles";
+import {
+  createProfile,
+  migrateToProfilesV3,
+  parseProfiles,
+} from "./modules/llmProfiles";
 
 const GENERATE_SUMMARY_MENU_ID = "ainote-generate-summary-menu";
+const NOTE_FORMAT_MENU_ID = "ainote-note-format-menu";
 
 async function onStartup() {
   await Promise.all([
@@ -110,14 +120,18 @@ function initializeDefaultPrefsOnStartup() {
     try {
       // 使用 Zotero.Prefs.get 直接检查
       const currentValue = getPref(key as any);
-      
+
       if (currentValue === undefined || currentValue === null) {
-        // const preview = typeof defaultValue === 'string' && defaultValue.length > 50 
-        //   ? defaultValue.substring(0, 50) + '...' 
+        // const preview = typeof defaultValue === 'string' && defaultValue.length > 50
+        //   ? defaultValue.substring(0, 50) + '...'
         //   : defaultValue;
         // ztoolkit.log(`[AiNote] 启动时初始化配置: ${key} = ${preview}`);
         setPref(key as any, defaultValue);
-      } else if (typeof defaultValue === 'string' && typeof currentValue === 'string' && !currentValue.trim()) {
+      } else if (
+        typeof defaultValue === "string" &&
+        typeof currentValue === "string" &&
+        !currentValue.trim()
+      ) {
         // ztoolkit.log(`[AiNote] 启动时重置空配置: ${key}`);
         setPref(key as any, defaultValue);
       }
@@ -155,10 +169,7 @@ function initializeDefaultPrefsOnStartup() {
       "activePromptTemplateId" as any,
       promptTemplateState.activeTemplateId,
     );
-    setPref(
-      "promptTemplatesVersion" as any,
-      promptTemplateState.version,
-    );
+    setPref("promptTemplatesVersion" as any, promptTemplateState.version);
   }
 }
 
@@ -181,9 +192,12 @@ function buildGenerateSummaryMenuOptions(menuIcon: string): any {
   const getVisibility = () => {
     const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
     return (
-      selectedItems?.length > 0 &&
-      selectedItems.every((item: Zotero.Item) => isSupportedSelectionItem(item))
-    ) || false;
+      (selectedItems?.length > 0 &&
+        selectedItems.every((item: Zotero.Item) =>
+          isSupportedSelectionItem(item),
+        )) ||
+      false
+    );
   };
 
   if (pinCurrentPromptTemplate) {
@@ -208,7 +222,9 @@ function buildGenerateSummaryMenuOptions(menuIcon: string): any {
       tag: "menuitem",
       id: `${GENERATE_SUMMARY_MENU_ID}-${template.id}`,
       label:
-        template.id === activeTemplate.id ? `${template.name} ✓` : template.name,
+        template.id === activeTemplate.id
+          ? `${template.name} ✓`
+          : template.name,
       commandListener: () => {
         handleGenerateSummary(template.id);
       },
@@ -219,14 +235,18 @@ function buildGenerateSummaryMenuOptions(menuIcon: string): any {
 
 function registerContextMenuItemForWindow(win: Window) {
   const menuIcon = `chrome://${config.addonRef}/content/icons/favicon.png`;
-  const popup = win.document.querySelector("#zotero-itemmenu") as XUL.MenuPopup | null;
+  const popup = win.document.querySelector(
+    "#zotero-itemmenu",
+  ) as XUL.MenuPopup | null;
   if (!popup) {
     return;
   }
 
   win.document.getElementById(GENERATE_SUMMARY_MENU_ID)?.remove();
+  win.document.getElementById(NOTE_FORMAT_MENU_ID)?.remove();
 
   ztoolkit.Menu.register(popup, buildGenerateSummaryMenuOptions(menuIcon));
+  ztoolkit.Menu.register(popup, buildNoteFormatMenuOptions(menuIcon));
 }
 
 function refreshContextMenuItems() {
@@ -236,11 +256,41 @@ function refreshContextMenuItems() {
 }
 
 function isPdfAttachment(item: Zotero.Item): boolean {
-  return item.isAttachment() && item.attachmentContentType === "application/pdf";
+  return (
+    item.isAttachment() && item.attachmentContentType === "application/pdf"
+  );
 }
 
 function isSupportedSelectionItem(item: Zotero.Item): boolean {
   return item.isRegularItem() || isPdfAttachment(item);
+}
+
+function isSingleSelectedNote(item: Zotero.Item): boolean {
+  return item.isNote();
+}
+
+function buildNoteFormatMenuOptions(menuIcon: string): any {
+  return {
+    tag: "menu",
+    id: NOTE_FORMAT_MENU_ID,
+    label: "笔记格式调整",
+    icon: menuIcon,
+    children: NOTE_FORMAT_ACTIONS.map((action) => ({
+      tag: "menuitem",
+      id: `${NOTE_FORMAT_MENU_ID}-${action.id}`,
+      label: action.label,
+      commandListener: () => {
+        handleNoteFormatAction(action.id);
+      },
+    })),
+    getVisibility: () => {
+      const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
+      return (
+        selectedItems?.length === 1 &&
+        selectedItems.every((item: Zotero.Item) => isSingleSelectedNote(item))
+      );
+    },
+  };
 }
 
 async function normalizeSelectionTargets(
@@ -283,8 +333,15 @@ async function normalizeSelectionTargets(
  * Handle generate AI summary command
  */
 async function handleGenerateSummary(templateId?: string) {
-  const profilesRaw = Zotero.Prefs.get(`${config.prefsPrefix}.profiles`, true) as string;
-  const activeId = (Zotero.Prefs.get(`${config.prefsPrefix}.activeProfileId`, true) as string) || "";
+  const profilesRaw = Zotero.Prefs.get(
+    `${config.prefsPrefix}.profiles`,
+    true,
+  ) as string;
+  const activeId =
+    (Zotero.Prefs.get(
+      `${config.prefsPrefix}.activeProfileId`,
+      true,
+    ) as string) || "";
   const profiles = parseProfiles(profilesRaw);
   const activeProfile = profiles.find((p) => p.id === activeId) || profiles[0];
 
@@ -349,7 +406,7 @@ async function handleGenerateSummary(templateId?: string) {
       (current, total, progress, message) => {
         const itemTitle = targets[current - 1].item.getField("title") as string;
         const mainText = `正在处理 ${current}/${total}: ${itemTitle}`;
-        
+
         if (current === 1 && progress === 10) {
           progressWin
             .createLine({
@@ -359,9 +416,9 @@ async function handleGenerateSummary(templateId?: string) {
             })
             .show();
         } else {
-          const overallProgress = 
-            ((current - 1) / total) * 100 + (progress / total);
-          
+          const overallProgress =
+            ((current - 1) / total) * 100 + progress / total;
+
           // 检测是否是错误消息
           if (message.startsWith("Error:")) {
             failedCount++;
@@ -369,13 +426,13 @@ async function handleGenerateSummary(templateId?: string) {
               title: itemTitle,
               error: message.replace("Error: ", ""),
             });
-            
+
             progressWin.changeLine({
               text: `${mainText} - 失败`,
               type: "error",
               progress: overallProgress,
             });
-            
+
             // 短暂停留后继续下一个
             setTimeout(() => {
               if (current < total) {
@@ -391,7 +448,7 @@ async function handleGenerateSummary(templateId?: string) {
               text: `${mainText} - ${message}`,
               progress: overallProgress,
             });
-            
+
             // 如果完成了一个条目
             if (progress === 100) {
               successCount++;
@@ -414,7 +471,7 @@ async function handleGenerateSummary(templateId?: string) {
               progress: 100,
             });
           }
-          
+
           // 如果有失败的条目，显示详细错误信息
           if (failedCount > 0) {
             setTimeout(() => {
@@ -422,7 +479,7 @@ async function handleGenerateSummary(templateId?: string) {
               failedItems.forEach((item, index) => {
                 errorDetails += `${index + 1}. ${item.title}\n   错误: ${item.error}\n\n`;
               });
-              
+
               new ztoolkit.ProgressWindow("处理失败详情", {
                 closeOnClick: true,
                 closeTime: -1, // 不自动关闭
@@ -432,16 +489,16 @@ async function handleGenerateSummary(templateId?: string) {
                   type: "error",
                 })
                 .show();
-              
+
               // 同时在控制台输出详细错误（仅在调试时使用）
               // ztoolkit.log("[AiNote] Failed items details:", failedItems);
             }, 2000);
           }
-          
+
           // 标记完成，允许进度窗在短时间后关闭
           progressWin.startCloseTimer(5000);
         }
-      }
+      },
     );
   } catch (error: any) {
     ztoolkit.log("[AiNote] Fatal error in handleGenerateSummary:", error);
@@ -450,6 +507,37 @@ async function handleGenerateSummary(templateId?: string) {
       type: "error",
     });
     progressWin.startCloseTimer(10000);
+  }
+}
+
+async function handleNoteFormatAction(actionType: NoteFormatActionType) {
+  try {
+    const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
+    if (selectedItems.length !== 1 || !selectedItems[0].isNote()) {
+      new ztoolkit.ProgressWindow("AiNote", {
+        closeOnClick: true,
+        closeTime: 3000,
+      })
+        .createLine({
+          text: "请先选中一条 Zotero 笔记",
+          type: "error",
+        })
+        .show();
+      return;
+    }
+
+    await formatSelectedNote(actionType);
+  } catch (error: any) {
+    ztoolkit.log("[AiNote] Failed to run note format action:", error);
+    new ztoolkit.ProgressWindow("AiNote", {
+      closeOnClick: true,
+      closeTime: 5000,
+    })
+      .createLine({
+        text: `执行笔记格式调整失败：${error?.message || "未知错误"}`,
+        type: "error",
+      })
+      .show();
   }
 }
 
@@ -480,7 +568,7 @@ async function onNotify(
 async function onPrefsEvent(type: string, data: { [key: string]: any }) {
   // console.log("[AiNote] onPrefsEvent called, type:", type);
   // ztoolkit.log("[AiNote] onPrefsEvent called, type:", type, "data:", data);
-  
+
   switch (type) {
     case "load":
       // console.log("[AiNote] Calling registerPrefsScripts");

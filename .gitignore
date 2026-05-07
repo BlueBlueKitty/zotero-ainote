@@ -17,7 +17,9 @@ logs
 
 other_plugins
 .vscode
-test
+test/*
+!test/
+!test/noteFormatter.test.ts
 releases
 update_docs
 *.backup
