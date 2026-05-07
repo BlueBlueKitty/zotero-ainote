@@ -391,6 +391,7 @@ async function postStream(
   let abortError: Error | null = null;
   let request: XMLHttpRequest | null = null;
   let unregisterCancel: (() => void) | undefined;
+  let receivedAnyResponseData = false;
 
   throwIfCanceled(cancelSignal);
   if (cancelSignal) {
@@ -442,6 +443,16 @@ async function postStream(
 
           const resp: string = e.target.response || "";
           if (resp.length <= processedLength) return;
+          if (!receivedAnyResponseData) {
+            receivedAnyResponseData = true;
+            try {
+              // 对于流式响应，30 秒总超时很容易把长回答截成半截。
+              // 一旦已经开始收到服务端数据，就交给流结束事件来完成请求。
+              xmlhttp.timeout = 0;
+            } catch {
+              // ignore
+            }
+          }
 
           pendingText += resp.slice(processedLength);
           processedLength = resp.length;

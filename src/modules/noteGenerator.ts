@@ -85,7 +85,7 @@ export class NoteGenerator {
 
       // 如果有输出窗口，先开始显示这个条目，后续提示和内容都写入当前条目区域
       if (outputWindow) {
-        outputWindow.startItem(itemTitle, modelLabel);
+        await outputWindow.startItem(itemTitle, modelLabel);
         outputWindow.setOnStopCurrent(cancelCurrentItem);
       }
 

@@ -21,6 +21,25 @@ export class OutputWindow {
   private userHasScrolled: boolean = false; // 用户是否手动滚动过
   private lastScrollTop: number = 0; // 上次滚动位置
 
+  private async ensureOutputContainerReady(timeoutMs = 3000): Promise<boolean> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (this.outputContainer) {
+        return true;
+      }
+      const doc = this.dialog?.window?.document;
+      if (doc) {
+        const container = doc.getElementById("ainote-output-content") as HTMLElement | null;
+        if (container) {
+          this.outputContainer = container;
+          return true;
+        }
+      }
+      await Zotero.Promise.delay(50);
+    }
+    return !!this.outputContainer;
+  }
+
   /**
    * 打开输出窗口
    */
@@ -374,8 +393,10 @@ export class OutputWindow {
    * 开始新的条目
    * @param itemTitle 条目标题
    */
-  public startItem(itemTitle: string, modelLabel?: string): void {
-    if (!this.outputContainer) {
+  public async startItem(itemTitle: string, modelLabel?: string): Promise<void> {
+    const ready = await this.ensureOutputContainerReady();
+    if (!ready || !this.outputContainer) {
+      ztoolkit.log("[AiNote][OutputWindow] Output container not ready, skip startItem");
       return;
     }
 

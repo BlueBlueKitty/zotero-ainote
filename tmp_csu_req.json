@@ -1,0 +1,1 @@
+{"model":"DeepSeek-V4-Flash","messages":[{"role":"system","content":"You are a concise assistant."},{"role":"user","content":"请用中文简要介绍长沙理工大学，不超过80字。"}],"stream":true}
