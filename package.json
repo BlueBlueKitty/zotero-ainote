@@ -1,7 +1,7 @@
 {
   "name": "ainote",
   "type": "module",
-  "version": "1.0.9",
+  "version": "1.1.0",
   "description": "AI-powered note generation for Zotero items",
   "config": {
     "addonName": "ainote",
