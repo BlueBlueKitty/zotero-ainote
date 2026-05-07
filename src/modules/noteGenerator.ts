@@ -20,6 +20,11 @@ const PROVIDER_LABELS: Record<ProviderType, string> = {
   openai_compatible: "OpenAI 兼容接口（Chat Completions）",
 };
 
+export interface NoteGenerationTarget {
+  item: Zotero.Item;
+  preferredPdfAttachment?: Zotero.Item;
+}
+
 export class NoteGenerator {
   private static getActiveProfile() {
     const profiles = parseProfiles(getPref("profiles"));
@@ -47,10 +52,11 @@ export class NoteGenerator {
    * @returns Created note item with final content
    */
   public static async generateNoteForItem(
-    item: Zotero.Item,
+    target: NoteGenerationTarget,
     outputWindow?: OutputWindow,
     progressCallback?: (message: string, progress: number) => void
   ): Promise<{ note: Zotero.Item; content: string }> {
+    const { item, preferredPdfAttachment } = target;
     const itemTitle = item.getField("title") as string;
     let note: Zotero.Item | null = null;
     let fullContent = "";
@@ -116,7 +122,7 @@ export class NoteGenerator {
       if (enablePdfSizeLimit) {
         const maxPdfSizeMB =
           parseFloat(activeProfile.extra?.maxPdfSizeMB || "50") || 50;
-        const fileSizeMB = await this.getPdfFileSize(item);
+        const fileSizeMB = await this.getPdfFileSize(item, preferredPdfAttachment);
         if (fileSizeMB > maxPdfSizeMB) {
           throw new Error(
             `PDF 文件过大（${fileSizeMB.toFixed(1)} MB），超过当前配置限制 ${maxPdfSizeMB} MB`,
@@ -126,11 +132,17 @@ export class NoteGenerator {
 
       if (modeResolution.actual === "base64") {
         progressCallback?.("正在读取 PDF 文件...", 10);
-        requestContent = await PDFExtractor.extractBase64FromItem(item);
+        requestContent = await PDFExtractor.extractBase64FromItem(
+          item,
+          preferredPdfAttachment,
+        );
         contentMode = "pdf-base64";
       } else {
         progressCallback?.("正在提取PDF文本...", 10);
-        const fullText = await PDFExtractor.extractTextFromItem(item);
+        const fullText = await PDFExtractor.extractTextFromItem(
+          item,
+          preferredPdfAttachment,
+        );
         const cleanedText = PDFExtractor.cleanText(fullText);
 
         const truncateLengthStr =
@@ -303,19 +315,19 @@ export class NoteGenerator {
     return note;
   }
 
-  private static async getPdfFileSize(item: Zotero.Item): Promise<number> {
+  private static async getPdfFileSize(
+    item: Zotero.Item,
+    preferredPdfAttachment?: Zotero.Item,
+  ): Promise<number> {
     try {
-      const attachments = item.getAttachments();
-      for (const attachmentID of attachments) {
-        const attachment = await Zotero.Items.getAsync(attachmentID);
-        if (attachment.attachmentContentType === "application/pdf") {
-          const pdfPath = await attachment.getFilePathAsync();
-          if (!pdfPath) continue;
-          const fileInfo = await IOUtils.stat(pdfPath);
-          return (fileInfo.size ?? 0) / (1024 * 1024);
-        }
-      }
-      return 0;
+      const attachment = await PDFExtractor.resolvePdfAttachment(
+        item,
+        preferredPdfAttachment,
+      );
+      const pdfPath = await attachment.getFilePathAsync();
+      if (!pdfPath) return 0;
+      const fileInfo = await IOUtils.stat(pdfPath);
+      return (fileInfo.size ?? 0) / (1024 * 1024);
     } catch {
       return 0;
     }
@@ -327,7 +339,7 @@ export class NoteGenerator {
    * @param progressCallback Progress callback with (current, total, progress, message)
    */
   public static async generateNotesForItems(
-    items: Zotero.Item[],
+    targets: NoteGenerationTarget[],
     progressCallback?: (
       current: number,
       total: number,
@@ -335,7 +347,7 @@ export class NoteGenerator {
       message: string
     ) => void
   ): Promise<void> {
-    const total = items.length;
+    const total = targets.length;
     let successCount = 0;
     let failedCount = 0;
     let canceledCount = 0;
@@ -377,14 +389,15 @@ export class NoteGenerator {
           break;
         }
 
-        const item = items[i];
+        const target = targets[i];
+        const item = target.item;
         const current = i + 1;
         const itemTitle = item.getField("title") as string;
 
         try {
           // 生成笔记（带流式输出）
           await this.generateNoteForItem(
-            item,
+            target,
             outputWindow,
             (message, progress) => {
               progressCallback?.(current, total, progress, message);

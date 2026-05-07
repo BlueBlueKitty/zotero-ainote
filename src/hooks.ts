@@ -1,7 +1,7 @@
 import { getString, initLocale } from "./utils/locale";
 import { registerPrefsScripts } from "./modules/preferenceScript";
 import { createZToolkit } from "./utils/ztoolkit";
-import { NoteGenerator } from "./modules/noteGenerator";
+import { NoteGenerationTarget, NoteGenerator } from "./modules/noteGenerator";
 import { config } from "../package.json";
 import { getPref, setPref } from "./utils/prefs";
 import {
@@ -173,9 +173,54 @@ function registerContextMenuItem() {
     },
     getVisibility: () => {
       const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
-      return selectedItems?.every((item: Zotero.Item) => item.isRegularItem()) || false;
+      return (
+        selectedItems?.length > 0 &&
+        selectedItems.every((item: Zotero.Item) => isSupportedSelectionItem(item))
+      ) || false;
     },
   });
+}
+
+function isPdfAttachment(item: Zotero.Item): boolean {
+  return item.isAttachment() && item.attachmentContentType === "application/pdf";
+}
+
+function isSupportedSelectionItem(item: Zotero.Item): boolean {
+  return item.isRegularItem() || isPdfAttachment(item);
+}
+
+async function normalizeSelectionTargets(
+  items: Zotero.Item[],
+): Promise<NoteGenerationTarget[]> {
+  const targets: NoteGenerationTarget[] = [];
+
+  for (const item of items) {
+    if (item.isRegularItem()) {
+      targets.push({ item });
+      continue;
+    }
+
+    if (!isPdfAttachment(item)) {
+      continue;
+    }
+
+    const parentID = item.parentItemID;
+    if (!parentID) {
+      throw new Error("选中的 PDF 附件缺少父条目，无法创建总结笔记");
+    }
+
+    const parentItem = await Zotero.Items.getAsync(parentID);
+    if (!parentItem || !parentItem.isRegularItem()) {
+      throw new Error("选中的 PDF 附件未找到可用的父条目");
+    }
+
+    targets.push({
+      item: parentItem,
+      preferredPdfAttachment: item,
+    });
+  }
+
+  return targets;
 }
 
 /**
@@ -201,15 +246,30 @@ async function handleGenerateSummary() {
   }
 
   // Get selected items
-  const items = Zotero.getActiveZoteroPane().getSelectedItems();
+  const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
 
-  if (items.length === 0) {
+  if (selectedItems.length === 0) {
     new ztoolkit.ProgressWindow("AiNote", {
       closeOnClick: true,
       closeTime: 3000,
     })
       .createLine({
         text: "请先选择要处理的条目",
+        type: "error",
+      })
+      .show();
+    return;
+  }
+
+  const targets = await normalizeSelectionTargets(selectedItems);
+
+  if (targets.length === 0) {
+    new ztoolkit.ProgressWindow("AiNote", {
+      closeOnClick: true,
+      closeTime: 3000,
+    })
+      .createLine({
+        text: "请选择文献条目或其下的 PDF 附件",
         type: "error",
       })
       .show();
@@ -223,15 +283,15 @@ async function handleGenerateSummary() {
   });
 
   try {
-    const total = items.length;
+    const total = targets.length;
     let successCount = 0;
     let failedCount = 0;
     const failedItems: Array<{ title: string; error: string }> = [];
 
     await NoteGenerator.generateNotesForItems(
-      items,
+      targets,
       (current, total, progress, message) => {
-        const itemTitle = items[current - 1].getField("title") as string;
+        const itemTitle = targets[current - 1].item.getField("title") as string;
         const mainText = `正在处理 ${current}/${total}: ${itemTitle}`;
         
         if (current === 1 && progress === 10) {

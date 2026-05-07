@@ -3,34 +3,46 @@
  */
 
 export class PDFExtractor {
+  public static async resolvePdfAttachment(
+    item: Zotero.Item,
+    preferredPdfAttachment?: Zotero.Item,
+  ): Promise<Zotero.Item> {
+    if (
+      preferredPdfAttachment &&
+      preferredPdfAttachment.attachmentContentType === "application/pdf"
+    ) {
+      return preferredPdfAttachment;
+    }
+
+    const attachments = item.getAttachments();
+
+    if (attachments.length === 0) {
+      throw new Error("No attachments found for this item");
+    }
+
+    for (const attachmentID of attachments) {
+      const attachment = await Zotero.Items.getAsync(attachmentID);
+      if (attachment.attachmentContentType === "application/pdf") {
+        return attachment;
+      }
+    }
+
+    throw new Error("No PDF attachment found for this item");
+  }
+
   /**
    * Extract full text from a Zotero item's PDF attachment
    * @param item Zotero item
    * @returns Extracted text content
    */
   public static async extractTextFromItem(
-    item: Zotero.Item
+    item: Zotero.Item,
+    preferredPdfAttachment?: Zotero.Item,
   ): Promise<string> {
-    // Get PDF attachments
-    const attachments = item.getAttachments();
-    
-    if (attachments.length === 0) {
-      throw new Error("No attachments found for this item");
-    }
-
-    // Find PDF attachment
-    let pdfAttachment: Zotero.Item | null = null;
-    for (const attachmentID of attachments) {
-      const attachment = await Zotero.Items.getAsync(attachmentID);
-      if (attachment.attachmentContentType === "application/pdf") {
-        pdfAttachment = attachment;
-        break;
-      }
-    }
-
-    if (!pdfAttachment) {
-      throw new Error("No PDF attachment found for this item");
-    }
+    const pdfAttachment = await this.resolvePdfAttachment(
+      item,
+      preferredPdfAttachment,
+    );
 
     // Extract text from PDF
     const text = await this.extractTextFromPDF(pdfAttachment);
@@ -44,25 +56,12 @@ export class PDFExtractor {
 
   public static async extractBase64FromItem(
     item: Zotero.Item,
+    preferredPdfAttachment?: Zotero.Item,
   ): Promise<string> {
-    const attachments = item.getAttachments();
-
-    if (attachments.length === 0) {
-      throw new Error("No attachments found for this item");
-    }
-
-    let pdfAttachment: Zotero.Item | null = null;
-    for (const attachmentID of attachments) {
-      const attachment = await Zotero.Items.getAsync(attachmentID);
-      if (attachment.attachmentContentType === "application/pdf") {
-        pdfAttachment = attachment;
-        break;
-      }
-    }
-
-    if (!pdfAttachment) {
-      throw new Error("No PDF attachment found for this item");
-    }
+    const pdfAttachment = await this.resolvePdfAttachment(
+      item,
+      preferredPdfAttachment,
+    );
 
     const pdfPath = await pdfAttachment.getFilePathAsync();
     if (!pdfPath) {
