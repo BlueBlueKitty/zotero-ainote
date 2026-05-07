@@ -62,7 +62,20 @@ export class OutputWindow {
       },
     };
 
-    this.dialog = new ztoolkit.Dialog(1, 1)
+    const dialog = new ztoolkit.Dialog(1, 1) as any;
+    const originalCreateElement = dialog.createElement?.bind(dialog);
+
+    // `title` 同时属于 HTML/SVG 标签名；toolkit 未指定 namespace 时会产生警告。
+    if (originalCreateElement) {
+      dialog.createElement = (doc: Document, tagName: string, props: any = {}) => {
+        if (tagName === "title" && !props.namespace) {
+          props = { ...props, namespace: "html" };
+        }
+        return originalCreateElement(doc, tagName, props);
+      };
+    }
+
+    this.dialog = dialog
       .addCell(0, 0, {
         tag: "div",
         id: "ainote-output-window",
@@ -1324,11 +1337,33 @@ export class OutputWindow {
   }
 
   /**
+   * 将仅包含 $$...$$ 的段落提升为块级公式容器，帮助 MathJax 稳定识别 display math
+   */
+  private static normalizeDisplayMathBlocks(html: string): string {
+    return html.replace(
+      /<p\b([^>]*)>\s*(\$\$[\s\S]*?\$\$)\s*<\/p>/g,
+      (_match, attrs: string, formula: string) => {
+        let normalizedAttrs = attrs || "";
+        if (/class\s*=/.test(normalizedAttrs)) {
+          normalizedAttrs = normalizedAttrs.replace(
+            /class="([^"]*)"/,
+            (_classMatch, classNames: string) => `class="${classNames} ainote-display-math"`
+          );
+        } else {
+          normalizedAttrs = `${normalizedAttrs} class="ainote-display-math"`;
+        }
+        return `<div${normalizedAttrs}>${formula}</div>`;
+      }
+    );
+  }
+
+  /**
    * 实例方法：将 Markdown 转换为 HTML（调用静态核心方法）
    * @param markdown Markdown 文本
    * @returns 转换后的 HTML（带样式，用于弹出窗口显示）
    */
   public convertMarkdownToHTML(markdown: string): string {
-    return OutputWindow.convertMarkdownToHTMLCore(markdown);
+    const html = OutputWindow.convertMarkdownToHTMLCore(markdown);
+    return OutputWindow.normalizeDisplayMathBlocks(html);
   }
 }

@@ -1,5 +1,10 @@
 /* AiNote Output Window Custom Styles */
 
+.ainote-display-math {
+  margin: 12px 0;
+  overflow-x: auto;
+}
+
 #ainote-stop-button {
   font-size: 16px !important;
   font-weight: 700 !important;
