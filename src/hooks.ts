@@ -7,6 +7,10 @@ import {
   NOTE_FORMAT_ACTIONS,
   NoteFormatActionType,
 } from "./modules/noteFormatter";
+import {
+  installNoteEditorContextMenuForWindow,
+  uninstallNoteEditorContextMenuForWindow,
+} from "./modules/noteEditorContextMenu";
 import { config } from "../package.json";
 import { getPref, setPref } from "./utils/prefs";
 import {
@@ -63,6 +67,7 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
 
   // Register context menu item (using ztoolkit for Zotero 7.0)
   refreshContextMenuItems();
+  installNoteEditorContextMenuForWindow(win);
 
   const popupWin = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
     closeOnClick: true,
@@ -542,6 +547,7 @@ async function handleNoteFormatAction(actionType: NoteFormatActionType) {
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
+  uninstallNoteEditorContextMenuForWindow(win);
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
 }

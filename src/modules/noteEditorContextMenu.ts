@@ -1,0 +1,311 @@
+import { config } from "../../package.json";
+import {
+  clearEditorContextMenuEvent,
+  getActiveNoteEditorContext,
+  getAllLiveEditorInstances,
+  getEditorRoot,
+  recordEditorContextMenuEvent,
+  showSectionActionResult,
+} from "./noteEditorAdapter";
+import {
+  findClosestHeading,
+  NoteSectionActionType,
+  runNoteSectionAction,
+} from "./noteSectionActions";
+
+const LOG_PREFIX = "[AiNote][NoteEditorContextMenu]";
+const CUSTOM_MENU_ID = "ainote-note-section-context-menu";
+const ROOT_MENU_ITEM_ID = "ainote-note-section-context-root";
+const MENU_SEPARATOR_ID = `${ROOT_MENU_ITEM_ID}-separator`;
+const MENU_ICON = `chrome://${config.addonRef}/content/icons/favicon.png`;
+
+interface MenuActionDefinition {
+  id: NoteSectionActionType;
+  label: string;
+}
+
+interface WindowMenuState {
+  observer: MutationObserver | null;
+  scanHandler: () => void;
+}
+
+const MENU_ACTIONS: MenuActionDefinition[] = [
+  { id: "section-upgrade-heading", label: "当前章节标题升级" },
+  { id: "section-downgrade-heading", label: "当前章节标题降级" },
+  { id: "section-increase-number", label: "当前章节序号 +1" },
+  { id: "section-decrease-number", label: "当前章节序号 -1" },
+  { id: "section-delete", label: "删除当前章节" },
+];
+
+const windowStateStore = new WeakMap<Window, WindowMenuState>();
+
+export function installNoteEditorContextMenuForWindow(win: Window) {
+  if (windowStateStore.has(win)) {
+    return;
+  }
+
+  const scanHandler = () => {
+    scanAndBindEditors();
+  };
+
+  const observer = new win.MutationObserver(() => {
+    scanHandler();
+  });
+
+  observer.observe(win.document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
+  win.addEventListener("focus", scanHandler, true);
+  win.addEventListener("mousedown", scanHandler, true);
+
+  windowStateStore.set(win, {
+    observer,
+    scanHandler,
+  });
+
+  scanAndBindEditors();
+}
+
+export function uninstallNoteEditorContextMenuForWindow(win: Window) {
+  const state = windowStateStore.get(win);
+  if (!state) {
+    return;
+  }
+
+  state.observer?.disconnect();
+  win.removeEventListener("focus", state.scanHandler, true);
+  win.removeEventListener("mousedown", state.scanHandler, true);
+  windowStateStore.delete(win);
+}
+
+function scanAndBindEditors() {
+  for (const editorInstance of getAllLiveEditorInstances()) {
+    bindEditorInstance(editorInstance);
+  }
+}
+
+function bindEditorInstance(editorInstance: Zotero.EditorInstance) {
+  if ((editorInstance as any).__ainoteContextMenuBound) {
+    ensureNativePopupBound(editorInstance);
+    return;
+  }
+
+  const editorWindow = editorInstance._iframeWindow;
+  const editorDocument = editorWindow?.document;
+  const editorRoot = getEditorRoot(editorInstance);
+  if (!editorWindow || !editorDocument || !editorRoot) {
+    return;
+  }
+
+  (editorInstance as any).__ainoteContextMenuBound = true;
+  ensureNativePopupBound(editorInstance);
+
+  editorRoot.addEventListener(
+    "contextmenu",
+    (event: MouseEvent) => {
+      const heading = findClosestHeading(event.target as Node | null);
+      if (!heading) {
+        clearEditorContextMenuEvent(editorInstance);
+        hideCustomContextMenu(editorDocument);
+        return;
+      }
+
+      recordEditorContextMenuEvent(editorInstance, event);
+      ensureNativePopupBound(editorInstance);
+      const popup = getNativePopupElement(editorInstance);
+      if (!popup) {
+        event.preventDefault();
+        openCustomContextMenu(editorInstance, event);
+      }
+    },
+    true,
+  );
+
+  editorDocument.addEventListener(
+    "click",
+    () => {
+      hideCustomContextMenu(editorDocument);
+      clearEditorContextMenuEvent(editorInstance);
+    },
+    true,
+  );
+
+  editorDocument.addEventListener(
+    "keydown",
+    () => {
+      hideCustomContextMenu(editorDocument);
+    },
+    true,
+  );
+}
+
+function ensureNativePopupBound(editorInstance: Zotero.EditorInstance) {
+  const popup = getNativePopupElement(editorInstance);
+  if (!popup || (popup as any).__ainoteContextMenuBound) {
+    return;
+  }
+
+  (popup as any).__ainoteContextMenuBound = true;
+  popup.addEventListener("popupshowing", () => {
+    ensureNativePopupMenuItems(editorInstance, popup);
+  });
+  ensureNativePopupMenuItems(editorInstance, popup);
+}
+
+function ensureNativePopupMenuItems(
+  editorInstance: Zotero.EditorInstance,
+  popup: XUL.MenuPopup,
+) {
+  const doc = popup.ownerDocument;
+  if (!doc) {
+    return;
+  }
+
+  let separator = doc.getElementById(MENU_SEPARATOR_ID) as any;
+  if (!separator) {
+    separator = doc.createXULElement("menuseparator") as any;
+    separator.id = MENU_SEPARATOR_ID;
+    popup.appendChild(separator);
+  }
+
+  const hasHeadingContext = !!getHeadingContext(editorInstance);
+  separator.hidden = !hasHeadingContext;
+
+  for (const action of MENU_ACTIONS) {
+    let menuitem = doc.getElementById(
+      `${ROOT_MENU_ITEM_ID}-${action.id}`,
+    ) as any;
+    if (!menuitem) {
+      menuitem = doc.createXULElement("menuitem") as any;
+      menuitem.id = `${ROOT_MENU_ITEM_ID}-${action.id}`;
+      menuitem.setAttribute("label", action.label);
+      menuitem.setAttribute("class", "menuitem-iconic");
+      menuitem.setAttribute("image", MENU_ICON);
+      menuitem.addEventListener("command", () => {
+        void executeSectionAction(editorInstance, action.id);
+      });
+      popup.appendChild(menuitem);
+    }
+    menuitem.hidden = !hasHeadingContext;
+  }
+}
+
+function openCustomContextMenu(
+  editorInstance: Zotero.EditorInstance,
+  event: MouseEvent,
+) {
+  const editorDocument = editorInstance._iframeWindow?.document;
+  if (!editorDocument || !getHeadingContext(editorInstance)) {
+    return;
+  }
+
+  hideCustomContextMenu(editorDocument);
+
+  const container = editorDocument.createElement("div");
+  container.id = CUSTOM_MENU_ID;
+  container.setAttribute("role", "menu");
+  container.style.position = "fixed";
+  container.style.left = `${event.clientX}px`;
+  container.style.top = `${event.clientY}px`;
+  container.style.zIndex = "2147483647";
+  container.style.minWidth = "210px";
+  container.style.padding = "6px 0";
+  container.style.background = "#ffffff";
+  container.style.border = "1px solid rgba(0, 0, 0, 0.18)";
+  container.style.borderRadius = "6px";
+  container.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.18)";
+  container.style.fontSize = "13px";
+
+  for (const action of MENU_ACTIONS) {
+    const button = editorDocument.createElement("button");
+    button.type = "button";
+    button.style.display = "flex";
+    button.style.alignItems = "center";
+    button.style.gap = "8px";
+    button.style.width = "100%";
+    button.style.padding = "8px 14px";
+    button.style.border = "none";
+    button.style.background = "transparent";
+    button.style.textAlign = "left";
+    button.style.cursor = "pointer";
+
+    const icon = editorDocument.createElement("img");
+    icon.src = MENU_ICON;
+    icon.width = 16;
+    icon.height = 16;
+
+    const label = editorDocument.createElement("span");
+    label.textContent = action.label;
+
+    button.appendChild(icon);
+    button.appendChild(label);
+    button.addEventListener("mouseenter", () => {
+      button.style.background = "rgba(0, 0, 0, 0.06)";
+    });
+    button.addEventListener("mouseleave", () => {
+      button.style.background = "transparent";
+    });
+    button.addEventListener("click", () => {
+      hideCustomContextMenu(editorDocument);
+      void executeSectionAction(editorInstance, action.id);
+    });
+    container.appendChild(button);
+  }
+
+  const mountTarget = editorDocument.body || editorDocument.documentElement;
+  if (!mountTarget) {
+    return;
+  }
+  mountTarget.appendChild(container);
+}
+
+function hideCustomContextMenu(editorDocument: Document) {
+  editorDocument.getElementById(CUSTOM_MENU_ID)?.remove();
+}
+
+async function executeSectionAction(
+  editorInstance: Zotero.EditorInstance,
+  action: NoteSectionActionType,
+) {
+  try {
+    const context = getActiveNoteEditorContext(editorInstance);
+    if (!context) {
+      showSectionActionResult("未找到当前正在编辑的笔记", "error");
+      return;
+    }
+    if (!findClosestHeading(context.lastContextMenuEvent?.target as Node | null)) {
+      showSectionActionResult("请先将光标放在一个标题中。", "warning");
+      return;
+    }
+    await runNoteSectionAction(action, context);
+  } catch (error: any) {
+    ztoolkit.log(`${LOG_PREFIX} 执行章节操作失败`, error);
+    showSectionActionResult(
+      `执行章节操作失败：${error?.message || "未知错误"}`,
+      "error",
+    );
+  }
+}
+
+function getHeadingContext(editorInstance: Zotero.EditorInstance): HTMLElement | null {
+  const context = getActiveNoteEditorContext(editorInstance);
+  return findClosestHeading(context?.lastContextMenuEvent?.target as Node | null);
+}
+
+function getNativePopupElement(
+  editorInstance: Zotero.EditorInstance,
+): XUL.MenuPopup | null {
+  const popup = editorInstance?._popup;
+  if (!popup) {
+    return null;
+  }
+  if (popup.tagName === "menupopup") {
+    return popup as XUL.MenuPopup;
+  }
+  if (typeof popup.querySelector === "function") {
+    return popup.querySelector("menupopup") as XUL.MenuPopup | null;
+  }
+  return null;
+}
