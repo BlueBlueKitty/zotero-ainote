@@ -1205,9 +1205,6 @@ function bindGlobalEvents(win: Window) {
   const activeSelect = doc.getElementById(
     "ainote-active-profile",
   ) as HTMLSelectElement | null;
-  const truncateInput = doc.getElementById(
-    "zotero-prefpane-ainote-truncateLength",
-  ) as HTMLInputElement | null;
   const promptTextarea = doc.getElementById(
     "zotero-prefpane-ainote-summaryPrompt",
   ) as HTMLTextAreaElement | null;
@@ -1225,14 +1222,6 @@ function bindGlobalEvents(win: Window) {
     };
     activeSelect.addEventListener("change", syncActive);
     activeSelect.addEventListener("command", syncActive as EventListener);
-  }
-
-  if (truncateInput) {
-    truncateInput.value = String(getPref("truncateLength") || "10");
-    const save = () =>
-      setPref("truncateLength" as any, truncateInput.value || "10");
-    truncateInput.addEventListener("input", save);
-    truncateInput.addEventListener("change", save);
   }
 
   if (promptTextarea) {
