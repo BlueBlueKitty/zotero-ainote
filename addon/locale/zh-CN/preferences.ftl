@@ -1,4 +1,5 @@
 ainote-prefs-heading = AiNote 设置
+ainote-prefs-modelSection = 模型配置
 ainote-prefs-apiKey = API Key：
 ainote-prefs-apiUrl = API URL：
 ainote-prefs-model = 模型：
@@ -7,6 +8,8 @@ ainote-prefs-stream = 流式输出：
 ainote-prefs-stream-hint = 开启后逐步输出；关闭则一次性输出。
 ainote-prefs-truncateLength = 截断字符数（万）：
 ainote-prefs-truncateLength-hint = 超过此字符数的文本将被截断（默认：10 万）
-ainote-prefs-summaryPrompt = 总结提示模板：
+ainote-prefs-summaryPrompt = 提示词模板配置
+ainote-prefs-currentPromptTemplate = 当前模板：
+ainote-prefs-addPromptTemplate = 新增模板
 ainote-prefs-resetPrompt = 恢复默认 Prompt
 ainote-prefs-apiUrl-example = API URL 示例（OpenAI 兼容）：https://api.openai.com/v1/chat/completions

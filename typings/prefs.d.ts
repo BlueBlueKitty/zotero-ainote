@@ -12,6 +12,9 @@ declare namespace _ZoteroTypes {
       "migratedToProfilesV3": boolean;
       "summaryPrompt": string;
       "promptVersion": number;
+      "promptTemplates": string;
+      "activePromptTemplateId": string;
+      "promptTemplatesVersion": number;
       "truncateLength": string;
     };
   }

@@ -3,11 +3,14 @@
 /* eslint-disable */
 // @ts-nocheck
 export type FluentMessageId =
+  | 'ainote-prefs-addPromptTemplate'
   | 'ainote-prefs-apiKey'
   | 'ainote-prefs-apiUrl'
   | 'ainote-prefs-apiUrl-example'
+  | 'ainote-prefs-currentPromptTemplate'
   | 'ainote-prefs-heading'
   | 'ainote-prefs-model'
+  | 'ainote-prefs-modelSection'
   | 'ainote-prefs-resetPrompt'
   | 'ainote-prefs-stream'
   | 'ainote-prefs-stream-hint'

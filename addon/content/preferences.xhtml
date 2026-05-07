@@ -9,26 +9,31 @@
   <label><html:h2 data-l10n-id="ainote-prefs-heading"></html:h2></label>
 
   <separator class="thin" />
-  <html:h3>大模型配置</html:h3>
+  <vbox>
+    <html:button id="ainote-toggle-profiles-section" type="button" data-l10n-id="ainote-prefs-modelSection" style="width: 100%; text-align: left;"></html:button>
+    <vbox id="ainote-profiles-section" style="width: 100%; margin-top: 8px;">
+      <hbox align="center">
+        <label value="当前配置：" />
+        <html:select id="ainote-active-profile" style="flex: 1; width: 420px;"></html:select>
+        <html:button id="ainote-add-profile" type="button" style="margin-left: 8px;">新增配置</html:button>
+      </hbox>
 
-  <hbox align="center">
-    <label value="当前配置：" />
-    <html:select id="ainote-active-profile" style="flex: 1; width: 420px;"></html:select>
-    <html:button id="ainote-add-profile" type="button" style="margin-left: 8px;">新增配置</html:button>
-  </hbox>
-
-  <vbox id="ainote-profiles-list" style="width: 100%; margin-top: 8px;"></vbox>
+      <vbox id="ainote-profiles-list" style="width: 100%; margin-top: 8px;"></vbox>
+    </vbox>
+  </vbox>
 
   <separator class="thin" />
 
   <vbox>
-    <label data-l10n-id="ainote-prefs-summaryPrompt" />
-    <html:textarea
-      id="zotero-prefpane-__addonRef__-summaryPrompt"
-      preference="__prefsPrefix__.summaryPrompt"
-      rows="8"
-      style="width: 100%; font-family: monospace;"
-    />
+    <html:button id="ainote-toggle-prompt-templates-section" type="button" style="width: 100%; text-align: left;" data-l10n-id="ainote-prefs-summaryPrompt"></html:button>
+    <vbox id="ainote-prompt-templates-section" style="width: 100%; margin-top: 8px;">
+      <hbox align="center">
+        <label data-l10n-id="ainote-prefs-currentPromptTemplate" />
+        <html:select id="ainote-active-prompt-template" style="flex: 1; width: 420px;"></html:select>
+        <html:button id="ainote-add-prompt-template" type="button" data-l10n-id="ainote-prefs-addPromptTemplate" style="margin-left: 8px;"></html:button>
+      </hbox>
+      <vbox id="ainote-prompt-templates-list" style="width: 100%; margin-top: 8px;"></vbox>
+    </vbox>
   </vbox>
 </groupbox>
 </vbox>

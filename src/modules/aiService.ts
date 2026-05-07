@@ -1,6 +1,6 @@
 import { getPref } from "../utils/prefs";
 import {
-  getDefaultSummaryPrompt,
+  getActivePromptTemplate,
   SYSTEM_ROLE_PROMPT,
   buildUserMessage,
 } from "../utils/prompts";
@@ -1044,16 +1044,20 @@ export class AIService {
   static async generateSummary(
     content: string,
     contentMode: "text" | "pdf-base64" = "text",
-    prompt?: string,
+    promptContent?: string,
     onProgress?: ProgressCb,
     cancelSignal?: CancelSignal,
   ): Promise<string> {
-    const savedPrompt = getPref("summaryPrompt") as string;
-    const summaryPrompt =
-      prompt ||
-      (savedPrompt && savedPrompt.trim()
-        ? savedPrompt
-        : getDefaultSummaryPrompt());
+    const activeTemplate = getActivePromptTemplate(
+      getPref("promptTemplates" as any),
+      getPref("activePromptTemplateId" as any),
+      getPref("promptTemplatesVersion" as any),
+    );
+    const summaryPrompt = String(
+      promptContent && promptContent.trim()
+        ? promptContent
+        : activeTemplate.content,
+    ).trim();
 
     const profile = getActiveProfile();
 

@@ -1,4 +1,5 @@
 ainote-prefs-heading = AiNote Preferences
+ainote-prefs-modelSection = Model Settings
 ainote-prefs-apiKey = API Key:
 ainote-prefs-apiUrl = API URL:
 ainote-prefs-model = Model:
@@ -7,6 +8,8 @@ ainote-prefs-stream = Streaming Output:
 ainote-prefs-stream-hint = If enabled, output incrementally; otherwise, output once when complete.
 ainote-prefs-truncateLength = Truncate Length (10k chars):
 ainote-prefs-truncateLength-hint = Text exceeding this character count will be truncated (default: 10)
-ainote-prefs-summaryPrompt = Summary Prompt Template:
+ainote-prefs-summaryPrompt = Prompt Template Settings
+ainote-prefs-currentPromptTemplate = Current Template:
+ainote-prefs-addPromptTemplate = Add Template
 ainote-prefs-resetPrompt = Restore Default Prompt
 ainote-prefs-apiUrl-example = API URL example (OpenAI-compatible): https://api.openai.com/v1/chat/completions

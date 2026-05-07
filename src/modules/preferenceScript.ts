@@ -1,8 +1,15 @@
 import { getPref, setPref, clearPref } from "../utils/prefs";
 import {
-  getDefaultSummaryPrompt,
-  PROMPT_VERSION,
-  shouldUpdatePrompt,
+  createDefaultPromptTemplates,
+  createPromptTemplateCopy,
+  createPromptTemplateId,
+  ensurePromptTemplateState,
+  findPromptTemplateById,
+  getDefaultActivePromptTemplateId,
+  isPromptTemplateNameUnique,
+  PROMPT_TEMPLATES_VERSION,
+  PromptTemplate,
+  serializePromptTemplates,
 } from "../utils/prompts";
 import AIService, { LLMModelInfo } from "./aiService";
 import {
@@ -139,6 +146,38 @@ function ensureThemeStyles(doc: Document) {
         --ainote-input-bg: #202329;
       }
     }
+
+    .ainote-section-toggle {
+      width: 100%;
+      border: 1px solid var(--ainote-border);
+      border-radius: 10px;
+      background: var(--ainote-surface-2);
+      color: var(--ainote-text);
+      padding: 10px 12px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .ainote-section-toggle:hover {
+      background: var(--ainote-accent-soft);
+    }
+
+    .ainote-section-toggle-label {
+      pointer-events: none;
+    }
+
+    .ainote-section-toggle-arrow {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
   `;
   const host = doc.head || doc.documentElement;
   if (host) {
@@ -149,8 +188,21 @@ function ensureThemeStyles(doc: Document) {
 export async function registerPrefsScripts(win: Window) {
   try {
     ensureThemeStyles(win.document);
+    bindCollapsibleSection(
+      win.document,
+      "ainote-toggle-profiles-section",
+      "ainote-profiles-section",
+      false,
+    );
+    bindCollapsibleSection(
+      win.document,
+      "ainote-toggle-prompt-templates-section",
+      "ainote-prompt-templates-section",
+      false,
+    );
     if ((win as any).__ainotePrefsInitialized) {
       renderProfilesUI(win);
+      renderPromptTemplatesUI(win);
       return;
     }
     (win as any).__ainotePrefsInitialized = true;
@@ -161,6 +213,7 @@ export async function registerPrefsScripts(win: Window) {
     );
     initializeDefaultPrefs();
     renderProfilesUI(win);
+    renderPromptTemplatesUI(win);
     bindGlobalEvents(win);
   } catch (error) {
     console.error("[AiNote][Prefs] Error in registerPrefsScripts:", error);
@@ -173,25 +226,16 @@ function initializeDefaultPrefs() {
     activeProfileId: "",
     migratedToProfilesV3: false,
     truncateLength: "10",
-    summaryPrompt: getDefaultSummaryPrompt(),
-    promptVersion: PROMPT_VERSION,
+    summaryPrompt: "",
+    promptVersion: 0,
+    promptTemplates: serializePromptTemplates(createDefaultPromptTemplates()),
+    activePromptTemplateId: getDefaultActivePromptTemplateId(),
+    promptTemplatesVersion: PROMPT_TEMPLATES_VERSION,
   };
 
   for (const [key, defaultValue] of Object.entries(defaults)) {
     try {
       const currentValue = getPref(key as any);
-      if (key === "summaryPrompt") {
-        const currentPromptVersion = getPref("promptVersion" as any) as
-          | number
-          | undefined;
-        const currentPrompt = currentValue as string | undefined;
-        if (shouldUpdatePrompt(currentPromptVersion, currentPrompt)) {
-          setPref("summaryPrompt" as any, defaultValue);
-          setPref("promptVersion" as any, PROMPT_VERSION);
-          continue;
-        }
-      }
-
       if (currentValue === undefined || currentValue === null) {
         setPref(key as any, defaultValue);
       }
@@ -209,6 +253,26 @@ function initializeDefaultPrefs() {
   } else if (!activeId || !profiles.some((p) => p.id === activeId)) {
     setPref("activeProfileId" as any, profiles[0].id);
   }
+
+  const promptTemplateState = ensurePromptTemplateState(
+    getPref("promptTemplates" as any),
+    getPref("activePromptTemplateId" as any),
+    getPref("promptTemplatesVersion" as any),
+  );
+  if (promptTemplateState.changed) {
+    setPref(
+      "promptTemplates" as any,
+      serializePromptTemplates(promptTemplateState.templates),
+    );
+    setPref(
+      "activePromptTemplateId" as any,
+      promptTemplateState.activeTemplateId,
+    );
+    setPref(
+      "promptTemplatesVersion" as any,
+      promptTemplateState.version,
+    );
+  }
 }
 
 function getProfiles(): ProviderProfile[] {
@@ -217,6 +281,40 @@ function getProfiles(): ProviderProfile[] {
 
 function saveProfiles(profiles: ProviderProfile[]) {
   setPref("profiles" as any, JSON.stringify(profiles.map(normalizeProfile)));
+}
+
+function getPromptTemplateState() {
+  return ensurePromptTemplateState(
+    getPref("promptTemplates" as any),
+    getPref("activePromptTemplateId" as any),
+    getPref("promptTemplatesVersion" as any),
+  );
+}
+
+function savePromptTemplateState(
+  templates: PromptTemplate[],
+  activeTemplateId: string,
+) {
+  const state = ensurePromptTemplateState(
+    serializePromptTemplates(templates),
+    activeTemplateId,
+    PROMPT_TEMPLATES_VERSION,
+  );
+  setPref("promptTemplates" as any, serializePromptTemplates(state.templates));
+  setPref("activePromptTemplateId" as any, state.activeTemplateId);
+  setPref("promptTemplatesVersion" as any, state.version);
+}
+
+function getPromptTemplates(): PromptTemplate[] {
+  return getPromptTemplateState().templates;
+}
+
+function getCurrentPromptTemplateId(): string {
+  return getPromptTemplateState().activeTemplateId;
+}
+
+function setCurrentPromptTemplate(templateId: string) {
+  setPref("activePromptTemplateId" as any, templateId);
 }
 
 function setCurrentProfile(profileId: string) {
@@ -368,6 +466,128 @@ function openAddProfileDialog(win: Window) {
   nameInput.focus();
 }
 
+function openAddPromptTemplateDialog(win: Window) {
+  const doc = win.document;
+  ensureThemeStyles(doc);
+  const mountTarget =
+    (doc.getElementById("zotero-prefpane-__addonRef__") as HTMLElement | null) ||
+    (doc.documentElement as HTMLElement | null) ||
+    doc.body;
+  if (!mountTarget) return;
+
+  const templates = getPromptTemplates();
+  const overlay = createHtmlElement(doc, "div");
+  Object.assign(overlay.style, {
+    position: "fixed",
+    inset: "0",
+    background: "var(--ainote-overlay)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "24px",
+    boxSizing: "border-box",
+    zIndex: "9999",
+  });
+
+  const dialog = createHtmlElement(doc, "div");
+  Object.assign(dialog.style, {
+    width: "560px",
+    maxWidth: "calc(100% - 32px)",
+    background: "var(--ainote-surface)",
+    color: "var(--ainote-text)",
+    border: "1px solid var(--ainote-border)",
+    borderRadius: "12px",
+    boxShadow: "0 20px 48px rgba(0, 0, 0, 0.28)",
+    padding: "18px",
+    boxSizing: "border-box",
+  });
+
+  const title = createHtmlElement(doc, "h3");
+  title.textContent = "新增模板";
+  Object.assign(title.style, {
+    margin: "0 0 14px 0",
+    fontSize: "18px",
+  });
+  dialog.appendChild(title);
+
+  const sub = createHtmlElement(doc, "div");
+  sub.textContent = "先创建模板名称，创建成功后再在下方配置区填写模板说明和模板内容。";
+  Object.assign(sub.style, {
+    color: "var(--ainote-text-muted)",
+    fontSize: "12px",
+    lineHeight: "1.5",
+    marginBottom: "16px",
+  });
+  dialog.appendChild(sub);
+
+  const nameField = createLabeledField(doc, "模板名称");
+  const nameInput = createHtmlElement(doc, "input");
+  nameInput.type = "text";
+  nameInput.value = `自定义模板 ${templates.length + 1}`;
+  styleTextInput(nameInput);
+  nameField.field.appendChild(nameInput);
+  dialog.appendChild(nameField.row);
+
+  const error = createHtmlElement(doc, "div");
+  Object.assign(error.style, {
+    color: "var(--ainote-danger)",
+    fontSize: "12px",
+    minHeight: "18px",
+    marginTop: "8px",
+  });
+  dialog.appendChild(error);
+
+  const actions = createHtmlElement(doc, "div");
+  Object.assign(actions.style, {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: "8px",
+    marginTop: "8px",
+  });
+
+  const cancelBtn = createActionButton(doc, "取消", false);
+  const createBtn = createActionButton(doc, "创建", true);
+
+  const close = () => overlay.remove();
+  bindButtonAction(cancelBtn, close);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) close();
+  });
+  bindButtonAction(createBtn, () => {
+    const name = nameInput.value.trim();
+    const latestTemplates = getPromptTemplates();
+    if (!name) {
+      error.textContent = "模板名称不能为空";
+      return;
+    }
+    if (!isPromptTemplateNameUnique(latestTemplates, name)) {
+      error.textContent = "模板名称已存在，请使用其他名称";
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    const template: PromptTemplate = {
+      id: createPromptTemplateId(),
+      name,
+      description: "",
+      content: "",
+      builtIn: false,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    savePromptTemplateState([...latestTemplates, template], template.id);
+    close();
+    renderPromptTemplatesUI(win);
+  });
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(createBtn);
+  dialog.appendChild(actions);
+  overlay.appendChild(dialog);
+  mountTarget.appendChild(overlay);
+  nameInput.focus();
+}
+
 function renderProfilesUI(win: Window) {
   const doc = win.document;
   const list = doc.getElementById("ainote-profiles-list");
@@ -397,6 +617,188 @@ function renderProfilesUI(win: Window) {
   if (activeProfile) {
     list.appendChild(renderProfileCard(doc, activeProfile, true, win));
   }
+}
+
+function renderPromptTemplatesUI(win: Window) {
+  const doc = win.document;
+  const list = doc.getElementById("ainote-prompt-templates-list");
+  const select = doc.getElementById(
+    "ainote-active-prompt-template",
+  ) as HTMLSelectElement | null;
+
+  if (!list || !select) return;
+
+  const templates = getPromptTemplates();
+  const activeId = getCurrentPromptTemplateId();
+  const activeTemplate =
+    findPromptTemplateById(templates, activeId) || templates[0] || null;
+
+  select.innerHTML = "";
+  templates.forEach((template) => {
+    const option = createHtmlElement(doc, "option");
+    option.value = template.id;
+    option.textContent = `${template.name}${template.builtIn ? " [默认]" : ""}`;
+    option.selected = template.id === activeTemplate?.id;
+    select.appendChild(option);
+  });
+
+  list.innerHTML = "";
+  if (activeTemplate) {
+    list.appendChild(renderPromptTemplateCard(doc, activeTemplate, win));
+  }
+}
+
+function renderPromptTemplateCard(
+  doc: Document,
+  template: PromptTemplate,
+  win: Window,
+): HTMLElement {
+  const card = createHtmlElement(doc, "div");
+  Object.assign(card.style, {
+    border: template.builtIn
+      ? "1px solid var(--ainote-accent)"
+      : "1px solid var(--ainote-border)",
+    background: template.builtIn
+      ? "var(--ainote-accent-soft)"
+      : "var(--ainote-surface)",
+    borderRadius: "10px",
+    padding: "12px",
+    margin: "10px 0",
+    boxSizing: "border-box",
+  });
+
+  const title = createHtmlElement(doc, "div");
+  title.textContent = `${template.name}${template.builtIn ? "（默认模板）" : ""}`;
+  Object.assign(title.style, {
+    fontWeight: "700",
+    color: "var(--ainote-text)",
+    marginBottom: "10px",
+  });
+  card.appendChild(title);
+
+  const nameRow = createLabeledField(doc, "模板名称");
+  const nameInput = createHtmlElement(doc, "input");
+  nameInput.type = "text";
+  nameInput.value = template.name;
+  styleTextInput(nameInput);
+  nameRow.field.appendChild(nameInput);
+  card.appendChild(nameRow.row);
+
+  const descriptionRow = createLabeledField(doc, "模板说明");
+  const descriptionInput = createHtmlElement(doc, "textarea");
+  styleTextArea(descriptionInput);
+  descriptionInput.rows = 3;
+  descriptionInput.value = template.description || "";
+  descriptionRow.field.appendChild(descriptionInput);
+  card.appendChild(descriptionRow.row);
+  appendHelperText(
+    doc,
+    card,
+    "模板说明可留空，仅用于设置页中帮助区分模板用途。",
+  );
+
+  const contentRow = createLabeledField(doc, "模板内容");
+  const contentInput = createHtmlElement(doc, "textarea");
+  styleTextArea(contentInput);
+  contentInput.rows = 14;
+  contentInput.value = template.content;
+  contentRow.field.appendChild(contentInput);
+  card.appendChild(contentRow.row);
+  appendHelperText(
+    doc,
+    card,
+    "AI 请求时只会把这里的模板内容发送给模型；模板名称和说明不会进入提示词。",
+  );
+
+  const status = createHtmlElement(doc, "div");
+  Object.assign(status.style, {
+    marginTop: "8px",
+    minHeight: "18px",
+    fontSize: "12px",
+    color: "var(--ainote-text-muted)",
+  });
+  card.appendChild(status);
+
+  const actions = createHtmlElement(doc, "div");
+  Object.assign(actions.style, {
+    display: "flex",
+    gap: "8px",
+    marginTop: "12px",
+    flexWrap: "wrap",
+  });
+
+  const saveBtn = createActionButton(doc, "保存", true);
+  bindButtonAction(saveBtn, () => {
+    const name = nameInput.value.trim();
+    const description = descriptionInput.value.trim();
+    const content = contentInput.value.trim();
+    const templates = getPromptTemplates();
+    if (!name) {
+      status.textContent = "模板名称不能为空";
+      status.style.color = "var(--ainote-danger)";
+      return;
+    }
+    if (!content) {
+      status.textContent = "模板内容不能为空";
+      status.style.color = "var(--ainote-danger)";
+      return;
+    }
+    if (!isPromptTemplateNameUnique(templates, name, template.id)) {
+      status.textContent = "模板名称已存在，请使用其他名称";
+      status.style.color = "var(--ainote-danger)";
+      return;
+    }
+
+    const nextTemplates = templates.map((item) =>
+      item.id === template.id
+        ? {
+            ...item,
+            name,
+            description,
+            content,
+            updatedAt: new Date().toISOString(),
+          }
+        : item,
+    );
+    savePromptTemplateState(nextTemplates, template.id);
+    status.textContent = "模板已保存";
+    status.style.color = "var(--ainote-success)";
+    renderPromptTemplatesUI(win);
+  });
+  actions.appendChild(saveBtn);
+
+  const cloneBtn = createActionButton(doc, "复制为新模板", false);
+  bindButtonAction(cloneBtn, () => {
+    const templates = getPromptTemplates();
+    const latest =
+      findPromptTemplateById(templates, template.id) || template;
+    const clone = createPromptTemplateCopy(latest, templates);
+    savePromptTemplateState([...templates, clone], clone.id);
+    renderPromptTemplatesUI(win);
+  });
+  actions.appendChild(cloneBtn);
+
+  const deleteBtn = createActionButton(doc, "删除模板", false, true);
+  deleteBtn.disabled = template.builtIn;
+  if (template.builtIn) {
+    deleteBtn.style.opacity = "0.6";
+    deleteBtn.style.cursor = "not-allowed";
+  } else {
+    bindButtonAction(deleteBtn, () => {
+      const templates = getPromptTemplates();
+      const nextTemplates = templates.filter((item) => item.id !== template.id);
+      const fallbackActiveId =
+        nextTemplates.find((item) => item.builtIn)?.id ||
+        nextTemplates[0]?.id ||
+        getDefaultActivePromptTemplateId();
+      savePromptTemplateState(nextTemplates, fallbackActiveId);
+      renderPromptTemplatesUI(win);
+    });
+  }
+  actions.appendChild(deleteBtn);
+
+  card.appendChild(actions);
+  return card;
 }
 
 function renderProfileCard(
@@ -1218,15 +1620,91 @@ function styleTextInput(element: HTMLInputElement | HTMLSelectElement) {
   });
 }
 
+function styleTextArea(element: HTMLTextAreaElement) {
+  Object.assign(element.style, {
+    width: "100%",
+    boxSizing: "border-box",
+    minHeight: "90px",
+    padding: "8px 10px",
+    borderRadius: "8px",
+    border: "1px solid var(--ainote-border)",
+    background: "var(--ainote-input-bg)",
+    color: "var(--ainote-text)",
+    resize: "vertical",
+    fontFamily: "Consolas, Monaco, monospace",
+    lineHeight: "1.6",
+    userSelect: "text",
+    webkitUserSelect: "text",
+    MozUserSelect: "text",
+  });
+}
+
+function createLabeledField(doc: Document, labelText: string) {
+  const row = createHtmlElement(doc, "div");
+  Object.assign(row.style, {
+    marginTop: "8px",
+  });
+
+  const label = createHtmlElement(doc, "label");
+  label.textContent = labelText;
+  Object.assign(label.style, {
+    display: "block",
+    marginBottom: "6px",
+    color: "var(--ainote-text)",
+  });
+  row.appendChild(label);
+
+  const field = createHtmlElement(doc, "div");
+  row.appendChild(field);
+
+  return { row, field };
+}
+
+function setSectionCollapsed(
+  toggle: HTMLElement | null,
+  section: HTMLElement | null,
+  collapsed: boolean,
+) {
+  if (!toggle || !section) return;
+  const baseLabel =
+    toggle.getAttribute("data-section-label") ||
+    toggle.textContent?.replace(/^[▾▸]\s*/, "") ||
+    "";
+  toggle.setAttribute("data-section-label", baseLabel);
+  toggle.innerHTML = `<span class="ainote-section-toggle-arrow">${collapsed ? "▸" : "▾"}</span><span class="ainote-section-toggle-label">${baseLabel}</span>`;
+  section.style.display = collapsed ? "none" : "";
+  toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+}
+
+function bindCollapsibleSection(
+  doc: Document,
+  toggleId: string,
+  sectionId: string,
+  defaultCollapsed = false,
+) {
+  const toggle = doc.getElementById(toggleId) as HTMLElement | null;
+  const section = doc.getElementById(sectionId) as HTMLElement | null;
+  if (!toggle || !section) return;
+  toggle.classList.add("ainote-section-toggle");
+  setSectionCollapsed(toggle, section, defaultCollapsed);
+  bindButtonAction(toggle, () => {
+    const isExpanded = toggle.getAttribute("aria-expanded") === "true";
+    setSectionCollapsed(toggle, section, isExpanded);
+  });
+}
+
 function bindGlobalEvents(win: Window) {
   const doc = win.document;
   const addBtn = doc.getElementById("ainote-add-profile") as HTMLElement | null;
   const activeSelect = doc.getElementById(
     "ainote-active-profile",
   ) as HTMLSelectElement | null;
-  const promptTextarea = doc.getElementById(
-    "zotero-prefpane-ainote-summaryPrompt",
-  ) as HTMLTextAreaElement | null;
+  const addTemplateBtn = doc.getElementById(
+    "ainote-add-prompt-template",
+  ) as HTMLElement | null;
+  const activeTemplateSelect = doc.getElementById(
+    "ainote-active-prompt-template",
+  ) as HTMLSelectElement | null;
 
   if (addBtn) {
     bindButtonAction(addBtn, () => {
@@ -1243,18 +1721,21 @@ function bindGlobalEvents(win: Window) {
     activeSelect.addEventListener("command", syncActive as EventListener);
   }
 
-  if (promptTextarea) {
-    const savedPrompt = (getPref("summaryPrompt") as string) || "";
-    const finalPrompt = savedPrompt.trim()
-      ? savedPrompt
-      : getDefaultSummaryPrompt();
-    promptTextarea.value = finalPrompt;
-    const save = () =>
-      setPref(
-        "summaryPrompt" as any,
-        promptTextarea.value || getDefaultSummaryPrompt(),
-      );
-    promptTextarea.addEventListener("input", save);
-    promptTextarea.addEventListener("change", save);
+  if (addTemplateBtn) {
+    bindButtonAction(addTemplateBtn, () => {
+      openAddPromptTemplateDialog(win);
+    });
+  }
+
+  if (activeTemplateSelect) {
+    const syncActiveTemplate = () => {
+      setCurrentPromptTemplate(activeTemplateSelect.value || "");
+      renderPromptTemplatesUI(win);
+    };
+    activeTemplateSelect.addEventListener("change", syncActiveTemplate);
+    activeTemplateSelect.addEventListener(
+      "command",
+      syncActiveTemplate as EventListener,
+    );
   }
 }

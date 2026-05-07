@@ -4,6 +4,12 @@ import AIService, { AIRequestCanceledError, CancelSignal } from "./aiService";
 import { OutputWindow } from "./outputWindow";
 import { getPref } from "../utils/prefs";
 import { parseProfiles, ProviderType } from "./llmProfiles";
+import {
+  buildSummaryHeading,
+  ensureSummaryHeading,
+  getActivePromptTemplate,
+  stripLeadingSummaryHeading,
+} from "../utils/prompts";
 
 const PROVIDER_LABELS: Record<ProviderType, string> = {
   openai: "OpenAI（Responses 新接口）",
@@ -82,11 +88,18 @@ export class NoteGenerator {
         throw new Error("请先在设置中创建并激活模型配置");
       }
       const modelLabel = this.getModelLabel(activeProfile);
+      const promptTemplate = getActivePromptTemplate(
+        getPref("promptTemplates" as any),
+        getPref("activePromptTemplateId" as any),
+        getPref("promptTemplatesVersion" as any),
+      );
+      const summaryHeading = buildSummaryHeading(promptTemplate.name, itemTitle);
 
       // 如果有输出窗口，先开始显示这个条目，后续提示和内容都写入当前条目区域
       if (outputWindow) {
         await outputWindow.startItem(itemTitle, modelLabel);
         outputWindow.setOnStopCurrent(cancelCurrentItem);
+        outputWindow.appendContent(`${summaryHeading}\n\n`);
       }
 
       let requestContent = "";
@@ -163,12 +176,14 @@ export class NoteGenerator {
         cancelSignal,
       );
 
-      fullContent = summary; // 确保使用完整内容
+      fullContent = ensureSummaryHeading(summary, summaryHeading);
 
       // 某些 PDF/Base64 请求会直接返回完整结果而不触发增量分片。
       // 这时需要把最终结果补写到输出窗口，否则窗口会显示“完成”但正文为空。
       if (outputWindow && !receivedStreamChunk && summary) {
-        outputWindow.appendContent(summary);
+        outputWindow.appendContent(
+          stripLeadingSummaryHeading(fullContent, summaryHeading),
+        );
       }
 
       ensureNotCanceled();
@@ -176,7 +191,7 @@ export class NoteGenerator {
       progressCallback?.("正在创建笔记...", 80);
 
       // 创建笔记并保存内容
-      const noteContent = this.formatNoteContent(itemTitle, modelLabel, fullContent);
+      const noteContent = this.formatNoteContent(summaryHeading, modelLabel, fullContent);
       note = await this.createNote(item, noteContent);
 
       // 如果有输出窗口，标记完成
@@ -218,13 +233,15 @@ export class NoteGenerator {
    * @returns Formatted HTML content
    */
   private static formatNoteContent(
-    itemTitle: string,
+    summaryHeading: string,
     modelLabel: string,
     summary: string
   ): string {
+    const normalizedSummary = ensureSummaryHeading(summary, summaryHeading);
+    const noteBody = stripLeadingSummaryHeading(normalizedSummary, summaryHeading);
     // 转换为笔记格式
-    const htmlContent = this.convertMarkdownToNoteHTML(summary);
-    return `<h2>AI 总结 - ${this.escapeHtml(itemTitle)}</h2>
+    const htmlContent = this.convertMarkdownToNoteHTML(noteBody);
+    return `<h2>${this.escapeHtml(summaryHeading)}</h2>
 <p><strong>模型：</strong>${this.escapeHtml(modelLabel)}</p>
 <div>${htmlContent}</div>`;
   }

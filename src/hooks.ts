@@ -4,7 +4,13 @@ import { createZToolkit } from "./utils/ztoolkit";
 import { NoteGenerator } from "./modules/noteGenerator";
 import { config } from "../package.json";
 import { getPref, setPref } from "./utils/prefs";
-import { getDefaultSummaryPrompt, PROMPT_VERSION, shouldUpdatePrompt } from "./utils/prompts";
+import {
+  createDefaultPromptTemplates,
+  ensurePromptTemplateState,
+  getDefaultActivePromptTemplateId,
+  PROMPT_TEMPLATES_VERSION,
+  serializePromptTemplates,
+} from "./utils/prompts";
 import { createProfile, migrateToProfilesV3, parseProfiles } from "./modules/llmProfiles";
 
 async function onStartup() {
@@ -83,8 +89,11 @@ function initializeDefaultPrefsOnStartup() {
     activeProfileId: "",
     migratedToProfilesV3: false,
     truncateLength: "10",
-    summaryPrompt: getDefaultSummaryPrompt(),
-    promptVersion: PROMPT_VERSION, // 添加版本号配置
+    summaryPrompt: "",
+    promptVersion: 0,
+    promptTemplates: serializePromptTemplates(createDefaultPromptTemplates()),
+    activePromptTemplateId: getDefaultActivePromptTemplateId(),
+    promptTemplatesVersion: PROMPT_TEMPLATES_VERSION,
   };
 
   migrateToProfilesV3(
@@ -97,20 +106,6 @@ function initializeDefaultPrefsOnStartup() {
     try {
       // 使用 Zotero.Prefs.get 直接检查
       const currentValue = getPref(key as any);
-      
-      // 特殊处理提示词更新
-      if (key === "summaryPrompt") {
-        const currentPromptVersion = getPref("promptVersion" as any) as number | undefined;
-        const currentPrompt = currentValue as string | undefined;
-        
-        // 检查是否需要更新提示词
-        if (shouldUpdatePrompt(currentPromptVersion, currentPrompt)) {
-          // ztoolkit.log(`[AiNote] 更新提示词到版本 ${PROMPT_VERSION}`);
-          setPref("summaryPrompt" as any, defaultValue);
-          setPref("promptVersion" as any, PROMPT_VERSION);
-          continue;
-        }
-      }
       
       if (currentValue === undefined || currentValue === null) {
         // const preview = typeof defaultValue === 'string' && defaultValue.length > 50 
@@ -140,6 +135,26 @@ function initializeDefaultPrefsOnStartup() {
     } else if (!activeId || !profiles.some((p) => p.id === activeId)) {
       setPref("activeProfileId" as any, profiles[0].id);
     }
+  }
+
+  const promptTemplateState = ensurePromptTemplateState(
+    getPref("promptTemplates" as any),
+    getPref("activePromptTemplateId" as any),
+    getPref("promptTemplatesVersion" as any),
+  );
+  if (promptTemplateState.changed) {
+    setPref(
+      "promptTemplates" as any,
+      serializePromptTemplates(promptTemplateState.templates),
+    );
+    setPref(
+      "activePromptTemplateId" as any,
+      promptTemplateState.activeTemplateId,
+    );
+    setPref(
+      "promptTemplatesVersion" as any,
+      promptTemplateState.version,
+    );
   }
 }
 
