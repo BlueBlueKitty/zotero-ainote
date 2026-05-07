@@ -16,12 +16,12 @@ import {
 } from "./llmProfiles";
 
 const PROVIDER_OPTIONS: Array<{ value: ProviderType; label: string }> = [
-  { value: "openai", label: "OpenAI" },
+  { value: "openai", label: "OpenAI（Responses 新接口）" },
   { value: "azure", label: "Azure OpenAI" },
   { value: "anthropic", label: "Anthropic Claude" },
   { value: "gemini", label: "Google Gemini" },
   { value: "deepseek", label: "DeepSeek" },
-  { value: "openai_compatible", label: "OpenAI 兼容接口" },
+  { value: "openai_compatible", label: "OpenAI 兼容接口（Chat Completions）" },
 ];
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";

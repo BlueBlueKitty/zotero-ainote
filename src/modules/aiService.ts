@@ -137,6 +137,19 @@ function normalizeOpenAIChatEndpoint(baseUrl: string): string {
   return `${raw}/v1/chat/completions`;
 }
 
+function normalizeOpenAIResponsesEndpoint(baseUrl: string): string {
+  const raw = ensureAbsoluteUrl(baseUrl, "接口地址").replace(/\/+$/, "");
+  if (/\/responses$/i.test(raw)) return raw;
+  if (/\/chat\/completions$/i.test(raw)) {
+    return raw.replace(/\/chat\/completions$/i, "/responses");
+  }
+  if (/\/v\d+(?:beta)?$/i.test(raw)) return `${raw}/responses`;
+  if (/\/v\d+(?:beta)?\/.+$/i.test(raw)) {
+    return raw.replace(/(\/v\d+(?:beta)?)(?:\/.*)?$/i, "$1/responses");
+  }
+  return `${raw}/v1/responses`;
+}
+
 function normalizeOpenAIModelsEndpoint(baseUrl: string): string {
   const raw = ensureAbsoluteUrl(baseUrl, "接口地址").replace(/\/+$/, "");
   if (/\/models$/i.test(raw)) return raw;
@@ -151,6 +164,39 @@ function normalizeOpenAIModelsEndpoint(baseUrl: string): string {
     return raw.replace(/(\/v\d+(?:beta)?)(?:\/.*)?$/i, "$1/models");
   }
   return `${raw}/v1/models`;
+}
+
+function parseOpenAIResponsesText(data: any): string {
+  if (typeof data?.output_text === "string" && data.output_text.trim()) {
+    return data.output_text;
+  }
+
+  const outputs = Array.isArray(data?.output) ? data.output : [];
+  const collected: string[] = [];
+  for (const item of outputs) {
+    const contents = Array.isArray(item?.content) ? item.content : [];
+    for (const content of contents) {
+      const text =
+        content?.text ||
+        content?.output_text ||
+        content?.content?.[0]?.text ||
+        "";
+      if (typeof text === "string" && text) {
+        collected.push(text);
+      }
+    }
+  }
+  return collected.join("");
+}
+
+function parseOpenAIResponsesDelta(event: any): string | null {
+  if (
+    event?.type === "response.output_text.delta" &&
+    typeof event?.delta === "string"
+  ) {
+    return event.delta;
+  }
+  return null;
 }
 
 async function postStream(
@@ -337,7 +383,91 @@ class OpenAICompatClient implements LLMClient {
   }
 }
 
-class OpenAIClient extends OpenAICompatClient {}
+class OpenAIClient extends OpenAICompatClient {
+  protected override getChatEndpoint(profile: ProviderProfile): string {
+    return normalizeOpenAIResponsesEndpoint(profile.baseUrl);
+  }
+
+  async generateSummary(req: LLMRequest): Promise<string> {
+    const { profile, summaryPrompt, fullText, onProgress } = req;
+    if (!profile.apiKey) throw new Error("API Key 未配置");
+    if (!profile.baseUrl) throw new Error("API URL 未配置");
+
+    const payload: any = {
+      model: profile.model,
+      input: [
+        {
+          role: "developer",
+          content: [{ type: "input_text", text: SYSTEM_ROLE_PROMPT }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: buildUserMessage(summaryPrompt, fullText),
+            },
+          ],
+        },
+      ],
+    };
+    if (profile.extra?.enableTemperature !== false) {
+      payload.temperature = asNumber(profile.temperature, 0.7);
+    }
+    if (profile.extra?.enableTopP) {
+      payload.top_p = asNumber(profile.topP, 1);
+    }
+    if (profile.extra?.enableMaxTokens) {
+      payload.max_output_tokens =
+        parseInt(profile.maxTokens || "4096", 10) || 4096;
+    }
+
+    const headers = this.getHeaders(profile);
+    const timeoutMs = getTimeoutMs(profile);
+    const endpoint = this.getChatEndpoint(profile);
+
+    if (profile.stream && onProgress) {
+      const text = await postStream(
+        endpoint,
+        headers,
+        { ...payload, stream: true },
+        timeoutMs,
+        onProgress,
+        parseOpenAIResponsesDelta,
+      );
+      if (text) return text;
+    }
+
+    const data = await postJson(endpoint, headers, payload, timeoutMs);
+    return parseOpenAIResponsesText(data);
+  }
+
+  override async testConnection(profile: ProviderProfile): Promise<string> {
+    if (!profile.apiKey) throw new Error("API 密钥未配置");
+    if (!profile.baseUrl) throw new Error("接口地址未配置");
+
+    const payload: any = {
+      model: profile.model,
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "Reply with OK." }],
+        },
+      ],
+      max_output_tokens: 16,
+      stream: false,
+    };
+
+    const data = await postJson(
+      this.getChatEndpoint(profile),
+      this.getHeaders(profile),
+      payload,
+      getTimeoutMs(profile),
+    );
+    const text = parseOpenAIResponsesText(data) || "OK";
+    return `连接成功，响应：${text}`;
+  }
+}
 class DeepSeekClient extends OpenAICompatClient {}
 
 class AzureOpenAIClient extends OpenAICompatClient {

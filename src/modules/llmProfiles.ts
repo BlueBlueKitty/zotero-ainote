@@ -52,7 +52,7 @@ const DEFAULT_PROFILE: ProviderProfile = {
 export function providerDefaults(providerType: ProviderType): Pick<ProviderProfile, "baseUrl" | "model" | "apiVersion"> {
   switch (providerType) {
     case "openai":
-      return { baseUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-4o" };
+      return { baseUrl: "https://api.openai.com/v1/responses", model: "gpt-4o" };
     case "azure":
       return {
         baseUrl: "https://your-resource.openai.azure.com/openai/deployments",
