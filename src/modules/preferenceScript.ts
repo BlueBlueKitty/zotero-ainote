@@ -874,22 +874,38 @@ function renderApiKeyRow(
   input.value = value || "";
   styleTextInput(input);
   input.style.flex = "1";
+  input.autocomplete = "off";
+  input.spellcheck = false;
   input.addEventListener("change", () => onChange(input.value));
+  input.addEventListener("copy", (event: ClipboardEvent) => {
+    const target = event.currentTarget as HTMLInputElement | null;
+    if (!target) return;
+    const start = target.selectionStart ?? 0;
+    const end = target.selectionEnd ?? 0;
+    const selected = target.value.slice(start, end) || target.value;
+    if (!selected) return;
+    if (event.clipboardData) {
+      event.clipboardData.setData("text/plain", selected);
+      event.preventDefault();
+    }
+  });
+  input.addEventListener("keydown", (event: KeyboardEvent) => {
+    const isCopy =
+      (event.ctrlKey || event.metaKey) &&
+      event.key.toLowerCase() === "c";
+    if (!isCopy) return;
+    const start = input.selectionStart ?? 0;
+    const end = input.selectionEnd ?? 0;
+    const selected = input.value.slice(start, end) || input.value;
+    if (!selected) return;
+    try {
+      event.preventDefault();
+      void doc.defaultView?.navigator?.clipboard?.writeText(selected);
+    } catch {
+      // ignore and let host environment handle copy if possible
+    }
+  });
   inputWrap.appendChild(input);
-
-  const toggle = createActionButton(doc, "显示", false);
-  Object.assign(toggle.style, {
-    minWidth: "64px",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-  });
-  bindButtonAction(toggle, () => {
-    const hidden = input.type === "password";
-    input.type = hidden ? "text" : "password";
-    toggle.textContent = hidden ? "隐藏" : "显示";
-  });
-  inputWrap.appendChild(toggle);
 
   row.appendChild(inputWrap);
   card.appendChild(row);
@@ -1196,6 +1212,9 @@ function styleTextInput(element: HTMLInputElement | HTMLSelectElement) {
     border: "1px solid var(--ainote-border)",
     background: "var(--ainote-input-bg)",
     color: "var(--ainote-text)",
+    userSelect: "text",
+    webkitUserSelect: "text",
+    MozUserSelect: "text",
   });
 }
 
