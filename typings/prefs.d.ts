@@ -7,11 +7,9 @@
 declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
-      "apiKey": string;
-      "apiUrl": string;
-      "model": string;
-      "temperature": string;
-      "stream": boolean;
+      "profiles": string;
+      "activeProfileId": string;
+      "migratedToProfilesV3": boolean;
       "summaryPrompt": string;
       "promptVersion": number;
       "truncateLength": string;

@@ -5,6 +5,7 @@ import { NoteGenerator } from "./modules/noteGenerator";
 import { config } from "../package.json";
 import { getPref, setPref } from "./utils/prefs";
 import { getDefaultSummaryPrompt, PROMPT_VERSION, shouldUpdatePrompt } from "./utils/prompts";
+import { createProfile, migrateToProfilesV3, parseProfiles } from "./modules/llmProfiles";
 
 async function onStartup() {
   await Promise.all([
@@ -78,14 +79,19 @@ function registerPrefsPane() {
  */
 function initializeDefaultPrefsOnStartup() {
   const defaults: Record<string, any> = {
-    apiKey: "",
-    apiUrl: "https://api.openai.com/v1/chat/completions",
-    model: "gpt-3.5-turbo",
-    temperature: "0.7",
-    stream: true,
+    profiles: "[]",
+    activeProfileId: "",
+    migratedToProfilesV3: false,
+    truncateLength: "10",
     summaryPrompt: getDefaultSummaryPrompt(),
     promptVersion: PROMPT_VERSION, // 添加版本号配置
   };
+
+  migrateToProfilesV3(
+    (k) => getPref(k as any),
+    (k, v) => setPref(k as any, v),
+    (k) => Zotero.Prefs.clear(`${config.prefsPrefix}.${k}`, true),
+  );
 
   for (const [key, defaultValue] of Object.entries(defaults)) {
     try {
@@ -124,6 +130,16 @@ function initializeDefaultPrefsOnStartup() {
         ztoolkit.log(`[AiNote] 启动时强制设置配置失败: ${key}`, e);
       }
     }
+
+    const profiles = parseProfiles(getPref("profiles"));
+    const activeId = String(getPref("activeProfileId") || "").trim();
+    if (!profiles.length) {
+      const profile = createProfile("openai_compatible", "默认配置");
+      setPref("profiles" as any, JSON.stringify([profile]));
+      setPref("activeProfileId" as any, profile.id);
+    } else if (!activeId || !profiles.some((p) => p.id === activeId)) {
+      setPref("activeProfileId" as any, profiles[0].id);
+    }
   }
 }
 
@@ -151,17 +167,18 @@ function registerContextMenuItem() {
  * Handle generate AI summary command
  */
 async function handleGenerateSummary() {
-  // Check if API is configured (global only)
-  const apiKey = Zotero.Prefs.get(`${config.prefsPrefix}.apiKey`, true) as string;
-  // ztoolkit.log(`[AiNote] handleGenerateSummary - API Key: ${apiKey ? `exists (${apiKey.length} chars)` : 'missing'}`);
+  const profilesRaw = Zotero.Prefs.get(`${config.prefsPrefix}.profiles`, true) as string;
+  const activeId = (Zotero.Prefs.get(`${config.prefsPrefix}.activeProfileId`, true) as string) || "";
+  const profiles = parseProfiles(profilesRaw);
+  const activeProfile = profiles.find((p) => p.id === activeId) || profiles[0];
 
-  if (!apiKey) {
+  if (!activeProfile || !activeProfile.enabled || !activeProfile.apiKey) {
     new ztoolkit.ProgressWindow("AiNote", {
       closeOnClick: true,
       closeTime: 5000,
     })
       .createLine({
-        text: "请先在设置中配置API Key",
+        text: "请先在设置中创建并激活模型配置",
         type: "error",
       })
       .show();

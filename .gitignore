@@ -22,3 +22,5 @@ releases
 update_docs
 *.backup
 *.copilot-instructions.md
+
+.mindfs/
