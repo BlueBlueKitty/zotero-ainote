@@ -38,7 +38,7 @@ AiNote is a Zotero plugin for calling large language models to generate and proc
 ### Other Entry Points
 
 - After selecting one or more note items, right-click to use the `Note Format Adjustment` feature.
-- When editing a note in the Zotero note editor, if the cursor is on a heading line, the right-click menu will show additional section operation options.
+- When editing a note in the Zotero note editor, if the cursor is on a heading line, the right-click menu will show a `Section Format Adjustment` submenu.
 
 <div align="center">
     <span style="display:inline-block; border-radius:12px; overflow:hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.18);">
@@ -116,7 +116,7 @@ The plugin also automatically names generated notes based on the currently selec
 
 ### 2. Quick Section Editing in Note Editor
 
-When editing a note in the Zotero note editor, if the cursor is on a heading line, the right-click menu will show the following 5 functions:
+When editing a note in the Zotero note editor, if the cursor is on a heading line, the right-click menu will show a `Section Format Adjustment` submenu containing the following 5 functions:
 
 1. `Upgrade Current Heading`
 2. `Downgrade Current Heading`

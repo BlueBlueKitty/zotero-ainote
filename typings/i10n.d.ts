@@ -68,6 +68,7 @@ export type FluentMessageId =
   | 'note-section-error'
   | 'note-section-heading-not-found'
   | 'note-section-increase-number'
+  | 'note-section-menu'
   | 'note-section-no-deletable-content'
   | 'note-section-no-editor-context'
   | 'note-section-no-number'

@@ -45,6 +45,7 @@ note-format-error = 筆記格式調整失敗，已嘗試回滾原始內容
 note-format-please-select-note = 請先選中一條 Zotero 筆記
 
 ## 筆記編輯器上下文選單操作（章節操作）
+note-section-menu = 章節格式調整
 note-section-upgrade-heading = 目前章節標題升級
 note-section-downgrade-heading = 目前章節標題降級
 note-section-increase-number = 目前章節序號 +1

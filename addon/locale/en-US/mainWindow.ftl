@@ -45,6 +45,7 @@ note-format-error = Note format adjustment failed, attempted to rollback origina
 note-format-please-select-note = Please select a Zotero note first
 
 ## Note section (editor context menu) actions
+note-section-menu = Section Format Adjustment
 note-section-upgrade-heading = Upgrade Current Heading
 note-section-downgrade-heading = Downgrade Current Heading
 note-section-increase-number = Increase Section Number

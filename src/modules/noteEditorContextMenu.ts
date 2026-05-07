@@ -18,6 +18,7 @@ import { runtimeT } from "../utils/runtimeLocale";
 const LOG_PREFIX = "[AiNote][NoteEditorContextMenu]";
 const CUSTOM_MENU_ID = "ainote-note-section-context-menu";
 const ROOT_MENU_ITEM_ID = "ainote-note-section-context-root";
+const ROOT_SUBMENU_POPUP_ID = `${ROOT_MENU_ITEM_ID}-popup`;
 const MENU_SEPARATOR_ID = `${ROOT_MENU_ITEM_ID}-separator`;
 const MENU_ICON = `chrome://${config.addonRef}/content/icons/favicon.png`;
 
@@ -210,10 +211,26 @@ function ensureNativePopupMenuItems(
   const hasHeadingContext = !!getHeadingContext(editorInstance);
   separator.hidden = !hasHeadingContext;
 
+  let rootMenu = doc.getElementById(ROOT_MENU_ITEM_ID) as any;
+  if (!rootMenu) {
+    rootMenu = doc.createXULElement("menu") as any;
+    rootMenu.id = ROOT_MENU_ITEM_ID;
+    rootMenu.setAttribute("label", getString("note-section-menu"));
+    rootMenu.setAttribute("class", "menu-iconic");
+    rootMenu.setAttribute("image", MENU_ICON);
+    popup.appendChild(rootMenu);
+  }
+  rootMenu.hidden = !hasHeadingContext;
+
+  let submenuPopup = doc.getElementById(ROOT_SUBMENU_POPUP_ID) as any;
+  if (!submenuPopup) {
+    submenuPopup = doc.createXULElement("menupopup") as any;
+    submenuPopup.id = ROOT_SUBMENU_POPUP_ID;
+    rootMenu.appendChild(submenuPopup);
+  }
+
   for (const action of MENU_ACTIONS) {
-    let menuitem = doc.getElementById(
-      `${ROOT_MENU_ITEM_ID}-${action.id}`,
-    ) as any;
+    let menuitem = doc.getElementById(`${ROOT_MENU_ITEM_ID}-${action.id}`) as any;
     if (!menuitem) {
       menuitem = doc.createXULElement("menuitem") as any;
       menuitem.id = `${ROOT_MENU_ITEM_ID}-${action.id}`;
@@ -223,9 +240,8 @@ function ensureNativePopupMenuItems(
       menuitem.addEventListener("command", () => {
         void executeSectionAction(editorInstance, action.id);
       });
-      popup.appendChild(menuitem);
+      submenuPopup.appendChild(menuitem);
     }
-    menuitem.hidden = !hasHeadingContext;
   }
 }
 
@@ -254,6 +270,50 @@ function openCustomContextMenu(
   container.style.borderRadius = "6px";
   container.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.18)";
   container.style.fontSize = "13px";
+
+  const rootButton = editorDocument.createElement("button");
+  rootButton.type = "button";
+  rootButton.style.display = "flex";
+  rootButton.style.alignItems = "center";
+  rootButton.style.gap = "8px";
+  rootButton.style.width = "100%";
+  rootButton.style.padding = "8px 14px";
+  rootButton.style.border = "none";
+  rootButton.style.background = "transparent";
+  rootButton.style.textAlign = "left";
+  rootButton.style.cursor = "pointer";
+  rootButton.style.position = "relative";
+
+  const rootIcon = editorDocument.createElement("img");
+  rootIcon.src = MENU_ICON;
+  rootIcon.width = 16;
+  rootIcon.height = 16;
+
+  const rootLabel = editorDocument.createElement("span");
+  rootLabel.textContent = getString("note-section-menu");
+  rootLabel.style.flex = "1";
+
+  const arrow = editorDocument.createElement("span");
+  arrow.textContent = "›";
+  arrow.style.marginLeft = "8px";
+  arrow.style.opacity = "0.7";
+
+  const submenu = editorDocument.createElement("div");
+  submenu.style.position = "absolute";
+  submenu.style.left = "100%";
+  submenu.style.top = "0";
+  submenu.style.marginLeft = "4px";
+  submenu.style.minWidth = "220px";
+  submenu.style.padding = "6px 0";
+  submenu.style.background = "#ffffff";
+  submenu.style.border = "1px solid rgba(0, 0, 0, 0.18)";
+  submenu.style.borderRadius = "6px";
+  submenu.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.18)";
+  submenu.style.display = "none";
+
+  rootButton.appendChild(rootIcon);
+  rootButton.appendChild(rootLabel);
+  rootButton.appendChild(arrow);
 
   for (const action of MENU_ACTIONS) {
     const button = editorDocument.createElement("button");
@@ -288,8 +348,28 @@ function openCustomContextMenu(
       hideCustomContextMenu(editorDocument);
       void executeSectionAction(editorInstance, action.id);
     });
-    container.appendChild(button);
+    submenu.appendChild(button);
   }
+
+  rootButton.addEventListener("mouseenter", () => {
+    rootButton.style.background = "rgba(0, 0, 0, 0.06)";
+    submenu.style.display = "block";
+  });
+  rootButton.addEventListener("mouseleave", () => {
+    rootButton.style.background = "transparent";
+    submenu.style.display = "none";
+  });
+  submenu.addEventListener("mouseenter", () => {
+    rootButton.style.background = "rgba(0, 0, 0, 0.06)";
+    submenu.style.display = "block";
+  });
+  submenu.addEventListener("mouseleave", () => {
+    rootButton.style.background = "transparent";
+    submenu.style.display = "none";
+  });
+
+  rootButton.appendChild(submenu);
+  container.appendChild(rootButton);
 
   const mountTarget = editorDocument.body || editorDocument.documentElement;
   if (!mountTarget) {
