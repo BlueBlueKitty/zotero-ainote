@@ -12,8 +12,10 @@ export class OutputWindow {
   private currentItemBuffer: string = ""; // 累积当前条目的完整内容
   private isOpen: boolean = false;
   private onStopCallback: (() => void) | null = null; // 停止生成的回调
+  private onStopCurrentCallback: (() => void) | null = null; // 停止当前条目的回调
   private onCloseCallback: (() => void) | null = null; // 窗口关闭的回调
   private stopButton: any = null; // 停止按钮引用
+  private stopCurrentButton: any = null; // 停止当前条目按钮引用
   private mathJaxReady: boolean = false; // MathJax 是否就绪
   private renderMathTimer: ReturnType<typeof setTimeout> | null = null; // 公式渲染节流定时器
   private userHasScrolled: boolean = false; // 用户是否手动滚动过
@@ -108,6 +110,38 @@ export class OutputWindow {
               {
                 tag: "button",
                 namespace: "html",
+                id: "ainote-stop-current-button",
+                styles: {
+                  fontSize: "16px",
+                  fontWeight: "700",
+                  padding: "12px 32px",
+                  backgroundColor: "#ff9800",
+                  color: "#1a1a1a !important",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  transition: "all 0.2s ease",
+                  minWidth: "140px",
+                  boxShadow: "0 2px 4px rgba(0,0,0,0.15)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  textAlign: "center",
+                  lineHeight: "normal",
+                  verticalAlign: "middle",
+                  fontFamily: "system-ui, -apple-system, sans-serif",
+                  outline: "none",
+                  textDecoration: "none",
+                  webkitAppearance: "none",
+                  marginRight: "12px",
+                },
+                properties: {
+                  innerHTML: "⏹ 停止当前条目的AI总结",
+                },
+              },
+              {
+                tag: "button",
+                namespace: "html",
                 id: "ainote-stop-button",
                 styles: {
                   fontSize: "16px",
@@ -160,7 +194,24 @@ export class OutputWindow {
       );
       
       // 获取自定义停止按钮
+      this.stopCurrentButton = this.dialog.window.document.getElementById("ainote-stop-current-button");
       this.stopButton = this.dialog.window.document.getElementById("ainote-stop-button");
+
+      if (this.stopCurrentButton) {
+        this.stopCurrentButton.addEventListener("click", (e: Event) => {
+          e.preventDefault();
+          e.stopPropagation();
+
+          try {
+            this.disableCurrentStopButton("✓ 已停止当前条目");
+            if (this.onStopCurrentCallback) {
+              this.onStopCurrentCallback();
+            }
+          } catch (err) {
+            ztoolkit.log("[AiNote][OutputWindow] Error in stop current handler:", err);
+          }
+        });
+      }
       
       if (this.stopButton) {
         // 注入自定义 CSS 文件
@@ -270,7 +321,7 @@ export class OutputWindow {
    * 根据主题设置按钮颜色
    */
   private applyButtonTheme(): void {
-    if (!this.stopButton || !this.dialog || !this.dialog.window) {
+    if ((!this.stopButton && !this.stopCurrentButton) || !this.dialog || !this.dialog.window) {
       return;
     }
 
@@ -284,13 +335,23 @@ export class OutputWindow {
                          isDarkMode;
 
     if (zoteroIsDark) {
-      // 暗色主题：白色文字在橙红色背景上
-      this.stopButton.style.setProperty("color", "#ffffff", "important");
-      this.stopButton.style.setProperty("background-color", "#ff5722", "important");
+      if (this.stopButton) {
+        this.stopButton.style.setProperty("color", "#ffffff", "important");
+        this.stopButton.style.setProperty("background-color", "#ff5722", "important");
+      }
+      if (this.stopCurrentButton && !this.stopCurrentButton.disabled) {
+        this.stopCurrentButton.style.setProperty("color", "#1a1a1a", "important");
+        this.stopCurrentButton.style.setProperty("background-color", "#ff9800", "important");
+      }
     } else {
-      // 亮色主题：深色文字在橙红色背景上
-      this.stopButton.style.setProperty("color", "#1a1a1a", "important");
-      this.stopButton.style.setProperty("background-color", "#ff5722", "important");
+      if (this.stopButton) {
+        this.stopButton.style.setProperty("color", "#1a1a1a", "important");
+        this.stopButton.style.setProperty("background-color", "#ff5722", "important");
+      }
+      if (this.stopCurrentButton && !this.stopCurrentButton.disabled) {
+        this.stopCurrentButton.style.setProperty("color", "#1a1a1a", "important");
+        this.stopCurrentButton.style.setProperty("background-color", "#ff9800", "important");
+      }
     }
   }
 
@@ -317,6 +378,8 @@ export class OutputWindow {
     if (!this.outputContainer) {
       return;
     }
+
+    this.resetCurrentStopButton();
 
     // 重置 buffer
     this.currentItemBuffer = "";
@@ -461,6 +524,33 @@ export class OutputWindow {
         );
       }
     }
+    this.disableCurrentStopButton("✓ 当前条目已完成");
+    this.currentItemContainer = null;
+    this.scrollToBottom();
+  }
+
+  public stopCurrentItem(message: string = "已停止当前条目的AI总结，未保存到笔记。"): void {
+    if (this.currentItemContainer) {
+      const parent = this.currentItemContainer.parentElement;
+      if (parent) {
+        ztoolkit.UI.appendElement(
+          {
+            tag: "div",
+            styles: {
+              marginTop: "10px",
+              color: "#ff9800",
+              fontSize: "12px",
+              fontStyle: "italic",
+            },
+            properties: {
+              innerHTML: `⏹ ${this.escapeHtml(message)}`,
+            },
+          },
+          parent
+        );
+      }
+    }
+    this.disableCurrentStopButton("✓ 当前条目已停止");
     this.currentItemContainer = null;
     this.scrollToBottom();
   }
@@ -470,15 +560,16 @@ export class OutputWindow {
    * @param successCount 成功数量
    * @param totalCount 总数量
    */
-  public showComplete(successCount: number, totalCount: number): void {
+  public showComplete(successCount: number, totalCount: number, canceledCount: number = 0): void {
     if (!this.outputContainer) {
       return;
     }
 
     const isDark = this.isDarkTheme();
-    const failedCount = totalCount - successCount;
+    const failedCount = Math.max(0, totalCount - successCount - canceledCount);
     const allSuccess = failedCount === 0;
-    const allFailed = successCount === 0;
+    const allCanceled = canceledCount === totalCount && totalCount > 0;
+    const allFailed = successCount === 0 && failedCount === totalCount && totalCount > 0;
 
     // 根据结果确定样式和消息
     let backgroundColor: string;
@@ -487,7 +578,13 @@ export class OutputWindow {
     let title: string;
     let message: string;
 
-    if (allSuccess) {
+    if (allCanceled) {
+      backgroundColor = isDark ? "#3d3d2d" : "#fff9e6";
+      borderColor = "#ff9800";
+      icon = "⏹️";
+      title = "已取消";
+      message = `共 ${totalCount} 个条目，已取消 ${canceledCount} 个条目，未保存到笔记中。`;
+    } else if (allSuccess) {
       backgroundColor = isDark ? "#2d4a2d" : "#e8f5e9";
       borderColor = "#59c0bc";
       icon = "🎉";
@@ -504,7 +601,9 @@ export class OutputWindow {
       borderColor = "#ff9800";
       icon = "⚠️";
       title = "部分完成";
-      message = `成功处理 ${successCount} 个条目，${failedCount} 个条目失败。`;
+      message = canceledCount > 0
+        ? `成功处理 ${successCount} 个条目，${failedCount} 个条目失败，${canceledCount} 个条目已取消。`
+        : `成功处理 ${successCount} 个条目，${failedCount} 个条目失败。`;
     }
 
     ztoolkit.UI.appendElement(
@@ -547,6 +646,7 @@ export class OutputWindow {
     );
 
     this.scrollToBottom();
+    this.disableCurrentStopButton("✓ 当前条目已结束");
   }
 
   /**
@@ -555,13 +655,13 @@ export class OutputWindow {
    * @param failedCount 失败数量
    * @param notProcessed 未处理数量
    */
-  public showStopped(successCount: number, failedCount: number, notProcessed: number): void {
+  public showStopped(successCount: number, failedCount: number, notProcessed: number, canceledCount: number = 0): void {
     if (!this.outputContainer) {
       return;
     }
 
     const isDark = this.isDarkTheme();
-    const total = successCount + failedCount + notProcessed;
+    const total = successCount + failedCount + notProcessed + canceledCount;
 
     ztoolkit.UI.appendElement(
       {
@@ -620,6 +720,21 @@ export class OutputWindow {
               innerHTML: `✗ 生成失败：${failedCount} 个`,
             },
           },
+          ...(canceledCount > 0
+            ? [
+                {
+                  tag: "div",
+                  styles: {
+                    fontSize: "14px",
+                    color: isDark ? "#ffcc80" : "#ef6c00",
+                    marginBottom: "3px",
+                  },
+                  properties: {
+                    innerHTML: `⏹ 当前条目已取消：${canceledCount} 个`,
+                  },
+                },
+              ]
+            : []),
           {
             tag: "div",
             styles: {
@@ -709,7 +824,9 @@ export class OutputWindow {
     this.outputContainer = null;
     this.currentItemContainer = null;
     this.onStopCallback = null;
+    this.onStopCurrentCallback = null;
     this.stopButton = null;
+    this.stopCurrentButton = null;
   }
 
   /**
@@ -718,6 +835,10 @@ export class OutputWindow {
    */
   public setOnStop(callback: () => void): void {
     this.onStopCallback = callback;
+  }
+
+  public setOnStopCurrent(callback: () => void): void {
+    this.onStopCurrentCallback = callback;
   }
 
   /**
@@ -741,6 +862,29 @@ export class OutputWindow {
       this.stopButton.style.setProperty("cursor", "not-allowed", "important");
       this.stopButton.style.setProperty("opacity", "0.8", "important");
     }
+    this.disableCurrentStopButton(stopped ? "✓ 当前条目已停止" : "✓ 已完成");
+  }
+
+  public disableCurrentStopButton(label: string = "✓ 已完成"): void {
+    if (this.stopCurrentButton) {
+      this.stopCurrentButton.disabled = true;
+      this.stopCurrentButton.innerHTML = label;
+      this.stopCurrentButton.style.setProperty("background-color", "#9e9e9e", "important");
+      this.stopCurrentButton.style.setProperty("cursor", "not-allowed", "important");
+      this.stopCurrentButton.style.setProperty("opacity", "0.8", "important");
+    }
+  }
+
+  private resetCurrentStopButton(): void {
+    if (!this.stopCurrentButton) {
+      return;
+    }
+    this.stopCurrentButton.disabled = false;
+    this.stopCurrentButton.innerHTML = "⏹ 停止当前条目的AI总结";
+    this.stopCurrentButton.style.setProperty("cursor", "pointer", "important");
+    this.stopCurrentButton.style.setProperty("opacity", "1", "important");
+    this.stopCurrentButton.style.setProperty("color", "#1a1a1a", "important");
+    this.stopCurrentButton.style.setProperty("background-color", "#ff9800", "important");
   }
 
   /**

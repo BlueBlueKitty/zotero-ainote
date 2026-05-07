@@ -13,6 +13,19 @@ import {
 
 type ProgressCb = (chunk: string) => Promise<void> | void;
 
+export type CancelSignal = {
+  isCanceled: () => boolean;
+  onCancel: (callback: () => void) => () => void;
+  getReason?: () => string;
+};
+
+export class AIRequestCanceledError extends Error {
+  constructor(message = "已停止当前条目的AI总结") {
+    super(message);
+    this.name = "AIRequestCanceledError";
+  }
+}
+
 export type LLMModelInfo = {
   id: string;
   name?: string;
@@ -24,6 +37,7 @@ type LLMRequest = {
   summaryPrompt: string;
   profile: ProviderProfile;
   onProgress?: ProgressCb;
+  cancelSignal?: CancelSignal;
 };
 
 type LLMClient = {
@@ -54,15 +68,74 @@ function safeParseError(error: any): string {
   return error?.message || String(error);
 }
 
-async function postJson(url: string, headers: Record<string, string>, payload: any, timeoutMs: number): Promise<any> {
-  const res = await Zotero.HTTP.request("POST", url, {
-    headers,
-    body: JSON.stringify(payload),
-    responseType: "json",
-    timeout: timeoutMs,
-    errorDelayMax: 0,
-  });
-  return res.response || res;
+async function postJson(
+  url: string,
+  headers: Record<string, string>,
+  payload: any,
+  timeoutMs: number,
+  cancelSignal?: CancelSignal,
+): Promise<any> {
+  return postJsonCancelable(url, headers, payload, timeoutMs, cancelSignal);
+}
+
+function throwIfCanceled(cancelSignal?: CancelSignal) {
+  if (cancelSignal?.isCanceled()) {
+    throw new AIRequestCanceledError(
+      cancelSignal.getReason?.() || "已停止当前条目的AI总结",
+    );
+  }
+}
+
+async function postJsonCancelable(
+  url: string,
+  headers: Record<string, string>,
+  payload: any,
+  timeoutMs: number,
+  cancelSignal?: CancelSignal,
+): Promise<any> {
+  let unregisterCancel: (() => void) | undefined;
+  let request: XMLHttpRequest | null = null;
+  throwIfCanceled(cancelSignal);
+  if (cancelSignal) {
+    unregisterCancel = cancelSignal.onCancel(() => {
+      try {
+        request?.abort();
+      } catch {
+        // ignore
+      }
+    });
+  }
+
+  try {
+    const res = await Zotero.HTTP.request("POST", url, {
+      headers,
+      body: JSON.stringify(payload),
+      responseType: "json",
+      timeout: timeoutMs,
+      errorDelayMax: 0,
+      requestObserver: (xmlhttp: XMLHttpRequest) => {
+        request = xmlhttp;
+        if (cancelSignal?.isCanceled()) {
+          try {
+            xmlhttp.abort();
+          } catch {
+            // ignore
+          }
+        }
+      },
+    });
+    throwIfCanceled(cancelSignal);
+    return res.response || res;
+  } catch (error: any) {
+    if (cancelSignal?.isCanceled()) {
+      throw new AIRequestCanceledError(
+        cancelSignal.getReason?.() || "已停止当前条目的AI总结",
+      );
+    }
+    throw error;
+  } finally {
+    unregisterCancel?.();
+  }
 }
 
 async function getJson(url: string, headers: Record<string, string>, timeoutMs: number): Promise<any> {
@@ -309,12 +382,26 @@ async function postStream(
   timeoutMs: number,
   onProgress: ProgressCb,
   parseChunk: (json: any) => string | null,
+  cancelSignal?: CancelSignal,
 ): Promise<string> {
   const chunks: string[] = [];
   let delivered = 0;
   let processedLength = 0;
   let pendingText = "";
   let abortError: Error | null = null;
+  let request: XMLHttpRequest | null = null;
+  let unregisterCancel: (() => void) | undefined;
+
+  throwIfCanceled(cancelSignal);
+  if (cancelSignal) {
+    unregisterCancel = cancelSignal.onCancel(() => {
+      try {
+        request?.abort();
+      } catch {
+        // ignore
+      }
+    });
+  }
 
   try {
     await Zotero.HTTP.request("POST", url, {
@@ -324,6 +411,14 @@ async function postStream(
       timeout: timeoutMs,
       errorDelayMax: 0,
       requestObserver: (xmlhttp: XMLHttpRequest) => {
+        request = xmlhttp;
+        if (cancelSignal?.isCanceled()) {
+          try {
+            xmlhttp.abort();
+          } catch {
+            // ignore
+          }
+        }
         xmlhttp.onprogress = (e: any) => {
           const status = e.target.status;
           if (status >= 400) {
@@ -410,6 +505,11 @@ async function postStream(
       },
     });
   } catch (error: any) {
+    if (cancelSignal?.isCanceled()) {
+      throw new AIRequestCanceledError(
+        cancelSignal.getReason?.() || "已停止当前条目的AI总结",
+      );
+    }
     if (abortError) {
       if (chunks.length > 0) {
         return chunks.join("");
@@ -420,6 +520,8 @@ async function postStream(
       return chunks.join("");
     }
     return "";
+  } finally {
+    unregisterCancel?.();
   }
 
   return chunks.join("");
@@ -447,7 +549,7 @@ class OpenAICompatClient implements LLMClient {
   }
 
   async generateSummary(req: LLMRequest): Promise<string> {
-    const { profile, summaryPrompt, content, onProgress } = req;
+    const { profile, summaryPrompt, content, onProgress, cancelSignal } = req;
     if (!profile.apiKey) throw new Error("API Key 未配置");
     if (!profile.baseUrl) throw new Error("API URL 未配置");
 
@@ -470,11 +572,12 @@ class OpenAICompatClient implements LLMClient {
         timeoutMs,
         onProgress,
         parseOpenAICompatDelta,
+        cancelSignal,
       );
       if (text) return text;
     }
 
-    const data = await postJson(endpoint, headers, payload, timeoutMs);
+    const data = await postJson(endpoint, headers, payload, timeoutMs, cancelSignal);
     return parseOpenAICompatText(data);
   }
 
@@ -513,7 +616,7 @@ class OpenAIClient extends OpenAICompatClient {
   }
 
   async generateSummary(req: LLMRequest): Promise<string> {
-    const { profile, summaryPrompt, content, contentMode, onProgress } = req;
+    const { profile, summaryPrompt, content, contentMode, onProgress, cancelSignal } = req;
     if (!profile.apiKey) throw new Error("API Key 未配置");
     if (!profile.baseUrl) throw new Error("API URL 未配置");
 
@@ -568,11 +671,12 @@ class OpenAIClient extends OpenAICompatClient {
         timeoutMs,
         onProgress,
         parseOpenAIResponsesDelta,
+        cancelSignal,
       );
       if (text) return text;
     }
 
-    const data = await postJson(endpoint, headers, payload, timeoutMs);
+    const data = await postJson(endpoint, headers, payload, timeoutMs, cancelSignal);
     return parseOpenAIResponsesText(data);
   }
 
@@ -680,7 +784,7 @@ class AnthropicClient implements LLMClient {
   }
 
   async generateSummary(req: LLMRequest): Promise<string> {
-    const { profile, summaryPrompt, content, contentMode, onProgress } = req;
+    const { profile, summaryPrompt, content, contentMode, onProgress, cancelSignal } = req;
     if (!profile.apiKey) throw new Error("API Key 未配置");
     if (!profile.baseUrl) throw new Error("API URL 未配置");
 
@@ -729,11 +833,12 @@ class AnthropicClient implements LLMClient {
         timeoutMs,
         onProgress,
         parseAnthropicDelta,
+        cancelSignal,
       );
       if (text) return text;
     }
 
-    const data = await postJson(url, headers, payload, timeoutMs);
+    const data = await postJson(url, headers, payload, timeoutMs, cancelSignal);
     return extractAnthropicText(data);
   }
 
@@ -775,7 +880,7 @@ class GeminiClient implements LLMClient {
   }
 
   async generateSummary(req: LLMRequest): Promise<string> {
-    const { profile, summaryPrompt, content, contentMode, onProgress } = req;
+    const { profile, summaryPrompt, content, contentMode, onProgress, cancelSignal } = req;
     if (!profile.apiKey) throw new Error("API Key 未配置");
     if (!profile.baseUrl) throw new Error("API URL 未配置");
 
@@ -825,11 +930,12 @@ class GeminiClient implements LLMClient {
         timeoutMs,
         onProgress,
         (json) => extractGeminiText(json) || null,
+        cancelSignal,
       );
       if (text) return text;
     }
 
-    const data = await postJson(nonStreamUrl, headers, payload, timeoutMs);
+    const data = await postJson(nonStreamUrl, headers, payload, timeoutMs, cancelSignal);
     return extractGeminiText(data);
   }
 
@@ -929,6 +1035,7 @@ export class AIService {
     contentMode: "text" | "pdf-base64" = "text",
     prompt?: string,
     onProgress?: ProgressCb,
+    cancelSignal?: CancelSignal,
   ): Promise<string> {
     const savedPrompt = getPref("summaryPrompt") as string;
     const summaryPrompt =
@@ -947,9 +1054,16 @@ export class AIService {
         summaryPrompt,
         profile,
         onProgress,
+        cancelSignal,
       });
       return text || "";
     } catch (error: any) {
+      if (
+        error instanceof AIRequestCanceledError ||
+        error?.name === "AIRequestCanceledError"
+      ) {
+        throw error;
+      }
       const message = safeParseError(error);
       this.notifyError(message);
       throw new Error(message);

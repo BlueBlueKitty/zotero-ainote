@@ -1,6 +1,6 @@
 import { config } from "../../package.json";
 import { PDFExtractor } from "./pdfExtractor";
-import AIService from "./aiService";
+import AIService, { AIRequestCanceledError, CancelSignal } from "./aiService";
 import { OutputWindow } from "./outputWindow";
 import { getPref } from "../utils/prefs";
 import { parseProfiles, ProviderType } from "./llmProfiles";
@@ -49,6 +49,32 @@ export class NoteGenerator {
     let note: Zotero.Item | null = null;
     let fullContent = "";
     let receivedStreamChunk = false;
+    let currentItemCanceled = false;
+    const cancelListeners = new Set<() => void>();
+    const cancelSignal: CancelSignal = {
+      isCanceled: () => currentItemCanceled,
+      onCancel: (callback: () => void) => {
+        cancelListeners.add(callback);
+        return () => cancelListeners.delete(callback);
+      },
+      getReason: () => "已停止当前条目的AI总结",
+    };
+    const cancelCurrentItem = () => {
+      if (currentItemCanceled) return;
+      currentItemCanceled = true;
+      cancelListeners.forEach((listener) => {
+        try {
+          listener();
+        } catch {
+          // ignore
+        }
+      });
+    };
+    const ensureNotCanceled = () => {
+      if (currentItemCanceled) {
+        throw new AIRequestCanceledError("已停止当前条目的AI总结");
+      }
+    };
 
     try {
       const activeProfile = this.getActiveProfile();
@@ -60,6 +86,7 @@ export class NoteGenerator {
       // 如果有输出窗口，先开始显示这个条目，后续提示和内容都写入当前条目区域
       if (outputWindow) {
         outputWindow.startItem(itemTitle, modelLabel);
+        outputWindow.setOnStopCurrent(cancelCurrentItem);
       }
 
       let requestContent = "";
@@ -114,6 +141,8 @@ export class NoteGenerator {
         }
       }
 
+      ensureNotCanceled();
+
       progressCallback?.("正在生成AI总结...", 40);
 
       // 定义流式输出回调
@@ -130,7 +159,8 @@ export class NoteGenerator {
         requestContent,
         contentMode,
         undefined,
-        onProgress
+        onProgress,
+        cancelSignal,
       );
 
       fullContent = summary; // 确保使用完整内容
@@ -140,6 +170,8 @@ export class NoteGenerator {
       if (outputWindow && !receivedStreamChunk && summary) {
         outputWindow.appendContent(summary);
       }
+
+      ensureNotCanceled();
 
       progressCallback?.("正在创建笔记...", 80);
 
@@ -156,6 +188,14 @@ export class NoteGenerator {
 
       return { note, content: fullContent };
     } catch (error: any) {
+      if (error instanceof AIRequestCanceledError) {
+        ztoolkit.log(`[AiNote] Current item canceled by user: "${itemTitle}"`);
+        if (outputWindow) {
+          outputWindow.stopCurrentItem("已停止当前条目的AI总结，未保存到笔记。");
+        }
+        throw error;
+      }
+
       ztoolkit.log(
         `[AiNote] Error generating note for "${itemTitle}":`,
         error
@@ -281,6 +321,7 @@ export class NoteGenerator {
     const total = items.length;
     let successCount = 0;
     let failedCount = 0;
+    let canceledCount = 0;
     let stopped = false; // 标记是否被用户停止
     let windowClosed = false; // 标记输出窗口是否被关闭
     let allCompleted = false; // 标记是否所有处理已完成
@@ -335,29 +376,39 @@ export class NoteGenerator {
 
           successCount++;
         } catch (error: any) {
-          failedCount++;
-          ztoolkit.log(`[AiNote] Failed to process "${itemTitle}":`, error);
+          if (error instanceof AIRequestCanceledError) {
+            canceledCount++;
+            progressCallback?.(
+              current,
+              total,
+              100,
+              "已停止当前条目的AI总结，继续处理下一条",
+            );
+          } else {
+            failedCount++;
+            ztoolkit.log(`[AiNote] Failed to process "${itemTitle}":`, error);
+          }
         }
       }
 
       // 显示完成消息
       if (stopped) {
         // 如果被停止，显示停止消息和统计
-        const notProcessed = total - successCount - failedCount;
+        const notProcessed = total - successCount - failedCount - canceledCount;
         outputWindow.disableStopButton(true); // 传入 true 表示是停止状态
-        outputWindow.showStopped(successCount, failedCount, notProcessed);
-        progressCallback?.(total, total, 100, `已停止 (已完成 ${successCount} 个，失败 ${failedCount} 个，未处理 ${notProcessed} 个)`);
+        outputWindow.showStopped(successCount, failedCount, notProcessed, canceledCount);
+        progressCallback?.(total, total, 100, `已停止 (已完成 ${successCount} 个，失败 ${failedCount} 个，取消 ${canceledCount} 个，未处理 ${notProcessed} 个)`);
       } else {
         outputWindow.disableStopButton(false); // 传入 false 表示正常完成
-        outputWindow.showComplete(successCount, total);
+        outputWindow.showComplete(successCount, total, canceledCount);
 
         // 通知进度回调完成
-        if (failedCount === 0) {
+        if (failedCount === 0 && canceledCount === 0) {
           progressCallback?.(total, total, 100, "所有条目处理完成");
         } else if (successCount === 0) {
-          progressCallback?.(total, total, 100, "所有条目处理失败");
+          progressCallback?.(total, total, 100, canceledCount > 0 ? "所有条目均已取消或失败" : "所有条目处理失败");
         } else {
-          progressCallback?.(total, total, 100, `${successCount} 个成功，${failedCount} 个失败`);
+          progressCallback?.(total, total, 100, `${successCount} 个成功，${failedCount} 个失败，${canceledCount} 个取消`);
         }
       }
       
