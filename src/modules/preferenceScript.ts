@@ -1,4 +1,5 @@
 import { getPref, setPref, clearPref } from "../utils/prefs";
+import { config } from "../../package.json";
 import {
   createDefaultPromptTemplates,
   createPromptTemplateCopy,
@@ -230,6 +231,7 @@ function initializeDefaultPrefs() {
     promptVersion: 0,
     promptTemplates: serializePromptTemplates(createDefaultPromptTemplates()),
     activePromptTemplateId: getDefaultActivePromptTemplateId(),
+    pinCurrentPromptTemplate: false,
     promptTemplatesVersion: PROMPT_TEMPLATES_VERSION,
   };
 
@@ -313,12 +315,31 @@ function getCurrentPromptTemplateId(): string {
   return getPromptTemplateState().activeTemplateId;
 }
 
+function getPinnedCurrentPromptTemplate(): boolean {
+  return !!getPref("pinCurrentPromptTemplate" as any);
+}
+
 function setCurrentPromptTemplate(templateId: string) {
   setPref("activePromptTemplateId" as any, templateId);
 }
 
+function setPinnedCurrentPromptTemplate(pinned: boolean) {
+  setPref("pinCurrentPromptTemplate" as any, pinned);
+}
+
 function setCurrentProfile(profileId: string) {
   setPref("activeProfileId" as any, profileId);
+}
+
+function notifyPromptTemplateMenuChanged(win: Window) {
+  try {
+    (Zotero as any)[config.addonInstance]?.hooks?.onPrefsEvent?.(
+      "promptTemplatesChanged",
+      { window: win },
+    );
+  } catch (error) {
+    console.error("[AiNote][Prefs] Failed to refresh prompt template menu:", error);
+  }
 }
 
 function isProfileNameUnique(name: string, currentId?: string) {
@@ -578,6 +599,7 @@ function openAddPromptTemplateDialog(win: Window) {
     savePromptTemplateState([...latestTemplates, template], template.id);
     close();
     renderPromptTemplatesUI(win);
+    notifyPromptTemplateMenuChanged(win);
   });
 
   actions.appendChild(cancelBtn);
@@ -625,13 +647,17 @@ function renderPromptTemplatesUI(win: Window) {
   const select = doc.getElementById(
     "ainote-active-prompt-template",
   ) as HTMLSelectElement | null;
+  const pinCheckbox = doc.getElementById(
+    "ainote-pin-current-prompt-template",
+  ) as HTMLInputElement | null;
 
-  if (!list || !select) return;
+  if (!list || !select || !pinCheckbox) return;
 
   const templates = getPromptTemplates();
   const activeId = getCurrentPromptTemplateId();
   const activeTemplate =
     findPromptTemplateById(templates, activeId) || templates[0] || null;
+  pinCheckbox.checked = getPinnedCurrentPromptTemplate();
 
   select.innerHTML = "";
   templates.forEach((template) => {
@@ -764,6 +790,7 @@ function renderPromptTemplateCard(
     status.textContent = "模板已保存";
     status.style.color = "var(--ainote-success)";
     renderPromptTemplatesUI(win);
+    notifyPromptTemplateMenuChanged(win);
   });
   actions.appendChild(saveBtn);
 
@@ -775,6 +802,7 @@ function renderPromptTemplateCard(
     const clone = createPromptTemplateCopy(latest, templates);
     savePromptTemplateState([...templates, clone], clone.id);
     renderPromptTemplatesUI(win);
+    notifyPromptTemplateMenuChanged(win);
   });
   actions.appendChild(cloneBtn);
 
@@ -793,6 +821,7 @@ function renderPromptTemplateCard(
         getDefaultActivePromptTemplateId();
       savePromptTemplateState(nextTemplates, fallbackActiveId);
       renderPromptTemplatesUI(win);
+      notifyPromptTemplateMenuChanged(win);
     });
   }
   actions.appendChild(deleteBtn);
@@ -1705,6 +1734,9 @@ function bindGlobalEvents(win: Window) {
   const activeTemplateSelect = doc.getElementById(
     "ainote-active-prompt-template",
   ) as HTMLSelectElement | null;
+  const pinCurrentTemplateCheckbox = doc.getElementById(
+    "ainote-pin-current-prompt-template",
+  ) as HTMLInputElement | null;
 
   if (addBtn) {
     bindButtonAction(addBtn, () => {
@@ -1731,11 +1763,35 @@ function bindGlobalEvents(win: Window) {
     const syncActiveTemplate = () => {
       setCurrentPromptTemplate(activeTemplateSelect.value || "");
       renderPromptTemplatesUI(win);
+      notifyPromptTemplateMenuChanged(win);
     };
     activeTemplateSelect.addEventListener("change", syncActiveTemplate);
     activeTemplateSelect.addEventListener(
       "command",
       syncActiveTemplate as EventListener,
+    );
+  }
+
+  if (pinCurrentTemplateCheckbox) {
+    const syncPinCurrentTemplate = () => {
+      setPinnedCurrentPromptTemplate(pinCurrentTemplateCheckbox.checked);
+      notifyPromptTemplateMenuChanged(win);
+    };
+    pinCurrentTemplateCheckbox.addEventListener(
+      "click",
+      syncPinCurrentTemplate,
+    );
+    pinCurrentTemplateCheckbox.addEventListener(
+      "input",
+      syncPinCurrentTemplate,
+    );
+    pinCurrentTemplateCheckbox.addEventListener(
+      "change",
+      syncPinCurrentTemplate,
+    );
+    pinCurrentTemplateCheckbox.addEventListener(
+      "command",
+      syncPinCurrentTemplate as EventListener,
     );
   }
 }

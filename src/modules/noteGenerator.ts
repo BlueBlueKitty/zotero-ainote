@@ -6,8 +6,10 @@ import { getPref } from "../utils/prefs";
 import { parseProfiles, ProviderType } from "./llmProfiles";
 import {
   buildSummaryHeading,
+  ensurePromptTemplateState,
   ensureSummaryHeading,
   getActivePromptTemplate,
+  PromptTemplate,
   stripLeadingSummaryHeading,
 } from "../utils/prompts";
 
@@ -23,6 +25,7 @@ const PROVIDER_LABELS: Record<ProviderType, string> = {
 export interface NoteGenerationTarget {
   item: Zotero.Item;
   preferredPdfAttachment?: Zotero.Item;
+  templateId?: string;
 }
 
 export class NoteGenerator {
@@ -94,11 +97,26 @@ export class NoteGenerator {
         throw new Error("请先在设置中创建并激活模型配置");
       }
       const modelLabel = this.getModelLabel(activeProfile);
-      const promptTemplate = getActivePromptTemplate(
-        getPref("promptTemplates" as any),
-        getPref("activePromptTemplateId" as any),
-        getPref("promptTemplatesVersion" as any),
-      );
+      const promptTemplate = target.templateId
+        ? (
+            ensurePromptTemplateState(
+              getPref("promptTemplates" as any),
+              getPref("activePromptTemplateId" as any),
+              getPref("promptTemplatesVersion" as any),
+            ).templates.find(
+              (template: PromptTemplate) => template.id === target.templateId,
+            ) ||
+            getActivePromptTemplate(
+              getPref("promptTemplates" as any),
+              getPref("activePromptTemplateId" as any),
+              getPref("promptTemplatesVersion" as any),
+            )
+          )
+        : getActivePromptTemplate(
+            getPref("promptTemplates" as any),
+            getPref("activePromptTemplateId" as any),
+            getPref("promptTemplatesVersion" as any),
+          );
       const summaryHeading = buildSummaryHeading(promptTemplate.name, itemTitle);
 
       // 如果有输出窗口，先开始显示这个条目，后续提示和内容都写入当前条目区域

@@ -32,6 +32,15 @@
         <html:select id="ainote-active-prompt-template" style="flex: 1; width: 420px;"></html:select>
         <html:button id="ainote-add-prompt-template" type="button" data-l10n-id="ainote-prefs-addPromptTemplate" style="margin-left: 8px;"></html:button>
       </hbox>
+      <hbox align="center" style="margin-top: 8px;">
+        <html:label style="display: inline-flex; align-items: center; gap: 6px; color: inherit;">
+          <html:input id="ainote-pin-current-prompt-template" type="checkbox" />
+          <html:span>固定使用当前提示词模板</html:span>
+        </html:label>
+      </hbox>
+      <html:div style="margin-top: 4px; color: var(--ainote-text-muted); font-size: 12px; line-height: 1.5;">
+        勾选后，右键菜单将不再展开模板二级菜单，而是始终使用上方当前选中的提示词模板进行总结。
+      </html:div>
       <vbox id="ainote-prompt-templates-list" style="width: 100%; margin-top: 8px;"></vbox>
     </vbox>
   </vbox>

@@ -8,10 +8,13 @@ import {
   createDefaultPromptTemplates,
   ensurePromptTemplateState,
   getDefaultActivePromptTemplateId,
+  getActivePromptTemplate,
   PROMPT_TEMPLATES_VERSION,
   serializePromptTemplates,
 } from "./utils/prompts";
 import { createProfile, migrateToProfilesV3, parseProfiles } from "./modules/llmProfiles";
+
+const GENERATE_SUMMARY_MENU_ID = "ainote-generate-summary-menu";
 
 async function onStartup() {
   await Promise.all([
@@ -49,7 +52,7 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   );
 
   // Register context menu item (using ztoolkit for Zotero 7.0)
-  registerContextMenuItem();
+  refreshContextMenuItems();
 
   const popupWin = new ztoolkit.ProgressWindow(addon.data.config.addonName, {
     closeOnClick: true,
@@ -93,6 +96,7 @@ function initializeDefaultPrefsOnStartup() {
     promptVersion: 0,
     promptTemplates: serializePromptTemplates(createDefaultPromptTemplates()),
     activePromptTemplateId: getDefaultActivePromptTemplateId(),
+    pinCurrentPromptTemplate: false,
     promptTemplatesVersion: PROMPT_TEMPLATES_VERSION,
   };
 
@@ -161,23 +165,73 @@ function initializeDefaultPrefsOnStartup() {
 /**
  * Register context menu item for items
  */
-function registerContextMenuItem() {
-  const menuIcon = `chrome://${config.addonRef}/content/icons/favicon.png`;
-  
-  ztoolkit.Menu.register("item", {
-    tag: "menuitem",
+function buildGenerateSummaryMenuOptions(menuIcon: string): any {
+  const state = ensurePromptTemplateState(
+    getPref("promptTemplates" as any),
+    getPref("activePromptTemplateId" as any),
+    getPref("promptTemplatesVersion" as any),
+  );
+  const activeTemplate = getActivePromptTemplate(
+    getPref("promptTemplates" as any),
+    getPref("activePromptTemplateId" as any),
+    getPref("promptTemplatesVersion" as any),
+  );
+  const pinCurrentPromptTemplate = !!getPref("pinCurrentPromptTemplate" as any);
+
+  const getVisibility = () => {
+    const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
+    return (
+      selectedItems?.length > 0 &&
+      selectedItems.every((item: Zotero.Item) => isSupportedSelectionItem(item))
+    ) || false;
+  };
+
+  if (pinCurrentPromptTemplate) {
+    return {
+      tag: "menuitem",
+      id: GENERATE_SUMMARY_MENU_ID,
+      label: getString("menuitem-generateSummary"),
+      icon: menuIcon,
+      commandListener: () => {
+        handleGenerateSummary(activeTemplate.id);
+      },
+      getVisibility,
+    };
+  }
+
+  return {
+    tag: "menu",
+    id: GENERATE_SUMMARY_MENU_ID,
     label: getString("menuitem-generateSummary"),
     icon: menuIcon,
-    commandListener: (ev) => {
-      handleGenerateSummary();
-    },
-    getVisibility: () => {
-      const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
-      return (
-        selectedItems?.length > 0 &&
-        selectedItems.every((item: Zotero.Item) => isSupportedSelectionItem(item))
-      ) || false;
-    },
+    children: state.templates.map((template) => ({
+      tag: "menuitem",
+      id: `${GENERATE_SUMMARY_MENU_ID}-${template.id}`,
+      label:
+        template.id === activeTemplate.id ? `${template.name} ✓` : template.name,
+      commandListener: () => {
+        handleGenerateSummary(template.id);
+      },
+    })),
+    getVisibility,
+  };
+}
+
+function registerContextMenuItemForWindow(win: Window) {
+  const menuIcon = `chrome://${config.addonRef}/content/icons/favicon.png`;
+  const popup = win.document.querySelector("#zotero-itemmenu") as XUL.MenuPopup | null;
+  if (!popup) {
+    return;
+  }
+
+  win.document.getElementById(GENERATE_SUMMARY_MENU_ID)?.remove();
+
+  ztoolkit.Menu.register(popup, buildGenerateSummaryMenuOptions(menuIcon));
+}
+
+function refreshContextMenuItems() {
+  Zotero.getMainWindows().forEach((win) => {
+    registerContextMenuItemForWindow(win);
   });
 }
 
@@ -191,12 +245,13 @@ function isSupportedSelectionItem(item: Zotero.Item): boolean {
 
 async function normalizeSelectionTargets(
   items: Zotero.Item[],
+  templateId?: string,
 ): Promise<NoteGenerationTarget[]> {
   const targets: NoteGenerationTarget[] = [];
 
   for (const item of items) {
     if (item.isRegularItem()) {
-      targets.push({ item });
+      targets.push({ item, templateId });
       continue;
     }
 
@@ -217,6 +272,7 @@ async function normalizeSelectionTargets(
     targets.push({
       item: parentItem,
       preferredPdfAttachment: item,
+      templateId,
     });
   }
 
@@ -226,7 +282,7 @@ async function normalizeSelectionTargets(
 /**
  * Handle generate AI summary command
  */
-async function handleGenerateSummary() {
+async function handleGenerateSummary(templateId?: string) {
   const profilesRaw = Zotero.Prefs.get(`${config.prefsPrefix}.profiles`, true) as string;
   const activeId = (Zotero.Prefs.get(`${config.prefsPrefix}.activeProfileId`, true) as string) || "";
   const profiles = parseProfiles(profilesRaw);
@@ -261,7 +317,7 @@ async function handleGenerateSummary() {
     return;
   }
 
-  const targets = await normalizeSelectionTargets(selectedItems);
+  const targets = await normalizeSelectionTargets(selectedItems, templateId);
 
   if (targets.length === 0) {
     new ztoolkit.ProgressWindow("AiNote", {
@@ -429,8 +485,10 @@ async function onPrefsEvent(type: string, data: { [key: string]: any }) {
     case "load":
       // console.log("[AiNote] Calling registerPrefsScripts");
       registerPrefsScripts(data.window);
+      refreshContextMenuItems();
       break;
     default:
+      refreshContextMenuItems();
       return;
   }
 }
