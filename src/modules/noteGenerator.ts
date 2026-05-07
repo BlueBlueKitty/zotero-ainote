@@ -3,13 +3,34 @@ import { PDFExtractor } from "./pdfExtractor";
 import AIService from "./aiService";
 import { OutputWindow } from "./outputWindow";
 import { getPref } from "../utils/prefs";
-import { parseProfiles } from "./llmProfiles";
+import { parseProfiles, ProviderType } from "./llmProfiles";
+
+const PROVIDER_LABELS: Record<ProviderType, string> = {
+  openai: "OpenAI（Responses 新接口）",
+  azure: "Azure OpenAI",
+  anthropic: "Anthropic Claude",
+  gemini: "Google Gemini",
+  deepseek: "DeepSeek",
+  openai_compatible: "OpenAI 兼容接口（Chat Completions）",
+};
 
 export class NoteGenerator {
   private static getActiveProfile() {
     const profiles = parseProfiles(getPref("profiles"));
     const activeId = String(getPref("activeProfileId") || "").trim();
     return profiles.find((profile) => profile.id === activeId) || profiles[0] || null;
+  }
+
+  private static getProviderLabel(providerType: ProviderType): string {
+    return PROVIDER_LABELS[providerType] || providerType;
+  }
+
+  private static getModelLabel(activeProfile: ReturnType<typeof NoteGenerator.getActiveProfile>): string {
+    const model = String(activeProfile?.model || "").trim();
+    if (!model) {
+      throw new Error("当前活动模型配置缺少模型名称，请先在设置中填写模型名称");
+    }
+    return `${this.getProviderLabel(activeProfile.providerType)} / ${model}`;
   }
 
   /**
@@ -34,10 +55,11 @@ export class NoteGenerator {
       if (!activeProfile) {
         throw new Error("请先在设置中创建并激活模型配置");
       }
+      const modelLabel = this.getModelLabel(activeProfile);
 
       // 如果有输出窗口，先开始显示这个条目，后续提示和内容都写入当前条目区域
       if (outputWindow) {
-        outputWindow.startItem(itemTitle);
+        outputWindow.startItem(itemTitle, modelLabel);
       }
 
       let requestContent = "";
@@ -122,7 +144,7 @@ export class NoteGenerator {
       progressCallback?.("正在创建笔记...", 80);
 
       // 创建笔记并保存内容
-      const noteContent = this.formatNoteContent(itemTitle, fullContent);
+      const noteContent = this.formatNoteContent(itemTitle, modelLabel, fullContent);
       note = await this.createNote(item, noteContent);
 
       // 如果有输出窗口，标记完成
@@ -157,11 +179,13 @@ export class NoteGenerator {
    */
   private static formatNoteContent(
     itemTitle: string,
+    modelLabel: string,
     summary: string
   ): string {
     // 转换为笔记格式
     const htmlContent = this.convertMarkdownToNoteHTML(summary);
     return `<h2>AI 总结 - ${this.escapeHtml(itemTitle)}</h2>
+<p><strong>模型：</strong>${this.escapeHtml(modelLabel)}</p>
 <div>${htmlContent}</div>`;
   }
 

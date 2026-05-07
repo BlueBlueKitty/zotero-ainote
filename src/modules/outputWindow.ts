@@ -313,7 +313,7 @@ export class OutputWindow {
    * 开始新的条目
    * @param itemTitle 条目标题
    */
-  public startItem(itemTitle: string): void {
+  public startItem(itemTitle: string, modelLabel?: string): void {
     if (!this.outputContainer) {
       return;
     }
@@ -353,6 +353,24 @@ export class OutputWindow {
               innerHTML: `📄 AI 总结 - ${this.escapeHtml(itemTitle)}`,
             },
           },
+          ...(modelLabel
+            ? [
+                {
+                  tag: "div",
+                  namespace: "html",
+                  styles: {
+                    margin: "0 0 12px 0",
+                    color: isDark ? "#a8b3bd" : "#6b7280",
+                    fontSize: "12px",
+                    lineHeight: "1.6",
+                    wordBreak: "break-word",
+                  },
+                  properties: {
+                    innerHTML: `模型：${this.escapeHtml(modelLabel)}`,
+                  },
+                },
+              ]
+            : []),
           {
             tag: "div",
             id: `item-content-${Date.now()}`,
