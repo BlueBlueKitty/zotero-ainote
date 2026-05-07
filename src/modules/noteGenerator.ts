@@ -3,8 +3,15 @@ import { PDFExtractor } from "./pdfExtractor";
 import AIService from "./aiService";
 import { OutputWindow } from "./outputWindow";
 import { getPref } from "../utils/prefs";
+import { parseProfiles } from "./llmProfiles";
 
 export class NoteGenerator {
+  private static getActiveProfile() {
+    const profiles = parseProfiles(getPref("profiles"));
+    const activeId = String(getPref("activeProfileId") || "").trim();
+    return profiles.find((profile) => profile.id === activeId) || profiles[0] || null;
+  }
+
   /**
    * Generate AI summary note for a single item
    * @param item Zotero item
@@ -20,50 +27,76 @@ export class NoteGenerator {
     const itemTitle = item.getField("title") as string;
     let note: Zotero.Item | null = null;
     let fullContent = "";
+    let receivedStreamChunk = false;
 
     try {
-      // Update progress
-      progressCallback?.("正在提取PDF文本...", 10);
-
-      // Extract PDF text
-      const fullText = await PDFExtractor.extractTextFromItem(item);
-      const cleanedText = PDFExtractor.cleanText(fullText);
-      
-      // 获取用户配置的截断长度（单位：万字符）
-      const truncateLengthStr = (getPref("truncateLength") as string) || "10";
-      const truncateLengthInWan = parseInt(truncateLengthStr) || 10;
-      const truncateLength = truncateLengthInWan * 10000; // 转换为实际字符数
-      
-      const truncatedText = PDFExtractor.truncateText(cleanedText, truncateLength);
-
-      // 检查文本是否被截断并提示用户
-      if (cleanedText.length > truncateLength) {
-        const truncationMessage = `文献内容过长（${cleanedText.length} 字符），已截断至前 ${truncateLength.toLocaleString()} 字符（${truncateLengthInWan} 万字符）进行处理`;
-        ztoolkit.log(`[AiNote] ${truncationMessage}`);
-        
-        // 在输出窗口显示提示
-        if (outputWindow) {
-          outputWindow.appendContent(`\n\n> **注意**: ${truncationMessage}\n\n`);
-        }
-        
-        // 添加弹出窗口提醒
-        new ztoolkit.ProgressWindow("AiNote - 内容截断提醒", { closeTime: 5000 })
-          .createLine({ text: truncationMessage, type: "fail" })
-          .show();
-        
-        // 进度回调提示
-        progressCallback?.(truncationMessage, 30);
+      const activeProfile = this.getActiveProfile();
+      if (!activeProfile) {
+        throw new Error("请先在设置中创建并激活模型配置");
       }
 
-      progressCallback?.("正在生成AI总结...", 40);
-
-      // 如果有输出窗口，开始显示这个条目
+      // 如果有输出窗口，先开始显示这个条目，后续提示和内容都写入当前条目区域
       if (outputWindow) {
         outputWindow.startItem(itemTitle);
       }
 
+      let requestContent = "";
+      let contentMode: "text" | "pdf-base64" = "text";
+      const modeResolution = AIService.resolvePdfProcessMode(activeProfile);
+      if (modeResolution.fallbackReason) {
+        ztoolkit.log(`[AiNote] ${modeResolution.fallbackReason}`);
+        if (outputWindow) {
+          outputWindow.appendContent(`\n\n> **提示**: ${modeResolution.fallbackReason}\n\n`);
+        }
+      }
+
+      const enablePdfSizeLimit = !!activeProfile.extra?.enablePdfSizeLimit;
+      if (enablePdfSizeLimit) {
+        const maxPdfSizeMB =
+          parseFloat(activeProfile.extra?.maxPdfSizeMB || "50") || 50;
+        const fileSizeMB = await this.getPdfFileSize(item);
+        if (fileSizeMB > maxPdfSizeMB) {
+          throw new Error(
+            `PDF 文件过大（${fileSizeMB.toFixed(1)} MB），超过当前配置限制 ${maxPdfSizeMB} MB`,
+          );
+        }
+      }
+
+      if (modeResolution.actual === "base64") {
+        progressCallback?.("正在读取 PDF 文件...", 10);
+        requestContent = await PDFExtractor.extractBase64FromItem(item);
+        contentMode = "pdf-base64";
+      } else {
+        progressCallback?.("正在提取PDF文本...", 10);
+        const fullText = await PDFExtractor.extractTextFromItem(item);
+        const cleanedText = PDFExtractor.cleanText(fullText);
+
+        const truncateLengthStr =
+          activeProfile.extra?.textTruncateLengthWan ||
+          ((getPref("truncateLength") as string) || "10");
+        const truncateLengthInWan = parseInt(truncateLengthStr) || 10;
+        const truncateLength = truncateLengthInWan * 10000;
+        requestContent = PDFExtractor.truncateText(cleanedText, truncateLength);
+        contentMode = "text";
+
+        if (cleanedText.length > truncateLength) {
+          const truncationMessage = `文献内容过长（${cleanedText.length} 字符），已优先在句号处截断至前 ${truncateLength.toLocaleString()} 字符附近（${truncateLengthInWan} 万字符）进行处理`;
+          ztoolkit.log(`[AiNote] ${truncationMessage}`);
+          if (outputWindow) {
+            outputWindow.appendContent(`\n\n> **注意**: ${truncationMessage}\n\n`);
+          }
+          new ztoolkit.ProgressWindow("AiNote - 内容截断提醒", { closeTime: 5000 })
+            .createLine({ text: truncationMessage, type: "fail" })
+            .show();
+          progressCallback?.(truncationMessage, 30);
+        }
+      }
+
+      progressCallback?.("正在生成AI总结...", 40);
+
       // 定义流式输出回调
       const onProgress = async (chunk: string) => {
+        receivedStreamChunk = true;
         fullContent += chunk;
         if (outputWindow) {
           outputWindow.appendContent(chunk);
@@ -72,12 +105,19 @@ export class NoteGenerator {
 
       // 调用 AI 服务生成总结
       const summary = await AIService.generateSummary(
-        truncatedText,
+        requestContent,
+        contentMode,
         undefined,
         onProgress
       );
 
       fullContent = summary; // 确保使用完整内容
+
+      // 某些 PDF/Base64 请求会直接返回完整结果而不触发增量分片。
+      // 这时需要把最终结果补写到输出窗口，否则窗口会显示“完成”但正文为空。
+      if (outputWindow && !receivedStreamChunk && summary) {
+        outputWindow.appendContent(summary);
+      }
 
       progressCallback?.("正在创建笔记...", 80);
 
@@ -180,6 +220,24 @@ export class NoteGenerator {
     note.addTag("AI-Generated");
     await note.saveTx();
     return note;
+  }
+
+  private static async getPdfFileSize(item: Zotero.Item): Promise<number> {
+    try {
+      const attachments = item.getAttachments();
+      for (const attachmentID of attachments) {
+        const attachment = await Zotero.Items.getAsync(attachmentID);
+        if (attachment.attachmentContentType === "application/pdf") {
+          const pdfPath = await attachment.getFilePathAsync();
+          if (!pdfPath) continue;
+          const fileInfo = await IOUtils.stat(pdfPath);
+          return (fileInfo.size ?? 0) / (1024 * 1024);
+        }
+      }
+      return 0;
+    } catch {
+      return 0;
+    }
   }
 
   /**

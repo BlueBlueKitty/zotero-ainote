@@ -19,7 +19,8 @@ export type LLMModelInfo = {
 };
 
 type LLMRequest = {
-  fullText: string;
+  content: string;
+  contentMode: "text" | "pdf-base64";
   summaryPrompt: string;
   profile: ProviderProfile;
   onProgress?: ProgressCb;
@@ -29,6 +30,7 @@ type LLMClient = {
   generateSummary(req: LLMRequest): Promise<string>;
   listModels(profile: ProviderProfile): Promise<LLMModelInfo[]>;
   testConnection(profile: ProviderProfile): Promise<string>;
+  supportsPdfBase64(profile: ProviderProfile): boolean;
 };
 
 function asNumber(value: string | undefined, fallback: number): number {
@@ -176,13 +178,20 @@ function parseOpenAIResponsesText(data: any): string {
   for (const item of outputs) {
     const contents = Array.isArray(item?.content) ? item.content : [];
     for (const content of contents) {
-      const text =
-        content?.text ||
-        content?.output_text ||
-        content?.content?.[0]?.text ||
-        "";
-      if (typeof text === "string" && text) {
-        collected.push(text);
+      if (typeof content?.text === "string" && content.text) {
+        collected.push(content.text);
+        continue;
+      }
+      if (typeof content?.output_text === "string" && content.output_text) {
+        collected.push(content.output_text);
+        continue;
+      }
+      if (Array.isArray(content?.content)) {
+        for (const nested of content.content) {
+          if (typeof nested?.text === "string" && nested.text) {
+            collected.push(nested.text);
+          }
+        }
       }
     }
   }
@@ -199,6 +208,100 @@ function parseOpenAIResponsesDelta(event: any): string | null {
   return null;
 }
 
+function extractOpenAICompatText(content: any): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (typeof part?.text === "string") return part.text;
+        if (typeof part?.text?.value === "string") return part.text.value;
+        if (typeof part?.content?.[0]?.text === "string") return part.content[0].text;
+        return "";
+      })
+      .join("");
+  }
+  if (typeof content?.text === "string") {
+    return content.text;
+  }
+  if (typeof content?.text?.value === "string") {
+    return content.text.value;
+  }
+  return "";
+}
+
+function parseOpenAICompatDelta(event: any): string | null {
+  const delta = event?.choices?.[0]?.delta?.content;
+  const extracted = extractOpenAICompatText(delta);
+  if (extracted) return extracted;
+  const messageContent = extractOpenAICompatText(event?.message?.content);
+  return messageContent || null;
+}
+
+function parseOpenAICompatText(data: any): string {
+  const choice = data?.choices?.[0];
+  const messageText = extractOpenAICompatText(choice?.message?.content);
+  if (messageText) return messageText;
+  const deltaText = extractOpenAICompatText(choice?.delta?.content);
+  if (deltaText) return deltaText;
+  const directMessage = extractOpenAICompatText(data?.message?.content);
+  if (directMessage) return directMessage;
+  return "";
+}
+
+function extractAnthropicText(data: any): string {
+  const blocks = Array.isArray(data?.content) ? data.content : [];
+  return blocks
+    .map((block: any) => {
+      if (block?.type === "text" && typeof block?.text === "string") {
+        return block.text;
+      }
+      return "";
+    })
+    .join("");
+}
+
+function parseAnthropicDelta(event: any): string | null {
+  if (event?.type === "content_block_delta" && typeof event?.delta?.text === "string") {
+    return event.delta.text;
+  }
+  return null;
+}
+
+function extractGeminiText(json: any): string {
+  try {
+    const cand0 = json?.candidates?.[0];
+    if (!cand0) return "";
+
+    const extractTextFromParts = (parts: any[]): string => {
+      if (!Array.isArray(parts)) return "";
+      return parts
+        .filter((p: any) => !p?.thought)
+        .map((p: any) => p?.text || "")
+        .join("");
+    };
+
+    const deltaParts = cand0?.delta?.content?.parts || cand0?.delta?.parts;
+    if (Array.isArray(deltaParts)) {
+      return extractTextFromParts(deltaParts);
+    }
+
+    const parts = cand0?.content?.parts;
+    if (Array.isArray(parts)) {
+      return extractTextFromParts(parts);
+    }
+
+    const singlePart = cand0?.content?.parts?.[0];
+    if (singlePart?.thought) return "";
+    const text = singlePart?.text || cand0?.text;
+    return typeof text === "string" ? text : "";
+  } catch {
+    return "";
+  }
+}
+
 async function postStream(
   url: string,
   headers: Record<string, string>,
@@ -210,7 +313,7 @@ async function postStream(
   const chunks: string[] = [];
   let delivered = 0;
   let processedLength = 0;
-  let partialLine = "";
+  let pendingText = "";
   let abortError: Error | null = null;
 
   try {
@@ -245,39 +348,52 @@ async function postStream(
           const resp: string = e.target.response || "";
           if (resp.length <= processedLength) return;
 
-          const slice = partialLine + resp.slice(processedLength);
+          pendingText += resp.slice(processedLength);
           processedLength = resp.length;
-          const lines = slice.split(/\r?\n/);
-          const endWithNewline = /[\r\n]$/.test(slice);
-          partialLine = endWithNewline ? "" : lines.pop() || "";
 
-          for (const raw of lines) {
-            let jsonStr = "";
-            if (raw.startsWith("data:")) {
-              jsonStr = raw.replace(/^data:\s*/, "").trim();
-              if (!jsonStr || jsonStr === "[DONE]") continue;
-            } else if (raw.trim().startsWith("{")) {
-              jsonStr = raw.trim();
-            } else {
-              continue;
+          const normalized = pendingText.replace(/\r\n/g, "\n");
+          const events = normalized.split("\n\n");
+          pendingText = events.pop() || "";
+
+          for (const rawEvent of events) {
+            const trimmedEvent = rawEvent.trim();
+            if (!trimmedEvent) continue;
+
+            const lines = trimmedEvent.split("\n");
+            const dataLines: string[] = [];
+            for (const line of lines) {
+              if (line.startsWith("data:")) {
+                dataLines.push(line.replace(/^data:\s*/, ""));
+              } else if (line.trim().startsWith("{")) {
+                dataLines.push(line.trim());
+              }
             }
 
-            try {
-              const json = JSON.parse(jsonStr);
-              const delta = parseChunk(json);
-              if (delta) {
-                chunks.push(delta);
-                const current = chunks.join("");
-                if (current.length > delivered) {
-                  const newChunk = current.slice(delivered);
-                  delivered = current.length;
-                  Promise.resolve(onProgress(newChunk)).catch(() => {
-                    // ignore
-                  });
+            const candidates = dataLines.length
+              ? [dataLines.join("\n"), ...dataLines]
+              : [];
+
+            for (const candidate of candidates) {
+              const jsonStr = candidate.trim();
+              if (!jsonStr || jsonStr === "[DONE]") continue;
+              try {
+                const json = JSON.parse(jsonStr);
+                const delta = parseChunk(json);
+                if (delta) {
+                  chunks.push(delta);
+                  const current = chunks.join("");
+                  if (current.length > delivered) {
+                    const newChunk = current.slice(delivered);
+                    delivered = current.length;
+                    Promise.resolve(onProgress(newChunk)).catch(() => {
+                      // ignore
+                    });
+                  }
                 }
+                break;
+              } catch {
+                // try next candidate shape
               }
-            } catch {
-              // ignore malformed line
             }
           }
         };
@@ -310,6 +426,10 @@ async function postStream(
 }
 
 class OpenAICompatClient implements LLMClient {
+  supportsPdfBase64(_profile: ProviderProfile): boolean {
+    return false;
+  }
+
   protected getHeaders(profile: ProviderProfile): Record<string, string> {
     return {
       "Content-Type": "application/json",
@@ -327,7 +447,7 @@ class OpenAICompatClient implements LLMClient {
   }
 
   async generateSummary(req: LLMRequest): Promise<string> {
-    const { profile, summaryPrompt, fullText, onProgress } = req;
+    const { profile, summaryPrompt, content, onProgress } = req;
     if (!profile.apiKey) throw new Error("API Key 未配置");
     if (!profile.baseUrl) throw new Error("API URL 未配置");
 
@@ -335,7 +455,7 @@ class OpenAICompatClient implements LLMClient {
       model: profile.model,
       messages: [
         { role: "system", content: SYSTEM_ROLE_PROMPT },
-        { role: "user", content: buildUserMessage(summaryPrompt, fullText) },
+        { role: "user", content: buildUserMessage(summaryPrompt, content) },
       ],
     });
 
@@ -349,13 +469,13 @@ class OpenAICompatClient implements LLMClient {
         { ...payload, stream: true },
         timeoutMs,
         onProgress,
-        (json) => json?.choices?.[0]?.delta?.content || json?.message?.content || null,
+        parseOpenAICompatDelta,
       );
       if (text) return text;
     }
 
     const data = await postJson(endpoint, headers, payload, timeoutMs);
-    return data?.choices?.[0]?.message?.content || data?.message?.content || "";
+    return parseOpenAICompatText(data);
   }
 
   async listModels(profile: ProviderProfile): Promise<LLMModelInfo[]> {
@@ -384,12 +504,16 @@ class OpenAICompatClient implements LLMClient {
 }
 
 class OpenAIClient extends OpenAICompatClient {
+  override supportsPdfBase64(_profile: ProviderProfile): boolean {
+    return true;
+  }
+
   protected override getChatEndpoint(profile: ProviderProfile): string {
     return normalizeOpenAIResponsesEndpoint(profile.baseUrl);
   }
 
   async generateSummary(req: LLMRequest): Promise<string> {
-    const { profile, summaryPrompt, fullText, onProgress } = req;
+    const { profile, summaryPrompt, content, contentMode, onProgress } = req;
     if (!profile.apiKey) throw new Error("API Key 未配置");
     if (!profile.baseUrl) throw new Error("API URL 未配置");
 
@@ -402,12 +526,22 @@ class OpenAIClient extends OpenAICompatClient {
         },
         {
           role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: buildUserMessage(summaryPrompt, fullText),
-            },
-          ],
+          content:
+            contentMode === "pdf-base64"
+              ? [
+                  { type: "input_text", text: summaryPrompt },
+                  {
+                    type: "input_file",
+                    filename: "paper.pdf",
+                    file_data: `data:application/pdf;base64,${content}`,
+                  },
+                ]
+              : [
+                  {
+                    type: "input_text",
+                    text: buildUserMessage(summaryPrompt, content),
+                  },
+                ],
         },
       ],
     };
@@ -471,6 +605,9 @@ class OpenAIClient extends OpenAICompatClient {
 class DeepSeekClient extends OpenAICompatClient {}
 
 class AzureOpenAIClient extends OpenAICompatClient {
+  override supportsPdfBase64(_profile: ProviderProfile): boolean {
+    return false;
+  }
   private buildEndpoint(profile: ProviderProfile): string {
     const deployment = profile.extra?.deployment || profile.model;
     if (!deployment) throw new Error("Azure deployment 未配置");
@@ -478,12 +615,18 @@ class AzureOpenAIClient extends OpenAICompatClient {
     const version = profile.apiVersion || "2024-10-21";
     let baseUrl = profile.baseUrl.replace(/\/+$/, "");
     baseUrl = ensureAbsoluteUrl(baseUrl, "接口地址");
+    const versionQuery = `api-version=${encodeURIComponent(version)}`;
+
+    if (/\/chat\/completions/i.test(baseUrl)) {
+      return baseUrl.includes("api-version=")
+        ? baseUrl
+        : `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}${versionQuery}`;
+    }
+
     if (!/\/openai\/deployments/i.test(baseUrl)) {
       baseUrl = `${baseUrl}/openai/deployments`;
     }
-    return /\/chat\/completions/i.test(baseUrl)
-      ? baseUrl
-      : `${baseUrl}/${deployment}/chat/completions?api-version=${encodeURIComponent(version)}`;
+    return `${baseUrl}/${deployment}/chat/completions?${versionQuery}`;
   }
 
   protected override getChatEndpoint(profile: ProviderProfile): string {
@@ -532,8 +675,12 @@ class AzureOpenAIClient extends OpenAICompatClient {
 }
 
 class AnthropicClient implements LLMClient {
+  supportsPdfBase64(_profile: ProviderProfile): boolean {
+    return true;
+  }
+
   async generateSummary(req: LLMRequest): Promise<string> {
-    const { profile, summaryPrompt, fullText, onProgress } = req;
+    const { profile, summaryPrompt, content, contentMode, onProgress } = req;
     if (!profile.apiKey) throw new Error("API Key 未配置");
     if (!profile.baseUrl) throw new Error("API URL 未配置");
 
@@ -545,7 +692,25 @@ class AnthropicClient implements LLMClient {
     const payload = withOptionalAnthropicParams(profile, {
       model: profile.model,
       system: SYSTEM_ROLE_PROMPT,
-      messages: [{ role: "user", content: buildUserMessage(summaryPrompt, fullText) }],
+      messages: [
+        {
+          role: "user",
+          content:
+            contentMode === "pdf-base64"
+              ? [
+                  { type: "text", text: summaryPrompt },
+                  {
+                    type: "document",
+                    source: {
+                      type: "base64",
+                      media_type: "application/pdf",
+                      data: content,
+                    },
+                  },
+                ]
+              : [{ type: "text", text: buildUserMessage(summaryPrompt, content) }],
+        },
+      ],
     });
 
     const headers = {
@@ -563,13 +728,13 @@ class AnthropicClient implements LLMClient {
         { ...payload, stream: true },
         timeoutMs,
         onProgress,
-        (json) => (json?.type === "content_block_delta" ? json?.delta?.text || null : null),
+        parseAnthropicDelta,
       );
       if (text) return text;
     }
 
     const data = await postJson(url, headers, payload, timeoutMs);
-    return data?.content?.[0]?.text || "";
+    return extractAnthropicText(data);
   }
 
   async listModels(profile: ProviderProfile): Promise<LLMModelInfo[]> {
@@ -605,8 +770,12 @@ class AnthropicClient implements LLMClient {
 }
 
 class GeminiClient implements LLMClient {
+  supportsPdfBase64(_profile: ProviderProfile): boolean {
+    return true;
+  }
+
   async generateSummary(req: LLMRequest): Promise<string> {
-    const { profile, summaryPrompt, fullText, onProgress } = req;
+    const { profile, summaryPrompt, content, contentMode, onProgress } = req;
     if (!profile.apiKey) throw new Error("API Key 未配置");
     if (!profile.baseUrl) throw new Error("API URL 未配置");
 
@@ -618,7 +787,26 @@ class GeminiClient implements LLMClient {
     const nonStreamUrl = `${base}/v1beta/models/${model}:generateContent`;
 
     const payload: any = {
-      contents: [{ role: "user", parts: [{ text: `${SYSTEM_ROLE_PROMPT}\n\n${buildUserMessage(summaryPrompt, fullText)}` }] }],
+      contents: [
+        {
+          role: "user",
+          parts:
+            contentMode === "pdf-base64"
+              ? [
+                  { text: summaryPrompt },
+                  {
+                    inlineData: {
+                      mimeType: "application/pdf",
+                      data: content,
+                    },
+                  },
+                ]
+              : [{ text: buildUserMessage(summaryPrompt, content) }],
+        },
+      ],
+      systemInstruction: {
+        parts: [{ text: SYSTEM_ROLE_PROMPT }],
+      },
       generationConfig: withOptionalGeminiParams(profile, {}),
     };
 
@@ -636,13 +824,13 @@ class GeminiClient implements LLMClient {
         payload,
         timeoutMs,
         onProgress,
-        (json) => json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || "").join("") || null,
+        (json) => extractGeminiText(json) || null,
       );
       if (text) return text;
     }
 
     const data = await postJson(nonStreamUrl, headers, payload, timeoutMs);
-    return data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || "").join("") || "";
+    return extractGeminiText(data);
   }
 
   async listModels(profile: ProviderProfile): Promise<LLMModelInfo[]> {
@@ -695,6 +883,10 @@ function getClient(type: ProviderType): LLMClient {
   }
 }
 
+function getRequestedPdfProcessMode(profile: ProviderProfile): "base64" | "text" | "mineru" {
+  return profile.extra?.pdfProcessMode || "base64";
+}
+
 function getActiveProfile(): ProviderProfile {
   const profiles = parseProfiles(getPref("profiles"));
   const activeId = String(getPref("activeProfileId") || "").trim();
@@ -705,7 +897,39 @@ function getActiveProfile(): ProviderProfile {
 }
 
 export class AIService {
-  static async generateSummary(fullText: string, prompt?: string, onProgress?: ProgressCb): Promise<string> {
+  static supportsPdfBase64(profile: ProviderProfile): boolean {
+    return getClient(profile.providerType).supportsPdfBase64(profile);
+  }
+
+  static resolvePdfProcessMode(profile: ProviderProfile): {
+    requested: "base64" | "text" | "mineru";
+    actual: "base64" | "text" | "mineru";
+    fallbackReason?: string;
+  } {
+    const requested = getRequestedPdfProcessMode(profile);
+    if (requested === "mineru") {
+      return {
+        requested,
+        actual: "text",
+        fallbackReason: "MinerU 模式预留中，当前已自动切换为文本模式。",
+      };
+    }
+    if (requested === "base64" && !this.supportsPdfBase64(profile)) {
+      return {
+        requested,
+        actual: "text",
+        fallbackReason: "当前接口不支持 PDF Base64 输入，已自动切换为文本模式。",
+      };
+    }
+    return { requested, actual: requested };
+  }
+
+  static async generateSummary(
+    content: string,
+    contentMode: "text" | "pdf-base64" = "text",
+    prompt?: string,
+    onProgress?: ProgressCb,
+  ): Promise<string> {
     const savedPrompt = getPref("summaryPrompt") as string;
     const summaryPrompt =
       prompt ||
@@ -718,7 +942,8 @@ export class AIService {
     try {
       const client = getClient(profile.providerType);
       const text = await client.generateSummary({
-        fullText,
+        content,
+        contentMode,
         summaryPrompt,
         profile,
         onProgress,

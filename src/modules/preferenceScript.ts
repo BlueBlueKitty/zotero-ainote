@@ -52,6 +52,39 @@ function needsAzureFields(providerType: ProviderType) {
   return providerType === "azure";
 }
 
+function estimateMultimodalSupport(
+  providerType: ProviderType,
+  model: string,
+): "yes" | "no" | "unknown" {
+  const normalized = model.trim().toLowerCase();
+  if (providerType === "gemini") return "yes";
+  if (providerType === "anthropic") return "yes";
+  if (providerType === "openai") {
+    if (/gpt-4o|gpt-4\.1|o1|o3/.test(normalized)) return "yes";
+    return "unknown";
+  }
+  if (providerType === "azure") {
+    if (/gpt-4o|gpt-4\.1/.test(normalized)) return "yes";
+    return "unknown";
+  }
+  if (providerType === "deepseek" || providerType === "openai_compatible") {
+    if (/vision|vl|omni|multimodal/.test(normalized)) return "yes";
+    return "unknown";
+  }
+  return "unknown";
+}
+
+function getModelCapabilityHint(providerType: ProviderType, model: string): string {
+  const support = estimateMultimodalSupport(providerType, model);
+  if (support === "yes") {
+    return "当前模型看起来支持多模态/PDF 输入，适合使用 Base64 模式。";
+  }
+  if (support === "no") {
+    return "当前模型看起来不支持多模态/PDF 输入，建议改用文本模式。";
+  }
+  return "请确认当前模型是否支持多模态/PDF 输入；若不支持，插件会自动回退到文本模式。";
+}
+
 function bindButtonAction(
   element: HTMLElement,
   handler: (event: Event) => void | Promise<void>,
@@ -463,6 +496,67 @@ function renderProfileCard(
     patchProfile({ apiKey: value }),
   );
   renderModelRow(doc, card, profile, patchProfile);
+  addSelectRow(
+    doc,
+    card,
+    "PDF 处理模式",
+    profile.extra?.pdfProcessMode || "base64",
+    [
+      { value: "base64", label: "Base64（默认，直接提交 PDF）" },
+      { value: "text", label: "文本提取后提交" },
+      // { value: "mineru", label: "MinerU（预留）" },
+    ],
+    (value) =>
+      patchProfile({
+        extra: {
+          ...(profile.extra || {}),
+          pdfProcessMode: value as "base64" | "text" | "mineru",
+        },
+      }),
+  );
+  appendHelperText(
+    doc,
+    card,
+    "Base64 模式会直接把 PDF 提交给支持多模态的模型；若当前接口不支持，生成时会自动切换为文本模式。MinerU 模式当前仅预留接口。",
+  );
+
+  if ((profile.extra?.pdfProcessMode || "base64") === "text") {
+    addInputRow(
+      doc,
+      card,
+      "截断字符数（万）",
+      profile.extra?.textTruncateLengthWan || "10",
+      (value) =>
+        patchProfile({
+          extra: {
+            ...(profile.extra || {}),
+            textTruncateLengthWan: value,
+          },
+        }),
+      "number",
+      {
+        helperText:
+          "仅文本模式生效。会优先在句号处截断，再控制在该字符数附近。",
+      },
+    );
+  }
+
+  renderOptionalParamRow(
+    doc,
+    card,
+    "PDF 大小限制（MB）",
+    !!profile.extra?.enablePdfSizeLimit,
+    profile.extra?.maxPdfSizeMB || "50",
+    (checked) =>
+      patchProfile({
+        extra: { ...(profile.extra || {}), enablePdfSizeLimit: checked },
+      }),
+    (value) =>
+      patchProfile({
+        extra: { ...(profile.extra || {}), maxPdfSizeMB: value },
+      }),
+    "开启后会在处理前检查 PDF 文件大小，超过阈值则直接报错停止。",
+  );
 
   if (needsAzureFields(profile.providerType)) {
     addInputRow(doc, card, "Azure API 版本", profile.apiVersion || "", (value) =>
@@ -660,8 +754,7 @@ function renderModelRow(
   row.appendChild(top);
 
   const helper = createHtmlElement(doc, "div");
-  helper.textContent =
-    "可以先手动填写模型，也可以通过“获取模型”从供应商读取可用模型。";
+  helper.textContent = "可以先手动填写模型，也可以通过“获取模型”从供应商读取可用模型。";
   Object.assign(helper.style, {
     marginTop: "6px",
     color: "var(--ainote-text-muted)",
@@ -669,6 +762,19 @@ function renderModelRow(
     lineHeight: "1.5",
   });
   row.appendChild(helper);
+
+  const capabilityHint = createHtmlElement(doc, "div");
+  capabilityHint.textContent = getModelCapabilityHint(
+    profile.providerType,
+    profile.model,
+  );
+  Object.assign(capabilityHint.style, {
+    marginTop: "4px",
+    color: "var(--ainote-text-muted)",
+    fontSize: "12px",
+    lineHeight: "1.5",
+  });
+  row.appendChild(capabilityHint);
 
   const status = createHtmlElement(doc, "div");
   Object.assign(status.style, {

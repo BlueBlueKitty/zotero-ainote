@@ -21,6 +21,10 @@ export interface ProviderProfile {
     enableTemperature?: boolean;
     enableTopP?: boolean;
     enableMaxTokens?: boolean;
+    pdfProcessMode?: "base64" | "text" | "mineru";
+    textTruncateLengthWan?: string;
+    enablePdfSizeLimit?: boolean;
+    maxPdfSizeMB?: string;
   };
   temperature: string;
   topP?: string;
@@ -46,6 +50,10 @@ const DEFAULT_PROFILE: ProviderProfile = {
     enableTemperature: true,
     enableTopP: false,
     enableMaxTokens: false,
+    pdfProcessMode: "base64",
+    textTruncateLengthWan: "10",
+    enablePdfSizeLimit: false,
+    maxPdfSizeMB: "50",
   },
 };
 
@@ -127,6 +135,13 @@ export function normalizeProfile(item: Partial<ProviderProfile>): ProviderProfil
       enableTemperature: extra.enableTemperature !== false,
       enableTopP: !!extra.enableTopP,
       enableMaxTokens: !!extra.enableMaxTokens,
+      pdfProcessMode:
+        extra.pdfProcessMode === "text" || extra.pdfProcessMode === "mineru"
+          ? extra.pdfProcessMode
+          : "base64",
+      textTruncateLengthWan: String(extra.textTruncateLengthWan ?? "10"),
+      enablePdfSizeLimit: !!extra.enablePdfSizeLimit,
+      maxPdfSizeMB: String(extra.maxPdfSizeMB ?? "50"),
     },
   };
 }

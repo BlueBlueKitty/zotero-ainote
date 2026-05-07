@@ -42,6 +42,54 @@ export class PDFExtractor {
     return text;
   }
 
+  public static async extractBase64FromItem(
+    item: Zotero.Item,
+  ): Promise<string> {
+    const attachments = item.getAttachments();
+
+    if (attachments.length === 0) {
+      throw new Error("No attachments found for this item");
+    }
+
+    let pdfAttachment: Zotero.Item | null = null;
+    for (const attachmentID of attachments) {
+      const attachment = await Zotero.Items.getAsync(attachmentID);
+      if (attachment.attachmentContentType === "application/pdf") {
+        pdfAttachment = attachment;
+        break;
+      }
+    }
+
+    if (!pdfAttachment) {
+      throw new Error("No PDF attachment found for this item");
+    }
+
+    const pdfPath = await pdfAttachment.getFilePathAsync();
+    if (!pdfPath) {
+      throw new Error("Failed to get PDF file path");
+    }
+
+    try {
+      const pdfData = await Zotero.File.getBinaryContentsAsync(pdfPath);
+      if (!pdfData || pdfData.length === 0) {
+        throw new Error("PDF file is empty or cannot be read");
+      }
+
+      const bytes = new Uint8Array(pdfData.length);
+      for (let i = 0; i < pdfData.length; i++) {
+        bytes[i] = pdfData.charCodeAt(i);
+      }
+
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    } catch (error: any) {
+      throw new Error(`Failed to read or encode PDF: ${error.message}`);
+    }
+  }
+
   /**
    * Extract text from PDF attachment
    * @param pdfAttachment PDF attachment item
