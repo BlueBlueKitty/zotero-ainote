@@ -14,6 +14,7 @@ function initLocale() {
   )([
     `${config.addonRef}-addon.ftl`,
     `${config.addonRef}-mainWindow.ftl`,
+    `${config.addonRef}-preferences.ftl`,
   ], true);
   addon.data.locale = {
     current: l10n,
@@ -69,16 +70,18 @@ function _getString(
 ): string {
   const localStringWithPrefix = `${config.addonRef}-${localeString}`;
   const { branch, args } = options;
+  const locale = ensureLocaleInstance();
+  const safeArgs = normalizeFluentArgs(args);
   
   // 构建系统会自动添加前缀，所以我们优先查找带前缀的版本
-  const [patternPrefixed] = addon.data.locale?.current.formatMessagesSync([
-    { id: localStringWithPrefix, args },
+  const [patternPrefixed] = locale?.formatMessagesSync([
+    { id: localStringWithPrefix, args: safeArgs },
   ]) || [];
   
   // 如果带前缀的没找到，尝试不带前缀的（向后兼容）
   const [patternRaw] = (!patternPrefixed?.value) 
-    ? (addon.data.locale?.current.formatMessagesSync([
-        { id: localeString as string, args },
+    ? (locale?.formatMessagesSync([
+        { id: localeString as string, args: safeArgs },
       ]) || [])
     : [];
   
@@ -93,7 +96,7 @@ function _getString(
         return attr.value;
       }
     }
-    return pattern.attributes[branch] || localStringWithPrefix;
+    return localStringWithPrefix;
   } else {
     return pattern.value || localStringWithPrefix;
   }
@@ -101,4 +104,56 @@ function _getString(
 
 function getLocaleID(id: FluentMessageId) {
   return `${config.addonRef}-${id}`;
+}
+
+function ensureLocaleInstance() {
+  const addonData = (globalThis as typeof globalThis & {
+    addon?: { data?: { locale?: { current?: Localization } } };
+  }).addon?.data;
+  if (addonData?.locale?.current) {
+    return addonData.locale.current;
+  }
+
+  try {
+    const LocalizationCtor =
+      typeof Localization === "undefined"
+        ? ztoolkit.getGlobal("Localization")
+        : Localization;
+    if (!LocalizationCtor) {
+      return undefined;
+    }
+    const locale = new LocalizationCtor(
+      [
+        `${config.addonRef}-addon.ftl`,
+        `${config.addonRef}-mainWindow.ftl`,
+        `${config.addonRef}-preferences.ftl`,
+      ],
+      true,
+    );
+    if (addonData) {
+      addonData.locale = { current: locale };
+    }
+    return locale;
+  } catch (_error) {
+    return undefined;
+  }
+}
+
+function normalizeFluentArgs(args?: Record<string, unknown>) {
+  if (!args) {
+    return undefined;
+  }
+  const normalized: Record<string, string | number | null> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      value === null
+    ) {
+      normalized[key] = value;
+      continue;
+    }
+    normalized[key] = value == null ? null : String(value);
+  }
+  return normalized;
 }

@@ -1,3 +1,6 @@
+import { getString } from "../utils/locale";
+import { runtimeT } from "../utils/runtimeLocale";
+
 export type NoteFormatActionType =
   | "fix-math"
   | "downgrade-headings"
@@ -61,23 +64,55 @@ const SHOW_TEXT = 0x4;
 export const NOTE_FORMAT_ACTIONS: NoteFormatActionDefinition[] = [
   {
     id: "fix-math",
-    label: "公式自动修复",
-    description: "修复常见 Markdown/LaTeX 公式为 Zotero 可渲染格式",
+    label: runtimeT({
+      "en-US": "Fix Math Formulas",
+      "zh-CN": "公式自动修复",
+      "zh-TW": "公式自動修復",
+    }),
+    description: runtimeT({
+      "en-US": "Fix common Markdown/LaTeX formulas to Zotero-renderable format",
+      "zh-CN": "修复常见 Markdown/LaTeX 公式为 Zotero 可渲染格式",
+      "zh-TW": "修復常見 Markdown/LaTeX 公式為 Zotero 可渲染格式",
+    }),
   },
   {
     id: "downgrade-headings",
-    label: "降级所有标题",
-    description: "将 h1-h6 标题整体降一级，h6 保持不变",
+    label: runtimeT({
+      "en-US": "Downgrade All Headings",
+      "zh-CN": "降级所有标题",
+      "zh-TW": "降級所有標題",
+    }),
+    description: runtimeT({
+      "en-US": "Downgrade h1-h6 headings by one level, h6 remains unchanged",
+      "zh-CN": "将 h1-h6 标题整体降一级，h6 保持不变",
+      "zh-TW": "將 h1-h6 標題整體降一級，h6 保持不變",
+    }),
   },
   {
     id: "upgrade-headings",
-    label: "升级所有标题",
-    description: "将 h1-h6 标题整体升一级，h1 保持不变",
+    label: runtimeT({
+      "en-US": "Upgrade All Headings",
+      "zh-CN": "升级所有标题",
+      "zh-TW": "升級所有標題",
+    }),
+    description: runtimeT({
+      "en-US": "Upgrade h1-h6 headings by one level, h1 remains unchanged",
+      "zh-CN": "将 h1-h6 标题整体升一级，h1 保持不变",
+      "zh-TW": "將 h1-h6 標題整體升一級，h1 保持不變",
+    }),
   },
   {
     id: "remove-extra-line-breaks",
-    label: "删除多余换行",
-    description: "清理空段落、多余 br 和常见列表断行",
+    label: runtimeT({
+      "en-US": "Remove Extra Line Breaks",
+      "zh-CN": "删除多余换行",
+      "zh-TW": "刪除多餘換行",
+    }),
+    description: runtimeT({
+      "en-US": "Clean empty paragraphs, extra br tags, and broken list lines",
+      "zh-CN": "清理空段落、多余 br 和常见列表断行",
+      "zh-TW": "清理空段落、多餘 br 和常見列表斷行",
+    }),
   },
 ];
 
@@ -93,7 +128,7 @@ export async function formatSelectedNote(
   });
 
   if (isNoteHtmlEmpty(originalNoteHtml)) {
-    const message = "笔记内容为空，未执行修改";
+    const message = getString("note-format-empty-note");
     showResultNotification(message, "warning");
     return {
       html: originalNoteHtml,
@@ -135,7 +170,7 @@ export async function formatSelectedNote(
     } catch (rollbackError) {
       ztoolkit.log(`${LOG_PREFIX} 回滚失败`, rollbackError);
     }
-    showResultNotification("笔记格式调整失败，已尝试回滚原始内容", "error");
+    showResultNotification(getString("note-format-error"), "error");
     throw error;
   }
 }
@@ -155,7 +190,9 @@ export function applyNoteFormatAction(
       return removeExtraLineBreaks(noteHtml);
     default: {
       const exhaustiveCheck: never = actionType;
-      throw new Error(`未知的笔记格式化操作: ${exhaustiveCheck}`);
+      throw new Error(
+        `${getString("note-format-unknown-action", { args: { action: String(exhaustiveCheck) } })}`,
+      );
     }
   }
 }
@@ -178,15 +215,28 @@ export function fixMathInNoteHtml(noteHtml: string): NoteFormatResult {
   const html = serializeDocumentBody(doc);
   const changed = html !== noteHtml;
   const totalFixed = stats.inlineFixed + stats.blockFixed;
-  const summaryParts = [
-    `修复行内公式 ${stats.inlineFixed} 处`,
-    `修复块级公式 ${stats.blockFixed} 处`,
-  ];
+  const summaryParts: string[] = [];
+
+  if (totalFixed > 0) {
+    summaryParts.push(
+      getString("note-format-result-fix-math", {
+        args: { inline: String(stats.inlineFixed), block: String(stats.blockFixed) },
+      }),
+    );
+  }
   if (stats.riskySkipped > 0) {
-    summaryParts.push(`跳过疑似风险片段 ${stats.riskySkipped} 处`);
+    summaryParts.push(
+      getString("note-format-result-fix-math-risky", {
+        args: { count: String(stats.riskySkipped) },
+      }),
+    );
   }
   if (stats.unsupportedWarnings > 0) {
-    summaryParts.push(`发现未支持环境 ${stats.unsupportedWarnings} 处`);
+    summaryParts.push(
+      getString("note-format-result-fix-math-unsupported", {
+        args: { count: String(stats.unsupportedWarnings) },
+      }),
+    );
   }
 
   return {
@@ -194,11 +244,9 @@ export function fixMathInNoteHtml(noteHtml: string): NoteFormatResult {
     changed,
     stats: { ...stats },
     warnings,
-    message: changed
-      ? `公式自动修复完成：${summaryParts.join("，")}`
-      : totalFixed === 0
-        ? "未检测到可安全修复的公式"
-        : `公式自动修复完成：${summaryParts.join("，")}`,
+    message: changed || totalFixed > 0
+      ? summaryParts.join("，")
+      : getString("note-format-no-fixable-formula"),
   };
 }
 
@@ -226,11 +274,6 @@ export function removeExtraLineBreaks(noteHtml: string): NoteFormatResult {
 
   const html = serializeDocumentBody(doc);
   const changed = html !== noteHtml;
-  const summary = [
-    `删除空块 ${stats.removedEmptyBlocks} 个`,
-    `合并断行 ${stats.mergedParagraphs} 处`,
-    `清理多余 br ${stats.removedBreaks} 个`,
-  ];
 
   return {
     html,
@@ -238,8 +281,14 @@ export function removeExtraLineBreaks(noteHtml: string): NoteFormatResult {
     stats: { ...stats },
     warnings: [],
     message: changed
-      ? `删除多余换行完成：${summary.join("，")}`
-      : "未检测到可清理的多余换行",
+      ? getString("note-format-result-remove-line-breaks", {
+          args: {
+            count: String(stats.removedEmptyBlocks),
+            merged: String(stats.mergedParagraphs),
+            breaks: String(stats.removedBreaks),
+          },
+        })
+      : getString("note-format-no-cleanable-breaks"),
   };
 }
 
@@ -263,7 +312,7 @@ function transformHeadings(
       changed: false,
       stats: { ...stats },
       warnings: [],
-      message: "未检测到标题",
+      message: getString("note-format-no-headings"),
     };
   }
 
@@ -297,8 +346,12 @@ function transformHeadings(
     warnings: [],
     message:
       direction === "down"
-        ? `标题降级完成：共处理 ${stats.changedHeadings} 个标题`
-        : `标题升级完成：共处理 ${stats.changedHeadings} 个标题`,
+        ? getString("note-format-result-downgrade-headings", {
+            args: { count: String(stats.changedHeadings) },
+          })
+        : getString("note-format-result-upgrade-headings", {
+            args: { count: String(stats.changedHeadings) },
+          }),
   };
 }
 
@@ -823,7 +876,7 @@ function mergeAdjacentTextSegments(segments: TextSegment[]): TextSegment[] {
 function getSingleSelectedNote(): Zotero.Item {
   const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
   if (selectedItems.length !== 1 || !selectedItems[0].isNote()) {
-    throw new Error("请先选中一条 Zotero 笔记");
+    throw new Error(getString("note-format-please-select-note"));
   }
   return selectedItems[0];
 }
@@ -833,7 +886,9 @@ function getNoteFormatAction(
 ): NoteFormatActionDefinition {
   const action = NOTE_FORMAT_ACTIONS.find((item) => item.id === actionType);
   if (!action) {
-    throw new Error(`未找到笔记格式化操作: ${actionType}`);
+    throw new Error(
+      getString("note-format-unknown-action", { args: { action: actionType } }),
+    );
   }
   return action;
 }
@@ -955,14 +1010,14 @@ function isHtmlElement(
 
 function getDocumentBody(doc: Document): HTMLElement {
   if (!doc.body) {
-    throw new Error("无法解析笔记 HTML 内容");
+    throw new Error("Failed to parse note HTML content");
   }
   return doc.body as HTMLElement;
 }
 
 function getOwnerDocument(node: Node): Document {
   if (!node.ownerDocument) {
-    throw new Error("当前节点缺少 ownerDocument");
+    throw new Error("Current node has no ownerDocument");
   }
   return node.ownerDocument;
 }

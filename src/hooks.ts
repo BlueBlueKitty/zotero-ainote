@@ -226,10 +226,7 @@ function buildGenerateSummaryMenuOptions(menuIcon: string): any {
     children: state.templates.map((template) => ({
       tag: "menuitem",
       id: `${GENERATE_SUMMARY_MENU_ID}-${template.id}`,
-      label:
-        template.id === activeTemplate.id
-          ? `${template.name} ✓`
-          : template.name,
+      label: template.name,
       commandListener: () => {
         handleGenerateSummary(template.id);
       },
@@ -278,7 +275,7 @@ function buildNoteFormatMenuOptions(menuIcon: string): any {
   return {
     tag: "menu",
     id: NOTE_FORMAT_MENU_ID,
-    label: "笔记格式调整",
+    label: getString("note-format-menu"),
     icon: menuIcon,
     children: NOTE_FORMAT_ACTIONS.map((action) => ({
       tag: "menuitem",
@@ -350,13 +347,13 @@ async function handleGenerateSummary(templateId?: string) {
   const profiles = parseProfiles(profilesRaw);
   const activeProfile = profiles.find((p) => p.id === activeId) || profiles[0];
 
-  if (!activeProfile || !activeProfile.enabled || !activeProfile.apiKey) {
+    if (!activeProfile || !activeProfile.enabled || !activeProfile.apiKey) {
     new ztoolkit.ProgressWindow("AiNote", {
       closeOnClick: true,
       closeTime: 5000,
     })
       .createLine({
-        text: "请先在设置中创建并激活模型配置",
+        text: getString("error-noApiKey"),
         type: "error",
       })
       .show();
@@ -372,7 +369,7 @@ async function handleGenerateSummary(templateId?: string) {
       closeTime: 3000,
     })
       .createLine({
-        text: "请先选择要处理的条目",
+        text: getString("error-noItemsSelected"),
         type: "error",
       })
       .show();
@@ -387,7 +384,7 @@ async function handleGenerateSummary(templateId?: string) {
       closeTime: 3000,
     })
       .createLine({
-        text: "请选择文献条目或其下的 PDF 附件",
+        text: getString("error-noSupportedItems"),
         type: "error",
       })
       .show();
@@ -433,7 +430,7 @@ async function handleGenerateSummary(templateId?: string) {
             });
 
             progressWin.changeLine({
-              text: `${mainText} - 失败`,
+              text: `${mainText} - ${getString("progress-failed")}`,
               type: "error",
               progress: overallProgress,
             });
@@ -442,7 +439,7 @@ async function handleGenerateSummary(templateId?: string) {
             setTimeout(() => {
               if (current < total) {
                 progressWin.changeLine({
-                  text: `继续处理下一个条目...`,
+                  text: getString("progress-continue-next"),
                   type: "default",
                   progress: overallProgress,
                 });
@@ -465,13 +462,13 @@ async function handleGenerateSummary(templateId?: string) {
           // 显示最终统计
           if (failedCount === 0) {
             progressWin.changeLine({
-              text: `✓ 所有 ${total} 个条目处理完成！`,
+              text: getString("success-allCompleteDetailed", { args: { total: String(total) } }),
               type: "success",
               progress: 100,
             });
           } else {
             progressWin.changeLine({
-              text: `完成: ${successCount} 个成功, ${failedCount} 个失败`,
+              text: getString("success-partialComplete", { args: { success: String(successCount), failed: String(failedCount) } }),
               type: failedCount === total ? "error" : "default",
               progress: 100,
             });
@@ -524,7 +521,7 @@ async function handleNoteFormatAction(actionType: NoteFormatActionType) {
         closeTime: 3000,
       })
         .createLine({
-          text: "请先选中一条 Zotero 笔记",
+          text: getString("note-format-please-select-note"),
           type: "error",
         })
         .show();
@@ -539,7 +536,7 @@ async function handleNoteFormatAction(actionType: NoteFormatActionType) {
       closeTime: 5000,
     })
       .createLine({
-        text: `执行笔记格式调整失败：${error?.message || "未知错误"}`,
+        text: `${getString("note-format-error")}：${error?.message || ""}`,
         type: "error",
       })
       .show();

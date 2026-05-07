@@ -14,12 +14,12 @@ import {
 } from "../utils/prompts";
 
 const PROVIDER_LABELS: Record<ProviderType, string> = {
-  openai: "OpenAI（Responses 新接口）",
   azure: "Azure OpenAI",
   anthropic: "Anthropic Claude",
   gemini: "Google Gemini",
   deepseek: "DeepSeek",
-  openai_compatible: "OpenAI 兼容接口（Chat Completions）",
+  openai_compatible: "OpenAI [Chat Completions 接口]",
+  openai: "OpenAI [Responses 接口]",
 };
 
 export interface NoteGenerationTarget {
@@ -201,7 +201,7 @@ export class NoteGenerator {
       const summary = await AIService.generateSummary(
         requestContent,
         contentMode,
-        undefined,
+        promptTemplate.content,
         onProgress,
         cancelSignal,
       );

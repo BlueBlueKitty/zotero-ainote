@@ -5,6 +5,7 @@ import {
   showSectionActionResult,
   writeCurrentNoteHtml,
 } from "./noteEditorAdapter";
+import { getString } from "../utils/locale";
 
 export type NoteSectionActionType =
   | "section-upgrade-heading"
@@ -65,7 +66,7 @@ export async function runNoteSectionAction(
 ): Promise<NoteSectionActionResult> {
   const originalHtml = readCurrentNoteHtml(context.noteItem);
   if (isNoteHtmlEmpty(originalHtml)) {
-    const message = "笔记内容为空，未执行修改";
+    const message = getString("note-section-empty-note");
     showSectionActionResult(message, "warning");
     return createUnchangedResult(originalHtml, message);
   }
@@ -74,7 +75,7 @@ export async function runNoteSectionAction(
     getHeadingFromContextEvent(context.lastContextMenuEvent) ||
     getHeadingFromSelection(context.editorRoot);
   if (!editorHeading) {
-    const message = "请先将光标放在一个标题中。";
+    const message = getString("note-section-request-place-cursor");
     showSectionActionResult(message, "warning");
     return createUnchangedResult(originalHtml, message);
   }
@@ -88,7 +89,7 @@ export async function runNoteSectionAction(
     editorHeading,
   );
   if (!htmlHeading || !isHeadingNode(htmlHeading)) {
-    const message = "未能定位当前标题，请重试。";
+    const message = getString("note-section-heading-not-found");
     showSectionActionResult(message, "error");
     return createUnchangedResult(originalHtml, message);
   }
@@ -115,7 +116,7 @@ export async function runNoteSectionAction(
     };
   } catch (error: any) {
     ztoolkit.log(`${LOG_PREFIX} 写回失败`, error);
-    showSectionActionResult("章节操作失败，已尝试回滚原始内容", "error");
+    showSectionActionResult(getString("note-section-rollback-error"), "error");
     throw error;
   }
 }
@@ -132,7 +133,7 @@ export function applyNoteSectionActionToHtml(
   const headings = getHeadingNodes(noteRoot);
   const headingEl = headings[headingIndex];
   if (!headingEl) {
-    return createUnchangedResult(noteHtml, "未检测到标题");
+    return createUnchangedResult(noteHtml, getString("note-format-no-headings"));
   }
 
   const fakeContext = {
@@ -229,7 +230,9 @@ function applySectionAction(
       return deleteCurrentSection(body, headingEl, context, options);
     default: {
       const exhaustiveCheck: never = action;
-      throw new Error(`未知的章节操作: ${exhaustiveCheck}`);
+      throw new Error(
+        getString("note-format-unknown-action", { args: { action: String(exhaustiveCheck) } }),
+      );
     }
   }
 }
@@ -268,8 +271,8 @@ function transformCurrentSectionHeadings(
     return createUnchangedResult(
       serializeNoteHtml(root),
       direction === "up"
-        ? "当前章节标题已无法继续升级"
-        : "当前章节标题已无法继续降级",
+        ? getString("note-section-cant-upgrade")
+        : getString("note-section-cant-downgrade"),
       { changedHeadings: 0 },
     );
   }
@@ -281,8 +284,8 @@ function transformCurrentSectionHeadings(
     warnings: [],
     message:
       direction === "up"
-        ? `当前章节标题升级完成：共处理 ${changedHeadings} 个标题`
-        : `当前章节标题降级完成：共处理 ${changedHeadings} 个标题`,
+        ? getString("note-section-upgraded", { args: { count: String(changedHeadings) } })
+        : getString("note-section-downgraded", { args: { count: String(changedHeadings) } }),
   };
 }
 
@@ -297,7 +300,7 @@ function adjustCurrentSectionNumber(
   if (!currentHeadingNumber.matched) {
     return createUnchangedResult(
       serializeNoteHtml(root),
-      "当前标题未检测到可调整的数字序号",
+      getString("note-section-no-number"),
     );
   }
 
@@ -306,7 +309,7 @@ function adjustCurrentSectionNumber(
   if (delta === -1 && nextParts[lastIndex] <= 1) {
     return createUnchangedResult(
       serializeNoteHtml(root),
-      "当前标题序号已为 1，不能继续减少。",
+      getString("note-section-number-min"),
     );
   }
   nextParts[lastIndex] += delta;
@@ -365,12 +368,12 @@ function adjustCurrentSectionNumber(
   if (changedHeadings === 0) {
     return createUnchangedResult(
       serializeNoteHtml(root),
-      "未检测到可更新的标题序号",
+      getString("note-section-no-number"),
     );
   }
 
   if (hasPotentialNumberConflict(root, section.heading, oldPrefix, newPrefix)) {
-    warnings.push("当前操作可能造成标题编号重复，请检查后续标题编号。");
+    warnings.push(getString("note-section-number-duplicate-warning"));
   }
 
   return {
@@ -380,8 +383,8 @@ function adjustCurrentSectionNumber(
     warnings,
     message:
       delta > 0
-        ? `当前章节序号 +1 完成：共更新 ${changedHeadings} 个标题`
-        : `当前章节序号 -1 完成：共更新 ${changedHeadings} 个标题`,
+        ? getString("note-section-number-increased")
+        : getString("note-section-number-decreased"),
   };
 }
 
@@ -393,17 +396,23 @@ function deleteCurrentSection(
 ): NoteSectionActionResult {
   const section = getCurrentHeadingSection(root, headingEl);
   if (!section.sectionNodes.length) {
-    return createUnchangedResult(serializeNoteHtml(root), "未检测到可删除的章节内容");
+    return createUnchangedResult(
+      serializeNoteHtml(root),
+      getString("note-section-no-deletable-content"),
+    );
   }
 
   const confirmed = options.skipDeleteConfirm
     ? true
     : confirmDeleteCurrentSection(
         context.editorWindow,
-        "确认删除当前章节吗？\n这将删除当前标题及其下级内容。",
+        getString("note-section-delete-confirm"),
       );
   if (!confirmed) {
-    return createUnchangedResult(serializeNoteHtml(root), "已取消删除当前章节");
+    return createUnchangedResult(
+      serializeNoteHtml(root),
+      getString("note-section-delete-cancelled"),
+    );
   }
 
   const removedCount = section.sectionNodes.length;
@@ -416,7 +425,9 @@ function deleteCurrentSection(
     changed: true,
     stats: { removedNodes: removedCount },
     warnings: [],
-    message: `已删除当前章节，共删除 ${removedCount} 个节点。`,
+    message: getString("note-section-deleted", {
+      args: { count: String(removedCount) },
+    }),
   };
 }
 

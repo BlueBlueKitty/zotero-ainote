@@ -13,9 +13,9 @@
     <html:button id="ainote-toggle-profiles-section" type="button" data-l10n-id="ainote-prefs-modelSection" style="width: 100%; text-align: left;"></html:button>
     <vbox id="ainote-profiles-section" style="width: 100%; margin-top: 8px;">
       <hbox align="center">
-        <label value="当前配置：" />
+        <label data-l10n-id="prefs-active-profile" />
         <html:select id="ainote-active-profile" style="flex: 1; width: 420px;"></html:select>
-        <html:button id="ainote-add-profile" type="button" style="margin-left: 8px;">新增配置</html:button>
+        <html:button id="ainote-add-profile" type="button" data-l10n-id="prefs-add-profile" style="margin-left: 8px;"></html:button>
       </hbox>
 
       <vbox id="ainote-profiles-list" style="width: 100%; margin-top: 8px;"></vbox>
@@ -35,12 +35,10 @@
       <hbox align="center" style="margin-top: 8px;">
         <html:label style="display: inline-flex; align-items: center; gap: 6px; color: inherit;">
           <html:input id="ainote-pin-current-prompt-template" type="checkbox" />
-          <html:span>固定使用当前提示词模板</html:span>
+          <html:span data-l10n-id="prefs-pin-current-template"></html:span>
         </html:label>
       </hbox>
-      <html:div style="margin-top: 4px; color: var(--ainote-text-muted); font-size: 12px; line-height: 1.5;">
-        勾选后，右键菜单将不再展开模板二级菜单，而是始终使用上方当前选中的提示词模板进行总结。
-      </html:div>
+      <html:div data-l10n-id="prefs-pin-current-template-hint" style="margin-top: 4px; color: var(--ainote-text-muted); font-size: 12px; line-height: 1.5;"></html:div>
       <vbox id="ainote-prompt-templates-list" style="width: 100%; margin-top: 8px;"></vbox>
     </vbox>
   </vbox>

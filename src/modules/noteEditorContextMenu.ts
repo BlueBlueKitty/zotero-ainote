@@ -12,6 +12,8 @@ import {
   NoteSectionActionType,
   runNoteSectionAction,
 } from "./noteSectionActions";
+import { getString } from "../utils/locale";
+import { runtimeT } from "../utils/runtimeLocale";
 
 const LOG_PREFIX = "[AiNote][NoteEditorContextMenu]";
 const CUSTOM_MENU_ID = "ainote-note-section-context-menu";
@@ -30,11 +32,46 @@ interface WindowMenuState {
 }
 
 const MENU_ACTIONS: MenuActionDefinition[] = [
-  { id: "section-upgrade-heading", label: "当前章节标题升级" },
-  { id: "section-downgrade-heading", label: "当前章节标题降级" },
-  { id: "section-increase-number", label: "当前章节序号 +1" },
-  { id: "section-decrease-number", label: "当前章节序号 -1" },
-  { id: "section-delete", label: "删除当前章节" },
+  {
+    id: "section-upgrade-heading",
+    label: runtimeT({
+      "en-US": "Upgrade Current Heading",
+      "zh-CN": "当前章节标题升级",
+      "zh-TW": "目前章節標題升級",
+    }),
+  },
+  {
+    id: "section-downgrade-heading",
+    label: runtimeT({
+      "en-US": "Downgrade Current Heading",
+      "zh-CN": "当前章节标题降级",
+      "zh-TW": "目前章節標題降級",
+    }),
+  },
+  {
+    id: "section-increase-number",
+    label: runtimeT({
+      "en-US": "Increase Section Number",
+      "zh-CN": "当前章节序号 +1",
+      "zh-TW": "目前章節序號 +1",
+    }),
+  },
+  {
+    id: "section-decrease-number",
+    label: runtimeT({
+      "en-US": "Decrease Section Number",
+      "zh-CN": "当前章节序号 -1",
+      "zh-TW": "目前章節序號 -1",
+    }),
+  },
+  {
+    id: "section-delete",
+    label: runtimeT({
+      "en-US": "Delete Current Section",
+      "zh-CN": "删除当前章节",
+      "zh-TW": "刪除目前章節",
+    }),
+  },
 ];
 
 const windowStateStore = new WeakMap<Window, WindowMenuState>();
@@ -272,18 +309,20 @@ async function executeSectionAction(
   try {
     const context = getActiveNoteEditorContext(editorInstance);
     if (!context) {
-      showSectionActionResult("未找到当前正在编辑的笔记", "error");
+      showSectionActionResult(getString("note-section-no-editor-context"), "error");
       return;
     }
     if (!findClosestHeading(context.lastContextMenuEvent?.target as Node | null)) {
-      showSectionActionResult("请先将光标放在一个标题中。", "warning");
+      showSectionActionResult(getString("note-section-request-place-cursor"), "warning");
       return;
     }
     await runNoteSectionAction(action, context);
   } catch (error: any) {
     ztoolkit.log(`${LOG_PREFIX} 执行章节操作失败`, error);
     showSectionActionResult(
-      `执行章节操作失败：${error?.message || "未知错误"}`,
+      getString("note-section-error", {
+        args: { message: error?.message || "" },
+      }),
       "error",
     );
   }

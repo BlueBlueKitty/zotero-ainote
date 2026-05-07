@@ -22,14 +22,24 @@ import {
   parseProfiles,
   providerDefaults,
 } from "./llmProfiles";
+import { runtimeT } from "../utils/runtimeLocale";
+import { getString } from "../utils/locale";
 
 const PROVIDER_OPTIONS: Array<{ value: ProviderType; label: string }> = [
-  { value: "openai", label: "OpenAI（Responses 新接口）" },
-  { value: "azure", label: "Azure OpenAI" },
-  { value: "anthropic", label: "Anthropic Claude" },
-  { value: "gemini", label: "Google Gemini" },
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "openai_compatible", label: "OpenAI 兼容接口（Chat Completions）" },
+  { value: "azure", label: runtimeT({ "en-US": "Azure OpenAI", "zh-CN": "Azure OpenAI", "zh-TW": "Azure OpenAI" }) },
+  { value: "anthropic", label: runtimeT({ "en-US": "Anthropic Claude", "zh-CN": "Anthropic Claude", "zh-TW": "Anthropic Claude" }) },
+  { value: "gemini", label: runtimeT({ "en-US": "Google Gemini", "zh-CN": "Google Gemini", "zh-TW": "Google Gemini" }) },
+  { value: "deepseek", label: runtimeT({ "en-US": "DeepSeek", "zh-CN": "DeepSeek", "zh-TW": "DeepSeek" }) },
+  { value: "openai_compatible", label: runtimeT({
+    "en-US": "OpenAI [Chat Completions API]",
+    "zh-CN": "OpenAI [Chat Completions 接口]",
+    "zh-TW": "OpenAI [Chat Completions 介面]",
+  }) },
+  { value: "openai", label: runtimeT({
+    "en-US": "OpenAI [Responses API]",
+    "zh-CN": "OpenAI [Responses 接口]",
+    "zh-TW": "OpenAI [Responses 介面]",
+  }) },
 ];
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -85,12 +95,12 @@ function estimateMultimodalSupport(
 function getModelCapabilityHint(providerType: ProviderType, model: string): string {
   const support = estimateMultimodalSupport(providerType, model);
   if (support === "yes") {
-    return "当前模型看起来支持多模态/PDF 输入，适合使用 Base64 模式。";
+    return getString("prefs-model-capability-yes");
   }
   if (support === "no") {
-    return "当前模型看起来不支持多模态/PDF 输入，建议改用文本模式。";
+    return getString("prefs-model-capability-no");
   }
-  return "请确认当前模型是否支持多模态/PDF 输入；若不支持，插件会自动回退到文本模式。";
+  return getString("prefs-model-capability-unknown");
 }
 
 function bindButtonAction(
@@ -249,7 +259,7 @@ function initializeDefaultPrefs() {
   const profiles = parseProfiles(getPref("profiles"));
   const activeId = String(getPref("activeProfileId") || "").trim();
   if (!profiles.length) {
-    const profile = createProfile("openai_compatible", "默认配置");
+    const profile = createProfile("openai_compatible", getString("prefs-profile-default-name"));
     setPref("profiles" as any, JSON.stringify([profile]));
     setPref("activeProfileId" as any, profile.id);
   } else if (!activeId || !profiles.some((p) => p.id === activeId)) {
@@ -388,7 +398,7 @@ function openAddProfileDialog(win: Window) {
   });
 
   const title = createHtmlElement(doc, "h3");
-  title.textContent = "新增配置";
+  title.textContent = getString("prefs-add-dialog-title");
   Object.assign(title.style, {
     margin: "0 0 14px 0",
     fontSize: "18px",
@@ -396,7 +406,7 @@ function openAddProfileDialog(win: Window) {
   dialog.appendChild(title);
 
   const sub = createHtmlElement(doc, "div");
-  sub.textContent = "先创建基础配置，再在下方继续填写接口地址、密钥和高级参数。";
+  sub.textContent = getString("prefs-add-dialog-subtitle");
   Object.assign(sub.style, {
     color: "var(--ainote-text-muted)",
     fontSize: "12px",
@@ -406,18 +416,18 @@ function openAddProfileDialog(win: Window) {
   dialog.appendChild(sub);
 
   const nameLabel = createHtmlElement(doc, "label");
-  nameLabel.textContent = "配置名称";
+  nameLabel.textContent = getString("prefs-add-dialog-name");
   dialog.appendChild(nameLabel);
 
   const nameInput = createHtmlElement(doc, "input");
   nameInput.type = "text";
-  nameInput.value = `配置 ${getProfiles().length + 1}`;
+  nameInput.value = `${getString("prefs-profile-default-name")} ${getProfiles().length + 1}`;
   styleTextInput(nameInput);
   nameInput.style.margin = "6px 0 12px 0";
   dialog.appendChild(nameInput);
 
   const providerLabel = createHtmlElement(doc, "label");
-  providerLabel.textContent = "服务商";
+  providerLabel.textContent = getString("prefs-add-dialog-provider");
   dialog.appendChild(providerLabel);
 
   const providerSelect = createHtmlElement(doc, "select");
@@ -448,8 +458,8 @@ function openAddProfileDialog(win: Window) {
     marginTop: "8px",
   });
 
-  const cancelBtn = createActionButton(doc, "取消", false);
-  const createBtn = createActionButton(doc, "创建", true);
+  const cancelBtn = createActionButton(doc, getString("prefs-add-dialog-cancel"), false);
+  const createBtn = createActionButton(doc, getString("prefs-add-dialog-create"), true);
 
   const close = () => {
     overlay.remove();
@@ -460,14 +470,14 @@ function openAddProfileDialog(win: Window) {
     if (event.target === overlay) close();
   });
   bindButtonAction(createBtn, () => {
-    const name = nameInput.value.trim() || `配置 ${getProfiles().length + 1}`;
+    const name = nameInput.value.trim() || `${getString("prefs-profile-default-name")} ${getProfiles().length + 1}`;
     const providerType = providerSelect.value as ProviderType;
     if (!name) {
-      error.textContent = "请填写配置名称";
+      error.textContent = getString("prefs-add-dialog-name-empty");
       return;
     }
     if (!isProfileNameUnique(name)) {
-      error.textContent = "配置名称已存在，请使用其他名称";
+      error.textContent = getString("prefs-add-dialog-name-duplicate");
       return;
     }
     const profile = createProfile(providerType, name);
@@ -524,7 +534,7 @@ function openAddPromptTemplateDialog(win: Window) {
   });
 
   const title = createHtmlElement(doc, "h3");
-  title.textContent = "新增模板";
+  title.textContent = getString("prefs-add-template-dialog-title");
   Object.assign(title.style, {
     margin: "0 0 14px 0",
     fontSize: "18px",
@@ -532,7 +542,7 @@ function openAddPromptTemplateDialog(win: Window) {
   dialog.appendChild(title);
 
   const sub = createHtmlElement(doc, "div");
-  sub.textContent = "先创建模板名称，创建成功后再在下方配置区填写模板说明和模板内容。";
+  sub.textContent = getString("prefs-add-template-dialog-subtitle");
   Object.assign(sub.style, {
     color: "var(--ainote-text-muted)",
     fontSize: "12px",
@@ -541,10 +551,10 @@ function openAddPromptTemplateDialog(win: Window) {
   });
   dialog.appendChild(sub);
 
-  const nameField = createLabeledField(doc, "模板名称");
+  const nameField = createLabeledField(doc, getString("prefs-add-template-dialog-name"));
   const nameInput = createHtmlElement(doc, "input");
   nameInput.type = "text";
-  nameInput.value = `自定义模板 ${templates.length + 1}`;
+  nameInput.value = `${getString("prefs-template-default-name")} ${templates.length + 1}`;
   styleTextInput(nameInput);
   nameField.field.appendChild(nameInput);
   dialog.appendChild(nameField.row);
@@ -566,8 +576,8 @@ function openAddPromptTemplateDialog(win: Window) {
     marginTop: "8px",
   });
 
-  const cancelBtn = createActionButton(doc, "取消", false);
-  const createBtn = createActionButton(doc, "创建", true);
+  const cancelBtn = createActionButton(doc, getString("prefs-add-template-dialog-cancel"), false);
+  const createBtn = createActionButton(doc, getString("prefs-add-template-dialog-create"), true);
 
   const close = () => overlay.remove();
   bindButtonAction(cancelBtn, close);
@@ -578,11 +588,11 @@ function openAddPromptTemplateDialog(win: Window) {
     const name = nameInput.value.trim();
     const latestTemplates = getPromptTemplates();
     if (!name) {
-      error.textContent = "模板名称不能为空";
+      error.textContent = getString("prefs-add-template-dialog-name-empty");
       return;
     }
     if (!isPromptTemplateNameUnique(latestTemplates, name)) {
-      error.textContent = "模板名称已存在，请使用其他名称";
+      error.textContent = getString("prefs-add-template-dialog-name-duplicate");
       return;
     }
 
@@ -630,7 +640,7 @@ function renderProfilesUI(win: Window) {
     option.value = profile.id;
     option.textContent = `${profile.name}（${getProviderLabel(
       profile.providerType,
-    )}）${profile.enabled ? "" : " [已停用]"}`;
+    )}）${profile.enabled ? "" : ` ${getString("prefs-profile-disabled-label")}`}`;
     option.selected = profile.id === activeId;
     select.appendChild(option);
   });
@@ -663,7 +673,7 @@ function renderPromptTemplatesUI(win: Window) {
   templates.forEach((template) => {
     const option = createHtmlElement(doc, "option");
     option.value = template.id;
-    option.textContent = `${template.name}${template.builtIn ? " [默认]" : ""}`;
+    option.textContent = `${template.name}${template.builtIn ? ` ${getString("prefs-default-template-label")}` : ""}`;
     option.selected = template.id === activeTemplate?.id;
     select.appendChild(option);
   });
@@ -694,7 +704,7 @@ function renderPromptTemplateCard(
   });
 
   const title = createHtmlElement(doc, "div");
-  title.textContent = `${template.name}${template.builtIn ? "（默认模板）" : ""}`;
+  title.textContent = `${template.name}${template.builtIn ? getString("prefs-default-template-label") : ""}`;
   Object.assign(title.style, {
     fontWeight: "700",
     color: "var(--ainote-text)",
@@ -702,7 +712,7 @@ function renderPromptTemplateCard(
   });
   card.appendChild(title);
 
-  const nameRow = createLabeledField(doc, "模板名称");
+  const nameRow = createLabeledField(doc, getString("prefs-template-name-label"));
   const nameInput = createHtmlElement(doc, "input");
   nameInput.type = "text";
   nameInput.value = template.name;
@@ -710,7 +720,7 @@ function renderPromptTemplateCard(
   nameRow.field.appendChild(nameInput);
   card.appendChild(nameRow.row);
 
-  const descriptionRow = createLabeledField(doc, "模板说明");
+  const descriptionRow = createLabeledField(doc, getString("prefs-template-desc-label"));
   const descriptionInput = createHtmlElement(doc, "textarea");
   styleTextArea(descriptionInput);
   descriptionInput.rows = 3;
@@ -720,10 +730,10 @@ function renderPromptTemplateCard(
   appendHelperText(
     doc,
     card,
-    "模板说明可留空，仅用于设置页中帮助区分模板用途。",
+    getString("prefs-template-desc-hint"),
   );
 
-  const contentRow = createLabeledField(doc, "模板内容");
+  const contentRow = createLabeledField(doc, getString("prefs-template-content-label"));
   const contentInput = createHtmlElement(doc, "textarea");
   styleTextArea(contentInput);
   contentInput.rows = 14;
@@ -733,7 +743,7 @@ function renderPromptTemplateCard(
   appendHelperText(
     doc,
     card,
-    "AI 请求时只会把这里的模板内容发送给模型；模板名称和说明不会进入提示词。",
+    getString("prefs-template-content-hint"),
   );
 
   const status = createHtmlElement(doc, "div");
@@ -753,24 +763,24 @@ function renderPromptTemplateCard(
     flexWrap: "wrap",
   });
 
-  const saveBtn = createActionButton(doc, "保存", true);
+  const saveBtn = createActionButton(doc, getString("prefs-template-save"), true);
   bindButtonAction(saveBtn, () => {
     const name = nameInput.value.trim();
     const description = descriptionInput.value.trim();
     const content = contentInput.value.trim();
     const templates = getPromptTemplates();
     if (!name) {
-      status.textContent = "模板名称不能为空";
+      status.textContent = getString("prefs-template-name-empty");
       status.style.color = "var(--ainote-danger)";
       return;
     }
     if (!content) {
-      status.textContent = "模板内容不能为空";
+      status.textContent = getString("prefs-template-content-empty");
       status.style.color = "var(--ainote-danger)";
       return;
     }
     if (!isPromptTemplateNameUnique(templates, name, template.id)) {
-      status.textContent = "模板名称已存在，请使用其他名称";
+      status.textContent = getString("prefs-template-name-duplicate");
       status.style.color = "var(--ainote-danger)";
       return;
     }
@@ -787,14 +797,14 @@ function renderPromptTemplateCard(
         : item,
     );
     savePromptTemplateState(nextTemplates, template.id);
-    status.textContent = "模板已保存";
+    status.textContent = getString("prefs-template-saved");
     status.style.color = "var(--ainote-success)";
     renderPromptTemplatesUI(win);
     notifyPromptTemplateMenuChanged(win);
   });
   actions.appendChild(saveBtn);
 
-  const cloneBtn = createActionButton(doc, "复制为新模板", false);
+  const cloneBtn = createActionButton(doc, getString("prefs-template-clone"), false);
   bindButtonAction(cloneBtn, () => {
     const templates = getPromptTemplates();
     const latest =
@@ -806,7 +816,7 @@ function renderPromptTemplateCard(
   });
   actions.appendChild(cloneBtn);
 
-  const deleteBtn = createActionButton(doc, "删除模板", false, true);
+  const deleteBtn = createActionButton(doc, getString("prefs-template-delete"), false, true);
   deleteBtn.disabled = template.builtIn;
   if (template.builtIn) {
     deleteBtn.style.opacity = "0.6";
@@ -851,7 +861,7 @@ function renderProfileCard(
   });
 
   const title = createHtmlElement(doc, "div");
-  title.textContent = `${profile.name}${isActive ? "（当前使用）" : ""}`;
+  title.textContent = `${profile.name}${isActive ? getString("prefs-profile-active-label") : ""}`;
   Object.assign(title.style, {
     fontWeight: "700",
     color: "var(--ainote-text)",
@@ -875,16 +885,16 @@ function renderProfileCard(
     renderProfilesUI(win);
   };
 
-  addInputRow(doc, card, "名称", profile.name, (value) =>
+  addInputRow(doc, card, getString("prefs-profile-name"), profile.name, (value) =>
     patchProfile({ name: value }),
     "text",
     {
-      helperText: "配置名称必须唯一，用来区分不同服务商或不同账号。",
+      helperText: getString("prefs-profile-name-hint"),
       validate: (value) => {
         const trimmed = value.trim();
-        if (!trimmed) return "配置名称不能为空";
+        if (!trimmed) return getString("prefs-profile-name-empty");
         if (!isProfileNameUnique(trimmed, profile.id)) {
-          return "配置名称已存在，请使用其他名称";
+          return getString("prefs-profile-name-duplicate");
         }
         return "";
       },
@@ -893,7 +903,7 @@ function renderProfileCard(
   addSelectRow(
     doc,
     card,
-    "服务商",
+    getString("prefs-profile-provider"),
     profile.providerType,
     PROVIDER_OPTIONS,
     (value) => {
@@ -915,12 +925,11 @@ function renderProfileCard(
     },
   );
 
-  addInputRow(doc, card, "接口地址", profile.baseUrl, (value) =>
+  addInputRow(doc, card, getString("prefs-profile-api-url"), profile.baseUrl, (value) =>
     patchProfile({ baseUrl: value }),
     "text",
     {
-      helperText:
-        "填写该服务商的请求地址。OpenAI 兼容接口可以填写网关或代理提供的完整地址。",
+      helperText: getString("prefs-profile-api-url-hint"),
     },
   );
   renderApiKeyRow(doc, card, profile.apiKey, (value) =>
@@ -930,12 +939,11 @@ function renderProfileCard(
   addSelectRow(
     doc,
     card,
-    "PDF 处理模式",
+    getString("prefs-profile-pdf-mode"),
     profile.extra?.pdfProcessMode || "base64",
     [
-      { value: "base64", label: "Base64（默认，直接提交 PDF）" },
-      { value: "text", label: "文本提取后提交" },
-      // { value: "mineru", label: "MinerU（预留）" },
+      { value: "base64", label: getString("prefs-profile-pdf-mode-base64") },
+      { value: "text", label: getString("prefs-profile-pdf-mode-text") },
     ],
     (value) =>
       patchProfile({
@@ -948,14 +956,14 @@ function renderProfileCard(
   appendHelperText(
     doc,
     card,
-    "Base64 模式会直接把 PDF 提交给支持多模态的模型；若当前接口不支持，生成时会自动切换为文本模式。MinerU 模式当前仅预留接口。",
+    getString("prefs-profile-pdf-mode-hint"),
   );
 
   if ((profile.extra?.pdfProcessMode || "base64") === "text") {
     addInputRow(
       doc,
       card,
-      "截断字符数（万）",
+      getString("prefs-profile-text-truncate"),
       profile.extra?.textTruncateLengthWan || "10",
       (value) =>
         patchProfile({
@@ -966,8 +974,7 @@ function renderProfileCard(
         }),
       "number",
       {
-        helperText:
-          "仅文本模式生效。会优先在句号处截断，再控制在该字符数附近。",
+        helperText: getString("prefs-profile-text-truncate-hint"),
       },
     );
   }
@@ -975,7 +982,7 @@ function renderProfileCard(
   renderOptionalParamRow(
     doc,
     card,
-    "PDF 大小限制（MB）",
+    getString("prefs-profile-pdf-size-limit"),
     !!profile.extra?.enablePdfSizeLimit,
     profile.extra?.maxPdfSizeMB || "50",
     (checked) =>
@@ -986,21 +993,21 @@ function renderProfileCard(
       patchProfile({
         extra: { ...(profile.extra || {}), maxPdfSizeMB: value },
       }),
-    "开启后会在处理前检查 PDF 文件大小，超过阈值则直接报错停止。",
+    getString("prefs-profile-pdf-size-limit-hint"),
   );
 
   if (needsAzureFields(profile.providerType)) {
-    addInputRow(doc, card, "Azure API 版本", profile.apiVersion || "", (value) =>
+    addInputRow(doc, card, getString("prefs-profile-azure-api-version"), profile.apiVersion || "", (value) =>
       patchProfile({ apiVersion: value }),
       "text",
       {
-        helperText: "例如 2024-10-21。Azure OpenAI 请求需要明确 API 版本。",
+        helperText: getString("prefs-profile-azure-api-version-hint"),
       },
     );
     addInputRow(
       doc,
       card,
-      "Azure 部署名",
+      getString("prefs-profile-azure-deployment"),
       profile.extra?.deployment || "",
       (value) =>
         patchProfile({
@@ -1008,7 +1015,7 @@ function renderProfileCard(
         }),
       "text",
       {
-        helperText: "填写 Azure 上实际部署的模型名称，而不是公开模型名。",
+        helperText: getString("prefs-profile-azure-deployment-hint"),
       },
     );
   }
@@ -1016,7 +1023,7 @@ function renderProfileCard(
   renderOptionalParamRow(
     doc,
     card,
-    "温度",
+    getString("prefs-profile-temperature"),
     profile.extra?.enableTemperature !== false,
     profile.temperature,
     (checked) =>
@@ -1024,7 +1031,7 @@ function renderProfileCard(
         extra: { ...(profile.extra || {}), enableTemperature: checked },
       }),
     (value) => patchProfile({ temperature: value }),
-    "控制输出随机性。值越低越稳定，值越高越发散。",
+    getString("prefs-profile-temperature-hint"),
     "0.1",
   );
 
@@ -1032,7 +1039,7 @@ function renderProfileCard(
     renderOptionalParamRow(
       doc,
       card,
-      "Top P",
+      getString("prefs-profile-top-p"),
       !!profile.extra?.enableTopP,
       profile.topP || "1.0",
       (checked) =>
@@ -1040,7 +1047,7 @@ function renderProfileCard(
           extra: { ...(profile.extra || {}), enableTopP: checked },
         }),
       (value) => patchProfile({ topP: value }),
-      "控制采样范围。通常与温度二选一即可。",
+      getString("prefs-profile-top-p-hint"),
     );
   }
 
@@ -1048,7 +1055,7 @@ function renderProfileCard(
     renderOptionalParamRow(
       doc,
       card,
-      "最大 Token",
+      getString("prefs-profile-max-tokens"),
       !!profile.extra?.enableMaxTokens,
       profile.maxTokens || "4096",
       (checked) =>
@@ -1056,23 +1063,23 @@ function renderProfileCard(
           extra: { ...(profile.extra || {}), enableMaxTokens: checked },
         }),
       (value) => patchProfile({ maxTokens: value }),
-      "限制单次输出长度，防止返回过长内容或费用过高。",
+      getString("prefs-profile-max-tokens-hint"),
     );
   }
 
-  renderCheckboxRow(doc, card, "流式输出", profile.stream, (checked) =>
+  renderCheckboxRow(doc, card, getString("prefs-profile-stream"), profile.stream, (checked) =>
     patchProfile({ stream: checked }),
-    "开启后会逐段显示模型输出，关闭后等待完整结果一次返回。",
+    getString("prefs-profile-stream-hint"),
   );
   addInputRow(
     doc,
     card,
-    "超时（毫秒）",
+    getString("prefs-profile-timeout"),
     profile.requestTimeoutMs || "30000",
     (value) => patchProfile({ requestTimeoutMs: value }),
     "number",
     {
-      helperText: "默认 30000 毫秒。超过该时间仍未返回时，本次请求会被终止。",
+      helperText: getString("prefs-profile-timeout-hint"),
     },
   );
 
@@ -1086,7 +1093,7 @@ function renderProfileCard(
     flexWrap: "wrap",
   });
 
-  const activeBtn = createActionButton(doc, "设为当前", true);
+  const activeBtn = createActionButton(doc, getString("prefs-profile-set-active"), true);
   bindButtonAction(activeBtn, () => {
     setCurrentProfile(profile.id);
     renderProfilesUI(win);
@@ -1095,7 +1102,7 @@ function renderProfileCard(
 
   const enableBtn = createActionButton(
     doc,
-    profile.enabled ? "停用" : "启用",
+    profile.enabled ? getString("prefs-profile-disable") : getString("prefs-profile-enable"),
     false,
   );
   bindButtonAction(enableBtn, () =>
@@ -1103,13 +1110,13 @@ function renderProfileCard(
   );
   actions.appendChild(enableBtn);
 
-  const cloneBtn = createActionButton(doc, "复制", false);
+  const cloneBtn = createActionButton(doc, getString("prefs-profile-clone"), false);
   bindButtonAction(cloneBtn, () => {
     const profiles = getProfiles();
     const clone = normalizeProfile({
       ...profile,
       id: createProfile(profile.providerType).id,
-      name: `${profile.name}-副本`,
+      name: `${profile.name}${getString("prefs-clone-name-suffix")}`,
     });
     profiles.push(clone);
     saveProfiles(profiles);
@@ -1117,11 +1124,11 @@ function renderProfileCard(
   });
   actions.appendChild(cloneBtn);
 
-  const deleteBtn = createActionButton(doc, "删除", false, true);
+  const deleteBtn = createActionButton(doc, getString("prefs-profile-delete"), false, true);
   bindButtonAction(deleteBtn, () => {
     const nextProfiles = getProfiles().filter((item) => item.id !== profile.id);
     if (!nextProfiles.length) {
-      const fallback = createProfile("openai_compatible", "默认配置");
+      const fallback = createProfile("openai_compatible", getString("prefs-profile-default-name"));
       saveProfiles([fallback]);
       setCurrentProfile(fallback.id);
     } else {
@@ -1155,7 +1162,7 @@ function renderModelRow(
   });
 
   const label = createHtmlElement(doc, "label");
-  label.textContent = "模型名称";
+  label.textContent = getString("prefs-profile-model");
   Object.assign(label.style, {
     display: "block",
     marginBottom: "6px",
@@ -1178,14 +1185,14 @@ function renderModelRow(
   input.addEventListener("change", () => patchProfile({ model: input.value }));
   top.appendChild(input);
 
-  const fetchButton = createActionButton(doc, "获取模型", false);
-  const testButton = createActionButton(doc, "测试连接", false);
+  const fetchButton = createActionButton(doc, getString("prefs-model-fetch"), false);
+  const testButton = createActionButton(doc, getString("prefs-model-test"), false);
   top.appendChild(fetchButton);
   top.appendChild(testButton);
   row.appendChild(top);
 
   const helper = createHtmlElement(doc, "div");
-  helper.textContent = "可以先手动填写模型，也可以通过“获取模型”从供应商读取可用模型。";
+  helper.textContent = getString("prefs-model-hint-manual");
   Object.assign(helper.style, {
     marginTop: "6px",
     color: "var(--ainote-text-muted)",
@@ -1229,20 +1236,20 @@ function renderModelRow(
   row.appendChild(modelList);
 
   bindButtonAction(fetchButton, async () => {
-    status.textContent = "正在获取模型列表...";
+    status.textContent = getString("prefs-model-fetching");
     modelList.style.display = "none";
     modelList.innerHTML = "";
     try {
       const latest = getProfiles().find((item) => item.id === profile.id);
-      if (!latest) throw new Error("配置不存在");
+      if (!latest) throw new Error("Profile not found");
       const models = await AIService.listModels(latest);
       status.textContent = models.length
-        ? `获取成功，共 ${models.length} 个模型`
-        : "接口可用，但未返回模型列表";
+        ? getString("prefs-model-fetch-success", { args: { count: String(models.length) } })
+        : getString("prefs-model-fetch-empty");
       renderModelList(doc, modelList, models, (modelId) => {
         input.value = modelId;
         patchProfile({ model: modelId });
-        status.textContent = `已选择模型：${modelId}`;
+        status.textContent = getString("prefs-model-selected", { args: { model: modelId } });
       });
     } catch (error: any) {
       status.textContent = error?.message || String(error);
@@ -1251,11 +1258,11 @@ function renderModelRow(
   });
 
   bindButtonAction(testButton, async () => {
-    status.textContent = "正在测试连接...";
+    status.textContent = getString("prefs-model-testing");
     status.style.color = "var(--ainote-text-muted)";
     try {
       const latest = getProfiles().find((item) => item.id === profile.id);
-      if (!latest) throw new Error("配置不存在");
+      if (!latest) throw new Error("Profile not found");
       const result = await AIService.testConnection(latest);
       status.textContent = result;
       status.style.color = "var(--ainote-success)";
@@ -1284,7 +1291,7 @@ function renderApiKeyRow(
   });
 
   const label = createHtmlElement(doc, "label");
-  label.textContent = "API 密钥";
+  label.textContent = getString("prefs-profile-api-key");
   Object.assign(label.style, {
     minWidth: "92px",
     color: "var(--ainote-text)",
@@ -1340,7 +1347,7 @@ function renderApiKeyRow(
 
   row.appendChild(inputWrap);
   card.appendChild(row);
-  appendHelperText(doc, card, "密钥会保存在本地配置中，用于调用当前服务商。");
+  appendHelperText(doc, card, getString("prefs-profile-api-key-hint"));
 }
 
 function renderConnectionTools(
@@ -1351,8 +1358,8 @@ function renderConnectionTools(
   const tip = createHtmlElement(doc, "div");
   tip.textContent =
     profile.providerType === "azure"
-      ? "Azure 需要同时填写接口地址、部署名和 API 版本后再测试连接。"
-      : "可以先手动填写模型，也可以通过“获取模型”从供应商读取可用模型。";
+      ? getString("prefs-connection-tip-azure")
+      : getString("prefs-connection-tip-default");
   Object.assign(tip.style, {
     marginTop: "8px",
     color: "var(--ainote-text-muted)",
@@ -1407,7 +1414,7 @@ function renderOptionalParamRow(
   row.appendChild(input);
 
   const state = createHtmlElement(doc, "span");
-  state.textContent = checked ? "已启用" : "已禁用";
+  state.textContent = checked ? getString("prefs-option-enabled") : getString("prefs-option-disabled");
   Object.assign(state.style, {
     fontSize: "12px",
     color: "var(--ainote-text-muted)",
@@ -1441,7 +1448,7 @@ function renderCheckboxRow(
   row.appendChild(checkbox);
 
   const label = createHtmlElement(doc, "label");
-  label.textContent = `${labelText}（${checked ? "已开启" : "已关闭"}）`;
+  label.textContent = `${labelText}（${checked ? getString("prefs-option-enabled") : getString("prefs-option-disabled")}）`;
   row.appendChild(label);
 
   card.appendChild(row);
