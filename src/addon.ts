@@ -2,6 +2,7 @@ import { config } from "../package.json";
 import { ColumnOptions, DialogHelper } from "zotero-plugin-toolkit";
 import hooks from "./hooks";
 import { createZToolkit } from "./utils/ztoolkit";
+import { WebSummaryBridgeServer } from "./modules/webSummaryBridgeServer";
 
 class Addon {
   public data: {
@@ -21,6 +22,7 @@ class Addon {
       currentProvider?: string;
     };
     dialog?: DialogHelper;
+    webSummaryBridge?: WebSummaryBridgeServer;
   };
   // Lifecycle hooks
   public hooks: typeof hooks;
@@ -34,6 +36,7 @@ class Addon {
       env: __env__,
       initialized: false,
       ztoolkit: createZToolkit(),
+      webSummaryBridge: new WebSummaryBridgeServer(),
     };
     this.hooks = hooks;
     this.api = {};

@@ -1,0 +1,9 @@
+{
+  "name": "ainote-web-extension",
+  "private": true,
+  "version": "0.1.0",
+  "description": "MV3 extension for AiNote web summary workflow",
+  "scripts": {
+    "check": "tsc --project tsconfig.json --noEmit"
+  }
+}

@@ -9,6 +9,7 @@ export class OutputWindow {
   private dialog: any;
   private outputContainer: HTMLElement | null = null;
   private currentItemContainer: HTMLElement | null = null;
+  private currentStatusContainer: HTMLElement | null = null;
   private currentItemBuffer: string = ""; // 累积当前条目的完整内容
   private isOpen: boolean = false;
   private onStopCallback: (() => void) | null = null; // 停止生成的回调
@@ -470,6 +471,20 @@ export class OutputWindow {
             : []),
           {
             tag: "div",
+            id: `item-status-${Date.now()}`,
+            styles: {
+              margin: "0 0 12px 0",
+              color: isDark ? "#d1a85d" : "#8a5a00",
+              fontSize: "12px",
+              lineHeight: "1.6",
+              wordBreak: "break-word",
+            },
+            properties: {
+              innerHTML: "",
+            },
+          },
+          {
+            tag: "div",
             id: `item-content-${Date.now()}`,
             styles: {
               wordWrap: "break-word",
@@ -489,6 +504,9 @@ export class OutputWindow {
     // 找到内容容器
     this.currentItemContainer = (itemDiv as HTMLElement).querySelector(
       "div[id^='item-content-']"
+    ) as HTMLElement;
+    this.currentStatusContainer = (itemDiv as HTMLElement).querySelector(
+      "div[id^='item-status-']"
     ) as HTMLElement;
 
     // 滚动到底部
@@ -516,6 +534,38 @@ export class OutputWindow {
     
     // 滚动到底部
     this.scrollToBottom();
+  }
+
+  public replaceCurrentContent(markdown: string): void {
+    if (!this.currentItemContainer) {
+      return;
+    }
+
+    this.currentItemBuffer = markdown;
+    this.currentItemContainer.innerHTML = this.convertMarkdownToHTML(markdown);
+    if (/\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\$[^\$\n]+?\$/.test(markdown)) {
+      this.scheduleRenderMath();
+    }
+    this.scrollToBottom();
+  }
+
+  public updateCurrentStatus(message: string): void {
+    if (!this.currentStatusContainer) {
+      return;
+    }
+    this.currentStatusContainer.innerHTML = message
+      ? `进度：${this.escapeHtml(message)}`
+      : "";
+  }
+
+  private scheduleRenderMath(): void {
+    if (this.renderMathTimer) {
+      clearTimeout(this.renderMathTimer);
+    }
+    this.renderMathTimer = setTimeout(() => {
+      this.renderMathTimer = null;
+      void this.renderMath();
+    }, 180);
   }
 
   /**
@@ -559,6 +609,8 @@ export class OutputWindow {
       }
     }
     this.disableCurrentStopButton("✓ 当前条目已完成");
+    this.updateCurrentStatus("");
+    this.currentStatusContainer = null;
     this.currentItemContainer = null;
     this.scrollToBottom();
   }
@@ -585,6 +637,8 @@ export class OutputWindow {
       }
     }
     this.disableCurrentStopButton("✓ 当前条目已停止");
+    this.updateCurrentStatus("");
+    this.currentStatusContainer = null;
     this.currentItemContainer = null;
     this.scrollToBottom();
   }
@@ -857,10 +911,15 @@ export class OutputWindow {
     this.dialog = undefined;
     this.outputContainer = null;
     this.currentItemContainer = null;
+    this.currentStatusContainer = null;
     this.onStopCallback = null;
     this.onStopCurrentCallback = null;
     this.stopButton = null;
     this.stopCurrentButton = null;
+    if (this.renderMathTimer) {
+      clearTimeout(this.renderMathTimer);
+      this.renderMathTimer = null;
+    }
   }
 
   /**

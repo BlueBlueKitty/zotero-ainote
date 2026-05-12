@@ -1,4 +1,5 @@
 export type ProviderType =
+  | "chatgpt_web"
   | "openai"
   | "azure"
   | "anthropic"
@@ -59,6 +60,8 @@ const DEFAULT_PROFILE: ProviderProfile = {
 
 export function providerDefaults(providerType: ProviderType): Pick<ProviderProfile, "baseUrl" | "model" | "apiVersion"> {
   switch (providerType) {
+    case "chatgpt_web":
+      return { baseUrl: "", model: "ChatGPT Web" };
     case "openai":
       return { baseUrl: "https://api.openai.com/v1/responses", model: "gpt-4o" };
     case "azure":
@@ -148,6 +151,7 @@ export function normalizeProfile(item: Partial<ProviderProfile>): ProviderProfil
 
 export function normalizeProviderType(type: unknown): ProviderType {
   const t = String(type || "").toLowerCase();
+  if (t === "chatgpt_web" || t === "chatgpt web" || t === "chatgpt-web") return "chatgpt_web";
   if (t === "openai") return "openai";
   if (t === "azure") return "azure";
   if (t === "anthropic" || t === "claude") return "anthropic";

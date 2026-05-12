@@ -12,8 +12,10 @@ import {
   PromptTemplate,
   stripLeadingSummaryHeading,
 } from "../utils/prompts";
+import { buildNoteHtmlFromMarkdown } from "./noteHtmlBuilder";
 
 const PROVIDER_LABELS: Record<ProviderType, string> = {
+  chatgpt_web: "ChatGPT 网页版",
   azure: "Azure OpenAI",
   anthropic: "Anthropic Claude",
   gemini: "Google Gemini",
@@ -269,50 +271,7 @@ export class NoteGenerator {
   ): string {
     const normalizedSummary = ensureSummaryHeading(summary, summaryHeading);
     const noteBody = stripLeadingSummaryHeading(normalizedSummary, summaryHeading);
-    // 转换为笔记格式
-    const htmlContent = this.convertMarkdownToNoteHTML(noteBody);
-    return `<h2>${this.escapeHtml(summaryHeading)}</h2>
-<p><strong>模型：</strong>${this.escapeHtml(modelLabel)}</p>
-<div>${htmlContent}</div>`;
-  }
-
-    /**
-   * 将 Markdown 转换为适合 Zotero 笔记的 HTML 格式
-   * @param markdown Markdown 文本
-   * @returns 转换后的 HTML（无样式，公式格式适配 Zotero）
-   */
-  private static convertMarkdownToNoteHTML(markdown: string): string {
-    // 复用 OutputWindow 的转换方法（会保护公式并转换 Markdown）
-    let html = OutputWindow.convertMarkdownToHTMLCore(markdown);
-    
-    // 移除所有内联样式
-    html = html.replace(/\s+style="[^"]*"/g, '');
-    
-    // 将 MathJax 格式的公式转换为 Zotero 笔记格式
-    // 块级公式：$$...$$ → <pre class="math">$$...$$</pre>
-    html = html.replace(/\$\$([\s\S]*?)\$\$/g, (_match: string, formula: string) => {
-      return `<pre class="math">$$${formula}$$</pre>`;
-    });
-    
-    // 行内公式：$...$ → <span class="math">$...$</span>
-    // eslint-disable-next-line no-useless-escape
-    html = html.replace(/\$([^\$\n]+?)\$/g, (_match: string, formula: string) => {
-      return `<span class="math">$${formula}$</span>`;
-    });
-    
-    return html;
-  }
-
-  /**
-   * HTML escape
-   */
-  private static escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+    return buildNoteHtmlFromMarkdown(summaryHeading, modelLabel, noteBody);
   }
 
   /**

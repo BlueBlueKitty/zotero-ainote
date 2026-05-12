@@ -26,20 +26,62 @@ import { runtimeT } from "../utils/runtimeLocale";
 import { getString } from "../utils/locale";
 
 const PROVIDER_OPTIONS: Array<{ value: ProviderType; label: string }> = [
-  { value: "azure", label: runtimeT({ "en-US": "Azure OpenAI", "zh-CN": "Azure OpenAI", "zh-TW": "Azure OpenAI" }) },
-  { value: "anthropic", label: runtimeT({ "en-US": "Anthropic Claude", "zh-CN": "Anthropic Claude", "zh-TW": "Anthropic Claude" }) },
-  { value: "gemini", label: runtimeT({ "en-US": "Google Gemini", "zh-CN": "Google Gemini", "zh-TW": "Google Gemini" }) },
-  { value: "deepseek", label: runtimeT({ "en-US": "DeepSeek", "zh-CN": "DeepSeek", "zh-TW": "DeepSeek" }) },
-  { value: "openai_compatible", label: runtimeT({
-    "en-US": "OpenAI [Chat Completions API]",
-    "zh-CN": "OpenAI [Chat Completions 接口]",
-    "zh-TW": "OpenAI [Chat Completions 介面]",
-  }) },
-  { value: "openai", label: runtimeT({
-    "en-US": "OpenAI [Responses API]",
-    "zh-CN": "OpenAI [Responses 接口]",
-    "zh-TW": "OpenAI [Responses 介面]",
-  }) },
+  {
+    value: "chatgpt_web",
+    label: runtimeT({
+      "en-US": "ChatGPT Web",
+      "zh-CN": "ChatGPT 网页版",
+      "zh-TW": "ChatGPT 網頁版",
+    }),
+  },
+  {
+    value: "azure",
+    label: runtimeT({
+      "en-US": "Azure OpenAI",
+      "zh-CN": "Azure OpenAI",
+      "zh-TW": "Azure OpenAI",
+    }),
+  },
+  {
+    value: "anthropic",
+    label: runtimeT({
+      "en-US": "Anthropic Claude",
+      "zh-CN": "Anthropic Claude",
+      "zh-TW": "Anthropic Claude",
+    }),
+  },
+  {
+    value: "gemini",
+    label: runtimeT({
+      "en-US": "Google Gemini",
+      "zh-CN": "Google Gemini",
+      "zh-TW": "Google Gemini",
+    }),
+  },
+  {
+    value: "deepseek",
+    label: runtimeT({
+      "en-US": "DeepSeek",
+      "zh-CN": "DeepSeek",
+      "zh-TW": "DeepSeek",
+    }),
+  },
+  {
+    value: "openai_compatible",
+    label: runtimeT({
+      "en-US": "OpenAI [Chat Completions API]",
+      "zh-CN": "OpenAI [Chat Completions 接口]",
+      "zh-TW": "OpenAI [Chat Completions 介面]",
+    }),
+  },
+  {
+    value: "openai",
+    label: runtimeT({
+      "en-US": "OpenAI [Responses API]",
+      "zh-CN": "OpenAI [Responses 接口]",
+      "zh-TW": "OpenAI [Responses 介面]",
+    }),
+  },
 ];
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -59,10 +101,12 @@ function getProviderLabel(providerType: ProviderType): string {
 }
 
 function supportsTopP(providerType: ProviderType) {
+  if (providerType === "chatgpt_web") return false;
   return providerType !== "anthropic";
 }
 
 function supportsMaxTokens(_providerType: ProviderType) {
+  if (_providerType === "chatgpt_web") return false;
   return true;
 }
 
@@ -77,6 +121,7 @@ function estimateMultimodalSupport(
   const normalized = model.trim().toLowerCase();
   if (providerType === "gemini") return "yes";
   if (providerType === "anthropic") return "yes";
+  if (providerType === "chatgpt_web") return "yes";
   if (providerType === "openai") {
     if (/gpt-4o|gpt-4\.1|o1|o3/.test(normalized)) return "yes";
     return "unknown";
@@ -92,7 +137,10 @@ function estimateMultimodalSupport(
   return "unknown";
 }
 
-function getModelCapabilityHint(providerType: ProviderType, model: string): string {
+function getModelCapabilityHint(
+  providerType: ProviderType,
+  model: string,
+): string {
   const support = estimateMultimodalSupport(providerType, model);
   if (support === "yes") {
     return getString("prefs-model-capability-yes");
@@ -211,9 +259,16 @@ export async function registerPrefsScripts(win: Window) {
       "ainote-prompt-templates-section",
       false,
     );
+    bindCollapsibleSection(
+      win.document,
+      "ainote-toggle-web-summary-section",
+      "ainote-web-summary-section",
+      false,
+    );
     if ((win as any).__ainotePrefsInitialized) {
       renderProfilesUI(win);
       renderPromptTemplatesUI(win);
+      renderWebSummarySettingsUI(win);
       return;
     }
     (win as any).__ainotePrefsInitialized = true;
@@ -225,6 +280,7 @@ export async function registerPrefsScripts(win: Window) {
     initializeDefaultPrefs();
     renderProfilesUI(win);
     renderPromptTemplatesUI(win);
+    renderWebSummarySettingsUI(win);
     bindGlobalEvents(win);
   } catch (error) {
     console.error("[AiNote][Prefs] Error in registerPrefsScripts:", error);
@@ -243,6 +299,14 @@ function initializeDefaultPrefs() {
     activePromptTemplateId: getDefaultActivePromptTemplateId(),
     pinCurrentPromptTemplate: false,
     promptTemplatesVersion: PROMPT_TEMPLATES_VERSION,
+    enableWebSummary: true,
+    webSummaryBridgePort: "23123",
+    webSummaryPollIntervalMs: "350",
+    webSummaryRequestTimeoutMs: "15000",
+    webSummaryAutoStartBridge: true,
+    webSummaryChatGPTProjectUrl: "",
+    webSummaryChatGPTMode: "thinking",
+    webSummaryEnableContinueChatMenu: true,
   };
 
   for (const [key, defaultValue] of Object.entries(defaults)) {
@@ -259,7 +323,10 @@ function initializeDefaultPrefs() {
   const profiles = parseProfiles(getPref("profiles"));
   const activeId = String(getPref("activeProfileId") || "").trim();
   if (!profiles.length) {
-    const profile = createProfile("openai_compatible", getString("prefs-profile-default-name"));
+    const profile = createProfile(
+      "openai_compatible",
+      getString("prefs-profile-default-name"),
+    );
     setPref("profiles" as any, JSON.stringify([profile]));
     setPref("activeProfileId" as any, profile.id);
   } else if (!activeId || !profiles.some((p) => p.id === activeId)) {
@@ -280,10 +347,7 @@ function initializeDefaultPrefs() {
       "activePromptTemplateId" as any,
       promptTemplateState.activeTemplateId,
     );
-    setPref(
-      "promptTemplatesVersion" as any,
-      promptTemplateState.version,
-    );
+    setPref("promptTemplatesVersion" as any, promptTemplateState.version);
   }
 }
 
@@ -348,7 +412,10 @@ function notifyPromptTemplateMenuChanged(win: Window) {
       { window: win },
     );
   } catch (error) {
-    console.error("[AiNote][Prefs] Failed to refresh prompt template menu:", error);
+    console.error(
+      "[AiNote][Prefs] Failed to refresh prompt template menu:",
+      error,
+    );
   }
 }
 
@@ -366,7 +433,9 @@ function openAddProfileDialog(win: Window) {
   const doc = win.document;
   ensureThemeStyles(doc);
   const mountTarget =
-    (doc.getElementById("zotero-prefpane-__addonRef__") as HTMLElement | null) ||
+    (doc.getElementById(
+      "zotero-prefpane-__addonRef__",
+    ) as HTMLElement | null) ||
     (doc.documentElement as HTMLElement | null) ||
     doc.body;
   if (!mountTarget) return;
@@ -458,8 +527,16 @@ function openAddProfileDialog(win: Window) {
     marginTop: "8px",
   });
 
-  const cancelBtn = createActionButton(doc, getString("prefs-add-dialog-cancel"), false);
-  const createBtn = createActionButton(doc, getString("prefs-add-dialog-create"), true);
+  const cancelBtn = createActionButton(
+    doc,
+    getString("prefs-add-dialog-cancel"),
+    false,
+  );
+  const createBtn = createActionButton(
+    doc,
+    getString("prefs-add-dialog-create"),
+    true,
+  );
 
   const close = () => {
     overlay.remove();
@@ -470,7 +547,9 @@ function openAddProfileDialog(win: Window) {
     if (event.target === overlay) close();
   });
   bindButtonAction(createBtn, () => {
-    const name = nameInput.value.trim() || `${getString("prefs-profile-default-name")} ${getProfiles().length + 1}`;
+    const name =
+      nameInput.value.trim() ||
+      `${getString("prefs-profile-default-name")} ${getProfiles().length + 1}`;
     const providerType = providerSelect.value as ProviderType;
     if (!name) {
       error.textContent = getString("prefs-add-dialog-name-empty");
@@ -501,7 +580,9 @@ function openAddPromptTemplateDialog(win: Window) {
   const doc = win.document;
   ensureThemeStyles(doc);
   const mountTarget =
-    (doc.getElementById("zotero-prefpane-__addonRef__") as HTMLElement | null) ||
+    (doc.getElementById(
+      "zotero-prefpane-__addonRef__",
+    ) as HTMLElement | null) ||
     (doc.documentElement as HTMLElement | null) ||
     doc.body;
   if (!mountTarget) return;
@@ -551,7 +632,10 @@ function openAddPromptTemplateDialog(win: Window) {
   });
   dialog.appendChild(sub);
 
-  const nameField = createLabeledField(doc, getString("prefs-add-template-dialog-name"));
+  const nameField = createLabeledField(
+    doc,
+    getString("prefs-add-template-dialog-name"),
+  );
   const nameInput = createHtmlElement(doc, "input");
   nameInput.type = "text";
   nameInput.value = `${getString("prefs-template-default-name")} ${templates.length + 1}`;
@@ -576,8 +660,16 @@ function openAddPromptTemplateDialog(win: Window) {
     marginTop: "8px",
   });
 
-  const cancelBtn = createActionButton(doc, getString("prefs-add-template-dialog-cancel"), false);
-  const createBtn = createActionButton(doc, getString("prefs-add-template-dialog-create"), true);
+  const cancelBtn = createActionButton(
+    doc,
+    getString("prefs-add-template-dialog-cancel"),
+    false,
+  );
+  const createBtn = createActionButton(
+    doc,
+    getString("prefs-add-template-dialog-create"),
+    true,
+  );
 
   const close = () => overlay.remove();
   bindButtonAction(cancelBtn, close);
@@ -651,6 +743,61 @@ function renderProfilesUI(win: Window) {
   }
 }
 
+function renderWebSummarySettingsUI(win: Window) {
+  const doc = win.document;
+  const container = doc.getElementById(
+    "ainote-web-summary-settings",
+  ) as HTMLElement | null;
+  if (!container) return;
+
+  container.innerHTML = "";
+
+  const card = createHtmlElement(doc, "div");
+  Object.assign(card.style, {
+    padding: "12px",
+    border: "1px solid var(--ainote-border)",
+    borderRadius: "12px",
+    background: "var(--ainote-surface)",
+  });
+
+  addInputRow(
+    doc,
+    card,
+    getString("prefs-web-summary-bridge-port"),
+    String(getPref("webSummaryBridgePort" as any) || "23123"),
+    (value) => setPref("webSummaryBridgePort" as any, value.trim() || "23123"),
+    "number",
+    {
+      helperText: getString("prefs-web-summary-bridge-port-hint"),
+    },
+  );
+  addInputRow(
+    doc,
+    card,
+    getString("prefs-web-summary-poll-interval"),
+    String(getPref("webSummaryPollIntervalMs" as any) || "350"),
+    (value) =>
+      setPref("webSummaryPollIntervalMs" as any, value.trim() || "350"),
+    "number",
+    {
+      helperText: getString("prefs-web-summary-poll-interval-hint"),
+    },
+  );
+  addInputRow(
+    doc,
+    card,
+    getString("prefs-web-summary-timeout"),
+    String(getPref("webSummaryRequestTimeoutMs" as any) || "15000"),
+    (value) =>
+      setPref("webSummaryRequestTimeoutMs" as any, value.trim() || "15000"),
+    "number",
+    {
+      helperText: getString("prefs-web-summary-timeout-hint"),
+    },
+  );
+  container.appendChild(card);
+}
+
 function renderPromptTemplatesUI(win: Window) {
   const doc = win.document;
   const list = doc.getElementById("ainote-prompt-templates-list");
@@ -712,7 +859,10 @@ function renderPromptTemplateCard(
   });
   card.appendChild(title);
 
-  const nameRow = createLabeledField(doc, getString("prefs-template-name-label"));
+  const nameRow = createLabeledField(
+    doc,
+    getString("prefs-template-name-label"),
+  );
   const nameInput = createHtmlElement(doc, "input");
   nameInput.type = "text";
   nameInput.value = template.name;
@@ -720,31 +870,29 @@ function renderPromptTemplateCard(
   nameRow.field.appendChild(nameInput);
   card.appendChild(nameRow.row);
 
-  const descriptionRow = createLabeledField(doc, getString("prefs-template-desc-label"));
+  const descriptionRow = createLabeledField(
+    doc,
+    getString("prefs-template-desc-label"),
+  );
   const descriptionInput = createHtmlElement(doc, "textarea");
   styleTextArea(descriptionInput);
   descriptionInput.rows = 3;
   descriptionInput.value = template.description || "";
   descriptionRow.field.appendChild(descriptionInput);
   card.appendChild(descriptionRow.row);
-  appendHelperText(
-    doc,
-    card,
-    getString("prefs-template-desc-hint"),
-  );
+  appendHelperText(doc, card, getString("prefs-template-desc-hint"));
 
-  const contentRow = createLabeledField(doc, getString("prefs-template-content-label"));
+  const contentRow = createLabeledField(
+    doc,
+    getString("prefs-template-content-label"),
+  );
   const contentInput = createHtmlElement(doc, "textarea");
   styleTextArea(contentInput);
   contentInput.rows = 14;
   contentInput.value = template.content;
   contentRow.field.appendChild(contentInput);
   card.appendChild(contentRow.row);
-  appendHelperText(
-    doc,
-    card,
-    getString("prefs-template-content-hint"),
-  );
+  appendHelperText(doc, card, getString("prefs-template-content-hint"));
 
   const status = createHtmlElement(doc, "div");
   Object.assign(status.style, {
@@ -763,7 +911,11 @@ function renderPromptTemplateCard(
     flexWrap: "wrap",
   });
 
-  const saveBtn = createActionButton(doc, getString("prefs-template-save"), true);
+  const saveBtn = createActionButton(
+    doc,
+    getString("prefs-template-save"),
+    true,
+  );
   bindButtonAction(saveBtn, () => {
     const name = nameInput.value.trim();
     const description = descriptionInput.value.trim();
@@ -804,11 +956,14 @@ function renderPromptTemplateCard(
   });
   actions.appendChild(saveBtn);
 
-  const cloneBtn = createActionButton(doc, getString("prefs-template-clone"), false);
+  const cloneBtn = createActionButton(
+    doc,
+    getString("prefs-template-clone"),
+    false,
+  );
   bindButtonAction(cloneBtn, () => {
     const templates = getPromptTemplates();
-    const latest =
-      findPromptTemplateById(templates, template.id) || template;
+    const latest = findPromptTemplateById(templates, template.id) || template;
     const clone = createPromptTemplateCopy(latest, templates);
     savePromptTemplateState([...templates, clone], clone.id);
     renderPromptTemplatesUI(win);
@@ -816,7 +971,12 @@ function renderPromptTemplateCard(
   });
   actions.appendChild(cloneBtn);
 
-  const deleteBtn = createActionButton(doc, getString("prefs-template-delete"), false, true);
+  const deleteBtn = createActionButton(
+    doc,
+    getString("prefs-template-delete"),
+    false,
+    true,
+  );
   deleteBtn.disabled = template.builtIn;
   if (template.builtIn) {
     deleteBtn.style.opacity = "0.6";
@@ -885,8 +1045,12 @@ function renderProfileCard(
     renderProfilesUI(win);
   };
 
-  addInputRow(doc, card, getString("prefs-profile-name"), profile.name, (value) =>
-    patchProfile({ name: value }),
+  addInputRow(
+    doc,
+    card,
+    getString("prefs-profile-name"),
+    profile.name,
+    (value) => patchProfile({ name: value }),
     "text",
     {
       helperText: getString("prefs-profile-name-hint"),
@@ -925,8 +1089,20 @@ function renderProfileCard(
     },
   );
 
-  addInputRow(doc, card, getString("prefs-profile-api-url"), profile.baseUrl, (value) =>
-    patchProfile({ baseUrl: value }),
+  if (profile.providerType === "chatgpt_web") {
+    renderChatGPTWebProfileCard(doc, card, profile, patchProfile);
+    card.appendChild(
+      actionsForProfile(doc, profile, isActive, win, patchProfile),
+    );
+    return card;
+  }
+
+  addInputRow(
+    doc,
+    card,
+    getString("prefs-profile-api-url"),
+    profile.baseUrl,
+    (value) => patchProfile({ baseUrl: value }),
     "text",
     {
       helperText: getString("prefs-profile-api-url-hint"),
@@ -953,11 +1129,7 @@ function renderProfileCard(
         },
       }),
   );
-  appendHelperText(
-    doc,
-    card,
-    getString("prefs-profile-pdf-mode-hint"),
-  );
+  appendHelperText(doc, card, getString("prefs-profile-pdf-mode-hint"));
 
   if ((profile.extra?.pdfProcessMode || "base64") === "text") {
     addInputRow(
@@ -997,8 +1169,12 @@ function renderProfileCard(
   );
 
   if (needsAzureFields(profile.providerType)) {
-    addInputRow(doc, card, getString("prefs-profile-azure-api-version"), profile.apiVersion || "", (value) =>
-      patchProfile({ apiVersion: value }),
+    addInputRow(
+      doc,
+      card,
+      getString("prefs-profile-azure-api-version"),
+      profile.apiVersion || "",
+      (value) => patchProfile({ apiVersion: value }),
       "text",
       {
         helperText: getString("prefs-profile-azure-api-version-hint"),
@@ -1067,8 +1243,12 @@ function renderProfileCard(
     );
   }
 
-  renderCheckboxRow(doc, card, getString("prefs-profile-stream"), profile.stream, (checked) =>
-    patchProfile({ stream: checked }),
+  renderCheckboxRow(
+    doc,
+    card,
+    getString("prefs-profile-stream"),
+    profile.stream,
+    (checked) => patchProfile({ stream: checked }),
     getString("prefs-profile-stream-hint"),
   );
   addInputRow(
@@ -1085,6 +1265,19 @@ function renderProfileCard(
 
   renderConnectionTools(doc, card, profile);
 
+  card.appendChild(
+    actionsForProfile(doc, profile, isActive, win, patchProfile),
+  );
+  return card;
+}
+
+function actionsForProfile(
+  doc: Document,
+  profile: ProviderProfile,
+  _isActive: boolean,
+  win: Window,
+  patchProfile: (patch: Partial<ProviderProfile>) => void,
+): HTMLElement {
   const actions = createHtmlElement(doc, "div");
   Object.assign(actions.style, {
     display: "flex",
@@ -1093,7 +1286,11 @@ function renderProfileCard(
     flexWrap: "wrap",
   });
 
-  const activeBtn = createActionButton(doc, getString("prefs-profile-set-active"), true);
+  const activeBtn = createActionButton(
+    doc,
+    getString("prefs-profile-set-active"),
+    true,
+  );
   bindButtonAction(activeBtn, () => {
     setCurrentProfile(profile.id);
     renderProfilesUI(win);
@@ -1102,7 +1299,9 @@ function renderProfileCard(
 
   const enableBtn = createActionButton(
     doc,
-    profile.enabled ? getString("prefs-profile-disable") : getString("prefs-profile-enable"),
+    profile.enabled
+      ? getString("prefs-profile-disable")
+      : getString("prefs-profile-enable"),
     false,
   );
   bindButtonAction(enableBtn, () =>
@@ -1110,7 +1309,11 @@ function renderProfileCard(
   );
   actions.appendChild(enableBtn);
 
-  const cloneBtn = createActionButton(doc, getString("prefs-profile-clone"), false);
+  const cloneBtn = createActionButton(
+    doc,
+    getString("prefs-profile-clone"),
+    false,
+  );
   bindButtonAction(cloneBtn, () => {
     const profiles = getProfiles();
     const clone = normalizeProfile({
@@ -1124,11 +1327,19 @@ function renderProfileCard(
   });
   actions.appendChild(cloneBtn);
 
-  const deleteBtn = createActionButton(doc, getString("prefs-profile-delete"), false, true);
+  const deleteBtn = createActionButton(
+    doc,
+    getString("prefs-profile-delete"),
+    false,
+    true,
+  );
   bindButtonAction(deleteBtn, () => {
     const nextProfiles = getProfiles().filter((item) => item.id !== profile.id);
     if (!nextProfiles.length) {
-      const fallback = createProfile("openai_compatible", getString("prefs-profile-default-name"));
+      const fallback = createProfile(
+        "openai_compatible",
+        getString("prefs-profile-default-name"),
+      );
       saveProfiles([fallback]);
       setCurrentProfile(fallback.id);
     } else {
@@ -1141,9 +1352,67 @@ function renderProfileCard(
     renderProfilesUI(win);
   });
   actions.appendChild(deleteBtn);
+  return actions;
+}
 
-  card.appendChild(actions);
-  return card;
+function renderChatGPTWebProfileCard(
+  doc: Document,
+  card: HTMLElement,
+  _profile: ProviderProfile,
+  _patchProfile: (patch: Partial<ProviderProfile>) => void,
+) {
+  const tip = createHtmlElement(doc, "div");
+  tip.textContent = runtimeT({
+    "en-US":
+      "This mode uses the ChatGPT website and Chrome extension workflow instead of a direct API.",
+    "zh-CN": "该模式通过 ChatGPT 网页和浏览器扩展完成总结，不直接调用 API。",
+    "zh-TW":
+      "此模式透過 ChatGPT 網頁與瀏覽器擴充套件完成總結，不直接呼叫 API。",
+  });
+  Object.assign(tip.style, {
+    marginTop: "8px",
+    color: "var(--ainote-text-muted)",
+    fontSize: "12px",
+    lineHeight: "1.6",
+  });
+  card.appendChild(tip);
+
+  addSelectRow(
+    doc,
+    card,
+    getString("prefs-web-summary-chatgpt-mode"),
+    getPref("webSummaryChatGPTMode" as any) === "instant"
+      ? "instant"
+      : "thinking",
+    [
+      {
+        value: "thinking",
+        label: getString("prefs-web-summary-chatgpt-mode-thinking"),
+      },
+      {
+        value: "instant",
+        label: getString("prefs-web-summary-chatgpt-mode-instant"),
+      },
+    ],
+    (value) =>
+      setPref(
+        "webSummaryChatGPTMode" as any,
+        value === "instant" ? "instant" : "thinking",
+      ),
+  );
+  appendHelperText(doc, card, getString("prefs-web-summary-chatgpt-mode-hint"));
+
+  addInputRow(
+    doc,
+    card,
+    getString("prefs-web-summary-project-url"),
+    String(getPref("webSummaryChatGPTProjectUrl" as any) || ""),
+    (value) => setPref("webSummaryChatGPTProjectUrl" as any, value.trim()),
+    "text",
+    {
+      helperText: getString("prefs-web-summary-project-url-hint"),
+    },
+  );
 }
 
 function renderModelRow(
@@ -1185,8 +1454,16 @@ function renderModelRow(
   input.addEventListener("change", () => patchProfile({ model: input.value }));
   top.appendChild(input);
 
-  const fetchButton = createActionButton(doc, getString("prefs-model-fetch"), false);
-  const testButton = createActionButton(doc, getString("prefs-model-test"), false);
+  const fetchButton = createActionButton(
+    doc,
+    getString("prefs-model-fetch"),
+    false,
+  );
+  const testButton = createActionButton(
+    doc,
+    getString("prefs-model-test"),
+    false,
+  );
   top.appendChild(fetchButton);
   top.appendChild(testButton);
   row.appendChild(top);
@@ -1244,12 +1521,16 @@ function renderModelRow(
       if (!latest) throw new Error("Profile not found");
       const models = await AIService.listModels(latest);
       status.textContent = models.length
-        ? getString("prefs-model-fetch-success", { args: { count: String(models.length) } })
+        ? getString("prefs-model-fetch-success", {
+            args: { count: String(models.length) },
+          })
         : getString("prefs-model-fetch-empty");
       renderModelList(doc, modelList, models, (modelId) => {
         input.value = modelId;
         patchProfile({ model: modelId });
-        status.textContent = getString("prefs-model-selected", { args: { model: modelId } });
+        status.textContent = getString("prefs-model-selected", {
+          args: { model: modelId },
+        });
       });
     } catch (error: any) {
       status.textContent = error?.message || String(error);
@@ -1329,8 +1610,7 @@ function renderApiKeyRow(
   });
   input.addEventListener("keydown", (event: KeyboardEvent) => {
     const isCopy =
-      (event.ctrlKey || event.metaKey) &&
-      event.key.toLowerCase() === "c";
+      (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c";
     if (!isCopy) return;
     const start = input.selectionStart ?? 0;
     const end = input.selectionEnd ?? 0;
@@ -1414,7 +1694,9 @@ function renderOptionalParamRow(
   row.appendChild(input);
 
   const state = createHtmlElement(doc, "span");
-  state.textContent = checked ? getString("prefs-option-enabled") : getString("prefs-option-disabled");
+  state.textContent = checked
+    ? getString("prefs-option-enabled")
+    : getString("prefs-option-disabled");
   Object.assign(state.style, {
     fontSize: "12px",
     color: "var(--ainote-text-muted)",

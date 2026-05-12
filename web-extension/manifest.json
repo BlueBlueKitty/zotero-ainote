@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "AiNote Web Summary Bridge",
+  "version": "0.1.0",
+  "description": "Bridge Zotero web-summary tasks to ChatGPT conversations.",
+  "icons": {
+    "16": "icons/favicon@0.5x.png",
+    "48": "icons/favicon.png",
+    "128": "icons/favicon.png"
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "AiNote Web Summary Bridge",
+    "default_icon": {
+      "16": "icons/favicon@0.5x.png",
+      "48": "icons/favicon.png",
+      "128": "icons/favicon.png"
+    }
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

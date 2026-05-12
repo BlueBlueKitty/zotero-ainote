@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>AiNote Web Summary Settings</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 760px;
+        margin: 32px auto;
+        padding: 0 16px;
+        color: #1f2328;
+      }
+      h1 {
+        font-size: 24px;
+      }
+      .row {
+        margin: 16px 0;
+      }
+      label {
+        display: block;
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+      input[type="text"],
+      input[type="number"],
+      select {
+        width: 100%;
+        padding: 8px 10px;
+        box-sizing: border-box;
+      }
+      .hint {
+        color: #57606a;
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      button {
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      #status {
+        margin-top: 20px;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>AiNote Web Summary 设置</h1>
+
+    <div class="row">
+      <label for="bridgeUrl">Bridge URL</label>
+      <input id="bridgeUrl" type="text" />
+    </div>
+
+    <div class="row">
+      <label for="pollingIntervalMs">轮询间隔（毫秒）</label>
+      <input id="pollingIntervalMs" type="number" min="1000" step="100" />
+    </div>
+
+    <div class="row">
+      <label><input id="pollingEnabled" type="checkbox" /> 启用轮询</label>
+      <label><input id="autoSend" type="checkbox" /> 自动发送 Prompt</label>
+      <label><input id="autoRenameConversation" type="checkbox" /> 尝试重命名对话标题</label>
+    </div>
+
+    <div class="row">
+      <button id="save">保存</button>
+      <button id="test">测试连接</button>
+    </div>
+
+    <div id="status"></div>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

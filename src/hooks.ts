@@ -2,6 +2,7 @@ import { getString, initLocale } from "./utils/locale";
 import { registerPrefsScripts } from "./modules/preferenceScript";
 import { createZToolkit } from "./utils/ztoolkit";
 import { NoteGenerationTarget, NoteGenerator } from "./modules/noteGenerator";
+import { WebSummaryWorkflow } from "./modules/webSummaryWorkflow";
 import {
   formatSelectedNote,
   NOTE_FORMAT_ACTIONS,
@@ -26,9 +27,12 @@ import {
   migrateToProfilesV3,
   parseProfiles,
 } from "./modules/llmProfiles";
+import { WebSummaryRelationStore } from "./modules/webSummaryRelations";
 
 const GENERATE_SUMMARY_MENU_ID = "ainote-generate-summary-menu";
+const WEB_CONTINUE_CHAT_MENU_ID = "ainote-web-continue-chat-menu";
 const NOTE_FORMAT_MENU_ID = "ainote-note-format-menu";
+const WEB_DEBUG_FETCH_MENU_ID = "ainote-web-debug-fetch-menu";
 
 async function onStartup() {
   await Promise.all([
@@ -41,6 +45,7 @@ async function onStartup() {
 
   // 在插件启动时立即初始化默认配置
   initializeDefaultPrefsOnStartup();
+  startWebSummaryBridgeIfNeeded();
 
   // Register preferences pane
   registerPrefsPane();
@@ -113,6 +118,14 @@ function initializeDefaultPrefsOnStartup() {
     activePromptTemplateId: getDefaultActivePromptTemplateId(),
     pinCurrentPromptTemplate: false,
     promptTemplatesVersion: PROMPT_TEMPLATES_VERSION,
+    enableWebSummary: true,
+    webSummaryBridgePort: "23123",
+    webSummaryPollIntervalMs: "350",
+    webSummaryRequestTimeoutMs: "15000",
+    webSummaryAutoStartBridge: true,
+    webSummaryChatGPTProjectUrl: "",
+    webSummaryChatGPTMode: "thinking",
+    webSummaryEnableContinueChatMenu: true,
   };
 
   migrateToProfilesV3(
@@ -245,10 +258,14 @@ function registerContextMenuItemForWindow(win: Window) {
   }
 
   win.document.getElementById(GENERATE_SUMMARY_MENU_ID)?.remove();
+  win.document.getElementById(WEB_CONTINUE_CHAT_MENU_ID)?.remove();
   win.document.getElementById(NOTE_FORMAT_MENU_ID)?.remove();
+  win.document.getElementById(WEB_DEBUG_FETCH_MENU_ID)?.remove();
 
   ztoolkit.Menu.register(popup, buildGenerateSummaryMenuOptions(menuIcon));
+  ztoolkit.Menu.register(popup, buildContinueChatMenuOptions(menuIcon));
   ztoolkit.Menu.register(popup, buildNoteFormatMenuOptions(menuIcon));
+  ztoolkit.Menu.register(popup, buildDebugFetchMenuOptions(menuIcon));
 }
 
 function refreshContextMenuItems() {
@@ -269,6 +286,70 @@ function isSupportedSelectionItem(item: Zotero.Item): boolean {
 
 function isSingleSelectedNote(item: Zotero.Item): boolean {
   return item.isNote();
+}
+
+function isContinueChatEnabled(): boolean {
+  return !!getPref("webSummaryEnableContinueChatMenu" as any);
+}
+
+function resolveSelectedRegularItemSync(item: Zotero.Item): Zotero.Item | null {
+  if (item.isRegularItem()) {
+    return item;
+  }
+  if (!isPdfAttachment(item) || !item.parentItemID) {
+    return null;
+  }
+  const parent = Zotero.Items.get(item.parentItemID);
+  return parent?.isRegularItem() ? parent : null;
+}
+
+function buildContinueChatMenuOptions(menuIcon: string): any {
+  return {
+    tag: "menuitem",
+    id: WEB_CONTINUE_CHAT_MENU_ID,
+    label: getString("menuitem-continueWebChat" as any),
+    icon: menuIcon,
+    commandListener: () => {
+      void handleContinueWebChat();
+    },
+    getVisibility: () => {
+      if (!isContinueChatEnabled()) {
+        return false;
+      }
+      const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
+      if (selectedItems?.length !== 1) {
+        return false;
+      }
+      const regularItem = resolveSelectedRegularItemSync(selectedItems[0]);
+      if (!regularItem) {
+        return false;
+      }
+      return WebSummaryRelationStore.hasPlatformLink(regularItem, "chatgpt");
+    },
+  };
+}
+
+function buildDebugFetchMenuOptions(menuIcon: string): any {
+  return {
+    tag: "menuitem",
+    id: WEB_DEBUG_FETCH_MENU_ID,
+    label: getString("menuitem-debugFetchWebContent" as any),
+    icon: menuIcon,
+    commandListener: () => {
+      void handleDebugFetchWebContent();
+    },
+    getVisibility: () => {
+      const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
+      if (selectedItems?.length !== 1) {
+        return false;
+      }
+      const regularItem = resolveSelectedRegularItemSync(selectedItems[0]);
+      if (!regularItem) {
+        return false;
+      }
+      return WebSummaryRelationStore.hasPlatformLink(regularItem, "chatgpt");
+    },
+  };
 }
 
 function buildNoteFormatMenuOptions(menuIcon: string): any {
@@ -347,7 +428,20 @@ async function handleGenerateSummary(templateId?: string) {
   const profiles = parseProfiles(profilesRaw);
   const activeProfile = profiles.find((p) => p.id === activeId) || profiles[0];
 
-    if (!activeProfile || !activeProfile.enabled || !activeProfile.apiKey) {
+    if (!activeProfile || !activeProfile.enabled) {
+    new ztoolkit.ProgressWindow("AiNote", {
+      closeOnClick: true,
+      closeTime: 5000,
+    })
+      .createLine({
+        text: getString("error-noApiKey"),
+        type: "error",
+      })
+      .show();
+    return;
+  }
+
+  if (activeProfile.providerType !== "chatgpt_web" && !activeProfile.apiKey) {
     new ztoolkit.ProgressWindow("AiNote", {
       closeOnClick: true,
       closeTime: 5000,
@@ -388,6 +482,11 @@ async function handleGenerateSummary(templateId?: string) {
         type: "error",
       })
       .show();
+    return;
+  }
+
+  if (activeProfile.providerType === "chatgpt_web") {
+    await handleGenerateSummaryViaWeb(templateId);
     return;
   }
 
@@ -512,6 +611,164 @@ async function handleGenerateSummary(templateId?: string) {
   }
 }
 
+async function handleGenerateSummaryViaWeb(templateId?: string) {
+  const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
+  if (selectedItems.length === 0) {
+    new ztoolkit.ProgressWindow("AiNote", {
+      closeOnClick: true,
+      closeTime: 3000,
+    })
+      .createLine({
+        text: getString("error-noItemsSelected"),
+        type: "error",
+      })
+      .show();
+    return;
+  }
+
+  const targets = await normalizeSelectionTargets(selectedItems, templateId);
+  if (!targets.length) {
+    new ztoolkit.ProgressWindow("AiNote", {
+      closeOnClick: true,
+      closeTime: 3000,
+    })
+      .createLine({
+        text: getString("error-noSupportedItems"),
+        type: "error",
+      })
+      .show();
+    return;
+  }
+
+  const progressWin = new ztoolkit.ProgressWindow("AiNote", {
+    closeOnClick: false,
+    closeTime: -1,
+  });
+
+  try {
+    progressWin
+      .createLine({
+        text: getString("web-summary-progress-submitting" as any),
+        type: "default",
+        progress: 0,
+      })
+      .show();
+
+    const result = await WebSummaryWorkflow.summarizeItems(targets, (current, total, progress, message) => {
+      const itemTitle = String(targets[current - 1]?.item.getField("title") || "");
+      const overall = ((current - 1) / total) * 100 + progress / total;
+      progressWin.changeLine({
+        text: `正在处理 ${current}/${total}: ${itemTitle} - ${message}`,
+        type: message.includes("失败") ? "error" : progress === 100 && current === total ? "success" : "default",
+        progress: overall,
+      });
+    });
+    const failedCount = result.failedCount;
+    const canceledCount = result.canceledCount;
+    const successCount = result.successCount;
+    const finalText =
+      failedCount === 0 && canceledCount === 0
+        ? getString("web-summary-success-all-complete" as any, {
+            args: { total: String(targets.length) },
+          })
+        : `网页总结完成：成功 ${successCount} 个，失败 ${failedCount} 个，取消 ${canceledCount} 个`;
+    progressWin.changeLine({
+      text: finalText,
+      type: failedCount > 0 ? "error" : canceledCount > 0 ? "default" : "success",
+      progress: 100,
+    });
+    progressWin.startCloseTimer(5000);
+  } catch (error: any) {
+    ztoolkit.log("[AiNote] Web summary failed:", error);
+    progressWin.changeLine({
+      text: `${getString("web-summary-error-generic" as any)}：${error?.message || ""}`,
+      type: "error",
+      progress: 100,
+    });
+    progressWin.startCloseTimer(10000);
+  }
+}
+
+async function handleContinueWebChat() {
+  const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
+  if (selectedItems.length !== 1) {
+    return;
+  }
+  const item = resolveSelectedRegularItemSync(selectedItems[0]);
+  if (!item) {
+    return;
+  }
+
+  const progressWin = new ztoolkit.ProgressWindow("AiNote", {
+    closeOnClick: true,
+    closeTime: -1,
+  });
+
+  try {
+    progressWin
+      .createLine({
+        text: getString("web-summary-open-conversation-start" as any),
+        type: "default",
+      })
+      .show();
+    await WebSummaryWorkflow.openConversationForItem(item);
+    progressWin.changeLine({
+      text: getString("web-summary-open-conversation-success" as any),
+      type: "success",
+      progress: 100,
+    });
+    progressWin.startCloseTimer(4000);
+  } catch (error: any) {
+    progressWin.changeLine({
+      text: `${getString("web-summary-open-conversation-failed" as any)}：${error?.message || ""}`,
+      type: "error",
+    });
+    progressWin.startCloseTimer(8000);
+  }
+}
+
+async function handleDebugFetchWebContent() {
+  const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
+  if (selectedItems.length !== 1) {
+    return;
+  }
+  const item = resolveSelectedRegularItemSync(selectedItems[0]);
+  if (!item) {
+    return;
+  }
+
+  const progressWin = new ztoolkit.ProgressWindow("AiNote", {
+    closeOnClick: false,
+    closeTime: -1,
+  });
+
+  try {
+    progressWin
+      .createLine({
+        text: getString("web-summary-debug-fetch-start" as any),
+        type: "default",
+        progress: 0,
+      })
+      .show();
+
+    const result = await WebSummaryWorkflow.debugFetchConversationContent(item);
+    progressWin.changeLine({
+      text: getString("web-summary-debug-fetch-success" as any),
+      type: "success",
+      progress: 100,
+    });
+    progressWin.startCloseTimer(5000);
+  } catch (error: any) {
+    ztoolkit.log("[AiNote][DebugFetch] failed:", error);
+    progressWin.changeLine({
+      text: `${getString("web-summary-debug-fetch-failed" as any)}：${error?.message || ""}`,
+      type: "error",
+      progress: 100,
+    });
+    progressWin.startCloseTimer(10000);
+  }
+}
+
 async function handleNoteFormatAction(actionType: NoteFormatActionType) {
   try {
     const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
@@ -550,6 +807,7 @@ async function onMainWindowUnload(win: Window): Promise<void> {
 }
 
 function onShutdown(): void {
+  addon.data.webSummaryBridge?.stop();
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
   // Remove addon object
@@ -602,3 +860,14 @@ export default {
   onShortcuts,
   onDialogEvents,
 };
+
+function startWebSummaryBridgeIfNeeded() {
+  if (!getPref("webSummaryAutoStartBridge" as any)) {
+    return;
+  }
+  try {
+    addon.data.webSummaryBridge?.start();
+  } catch (error) {
+    ztoolkit.log("[AiNote] Failed to start web summary bridge:", error);
+  }
+}

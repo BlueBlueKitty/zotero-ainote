@@ -984,6 +984,8 @@ class GeminiClient implements LLMClient {
 
 function getClient(type: ProviderType): LLMClient {
   switch (type) {
+    case "chatgpt_web":
+      return new OpenAICompatClient();
     case "openai":
       return new OpenAIClient();
     case "azure":
@@ -1015,6 +1017,9 @@ function getActiveProfile(): ProviderProfile {
 
 export class AIService {
   static supportsPdfBase64(profile: ProviderProfile): boolean {
+    if (profile.providerType === "chatgpt_web") {
+      return true;
+    }
     return getClient(profile.providerType).supportsPdfBase64(profile);
   }
 
@@ -1087,6 +1092,9 @@ export class AIService {
 
   static async listModels(profile: ProviderProfile): Promise<LLMModelInfo[]> {
     const normalized = normalizeProfile(profile);
+    if (normalized.providerType === "chatgpt_web") {
+      return [{ id: "ChatGPT Web", name: "ChatGPT Web" }];
+    }
     try {
       return await getClient(normalized.providerType).listModels(normalized);
     } catch (error: any) {
@@ -1097,6 +1105,9 @@ export class AIService {
 
   static async testConnection(profile: ProviderProfile): Promise<string> {
     const normalized = normalizeProfile(profile);
+    if (normalized.providerType === "chatgpt_web") {
+      return "该模式使用 ChatGPT 网页版，无需 API 连接测试";
+    }
     try {
       return await getClient(normalized.providerType).testConnection(normalized);
     } catch (error: any) {
