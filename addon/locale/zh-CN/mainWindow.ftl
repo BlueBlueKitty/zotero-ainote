@@ -88,4 +88,4 @@ web-summary-error-generic = 网页版大模型总结失败
 web-summary-open-conversation-start = 正在打开对应网页AI会话...
 web-summary-open-conversation-success = 已成功打开对应网页AI会话
 web-summary-open-conversation-failed = 打开网页AI会话失败
-menuitem-reopenOutputWindow = 重新打开输出窗口
+menuitem-reopenOutputWindow = 打开条目总结窗口

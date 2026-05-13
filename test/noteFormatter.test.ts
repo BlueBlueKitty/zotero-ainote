@@ -71,6 +71,22 @@ describe("noteFormatter", function () {
     assert.equal(result.stats.inlineFixed, 2);
   });
 
+  it("should fix inline identifier formulas wrapped by double-dollar", function () {
+    const input = [
+      "<p>$$F$$ 表示 flood，即洪水状态；</p>",
+      "<p>$$NF$$ 或 $$N$$ 表示 non-flood，即非洪水状态；</p>",
+    ].join("");
+
+    const result = fixMathInNoteHtml(input);
+
+    assert.include(result.html, '<span class="math">$F$</span> 表示 flood');
+    assert.include(
+      result.html,
+      '<span class="math">$NF$</span> 或 <span class="math">$N$</span> 表示 non-flood',
+    );
+    assert.equal(result.stats.inlineFixed, 3);
+  });
+
   it("should fix markdown math fences in raw text and code blocks", function () {
     const input = [
       "<p>```math<br>F = ma<br>```</p>",

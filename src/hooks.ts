@@ -1,9 +1,8 @@
 import { getString, initLocale } from "./utils/locale";
 import { registerPrefsScripts } from "./modules/preferenceScript";
 import { createZToolkit } from "./utils/ztoolkit";
-import { NoteGenerationTarget, NoteGenerator } from "./modules/noteGenerator";
+import { NoteGenerationTarget } from "./modules/noteGenerator";
 import { WebSummaryWorkflow } from "./modules/webSummaryWorkflow";
-import { OutputWindowManager } from "./modules/outputWindowManager";
 import {
   formatSelectedNote,
   NOTE_FORMAT_ACTIONS,
@@ -29,6 +28,8 @@ import {
   parseProfiles,
 } from "./modules/llmProfiles";
 import { WebSummaryRelationStore } from "./modules/webSummaryRelations";
+import { SummaryTaskManager } from "./modules/summaryTaskManager";
+import { SummaryManagerWindow } from "./modules/summaryManagerWindow";
 
 const GENERATE_SUMMARY_MENU_ID = "ainote-generate-summary-menu";
 const WEB_CONTINUE_CHAT_MENU_ID = "ainote-web-continue-chat-menu";
@@ -43,6 +44,7 @@ async function onStartup() {
   ]);
 
   initLocale();
+  await SummaryTaskManager.getInstance().ensureLoaded();
 
   // 在插件启动时立即初始化默认配置
   initializeDefaultPrefsOnStartup();
@@ -127,9 +129,10 @@ function initializeDefaultPrefsOnStartup() {
     webSummaryPollIntervalMs: "350",
     webSummaryRequestTimeoutMs: "15000",
     webSummaryAutoStartBridge: true,
-    webSummaryChatGPTProjectUrl: "",
+    webSummaryChatGPTProjectUrl: "https://chatgpt.com",
     webSummaryChatGPTMode: "thinking",
     webSummaryEnableContinueChatMenu: true,
+    maxSummaryHistoryRecords: 100,
   };
 
   migrateToProfilesV3(
@@ -166,15 +169,21 @@ function initializeDefaultPrefsOnStartup() {
       }
     }
 
-    const profiles = parseProfiles(getPref("profiles"));
-    const activeId = String(getPref("activeProfileId") || "").trim();
-    if (!profiles.length) {
-      const profile = createProfile("openai_compatible", "默认配置");
-      setPref("profiles" as any, JSON.stringify([profile]));
-      setPref("activeProfileId" as any, profile.id);
-    } else if (!activeId || !profiles.some((p) => p.id === activeId)) {
-      setPref("activeProfileId" as any, profiles[0].id);
-    }
+  }
+
+  const profiles = parseProfiles(getPref("profiles"));
+  const activeId = String(getPref("activeProfileId") || "").trim();
+  if (!profiles.length) {
+    const chatgptProfile = createProfile("chatgpt_web", "ChatGPT 网页版");
+    setPref("profiles" as any, JSON.stringify([chatgptProfile]));
+    setPref("activeProfileId" as any, chatgptProfile.id);
+  } else if (!activeId || !profiles.some((p) => p.id === activeId)) {
+    setPref("activeProfileId" as any, profiles[0].id);
+  }
+
+  if (profiles.length && !profiles.some((p) => p.providerType === "chatgpt_web")) {
+    const nextProfiles = [...profiles, createProfile("chatgpt_web", "ChatGPT 网页版")];
+    setPref("profiles" as any, JSON.stringify(nextProfiles));
   }
 
   const promptTemplateState = ensurePromptTemplateState(
@@ -274,8 +283,10 @@ function registerContextMenuItemForWindow(win: Window) {
     id: REOPEN_OUTPUT_WINDOW_MENU_ID,
     label: getString("menuitem-reopenOutputWindow" as any),
     icon: menuIcon,
-    commandListener: () => { void OutputWindowManager.reopenWindow(); },
-    getVisibility: () => OutputWindowManager.hasActiveBatch(),
+    commandListener: () => {
+      void SummaryManagerWindow.open();
+    },
+    getVisibility: () => true,
   });
 }
 
@@ -475,55 +486,23 @@ async function handleGenerateSummary(templateId?: string) {
   }
 
   if (activeProfile.providerType === "chatgpt_web") {
-    await handleGenerateSummaryViaWeb(templateId);
+    // chatgpt_web 也统一通过任务管理器进入
+    await enqueueSummaryTasks(targets);
     return;
   }
 
   try {
-    await NoteGenerator.generateNotesForItems(
-      targets,
-      // 进度仅通过输出窗口显示，此处无需额外 UI
-    );
+    await enqueueSummaryTasks(targets);
   } catch (error: any) {
     ztoolkit.log("[AiNote] Fatal error in handleGenerateSummary:", error);
   }
 }
 
-async function handleGenerateSummaryViaWeb(templateId?: string) {
-  const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
-  if (selectedItems.length === 0) {
-    new ztoolkit.ProgressWindow("AiNote", {
-      closeOnClick: true,
-      closeTime: 3000,
-    })
-      .createLine({
-        text: getString("error-noItemsSelected"),
-        type: "error",
-      })
-      .show();
-    return;
-  }
-
-  const targets = await normalizeSelectionTargets(selectedItems, templateId);
-  if (!targets.length) {
-    new ztoolkit.ProgressWindow("AiNote", {
-      closeOnClick: true,
-      closeTime: 3000,
-    })
-      .createLine({
-        text: getString("error-noSupportedItems"),
-        type: "error",
-      })
-      .show();
-    return;
-  }
-
-  try {
-    // 进度仅通过输出窗口显示，此处无需额外 UI
-    await WebSummaryWorkflow.summarizeItems(targets);
-  } catch (error: any) {
-    ztoolkit.log("[AiNote] Web summary failed:", error);
-  }
+async function enqueueSummaryTasks(targets: NoteGenerationTarget[]) {
+  const manager = SummaryTaskManager.getInstance();
+  await manager.ensureLoaded();
+  manager.enqueue(targets);
+  await SummaryManagerWindow.open();
 }
 
 async function handleContinueWebChat() {

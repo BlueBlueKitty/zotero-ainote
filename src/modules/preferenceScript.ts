@@ -304,7 +304,7 @@ function initializeDefaultPrefs() {
     webSummaryPollIntervalMs: "350",
     webSummaryRequestTimeoutMs: "15000",
     webSummaryAutoStartBridge: true,
-    webSummaryChatGPTProjectUrl: "",
+    webSummaryChatGPTProjectUrl: "https://chatgpt.com",
     webSummaryChatGPTMode: "thinking",
     webSummaryEnableContinueChatMenu: true,
   };
@@ -324,13 +324,17 @@ function initializeDefaultPrefs() {
   const activeId = String(getPref("activeProfileId") || "").trim();
   if (!profiles.length) {
     const profile = createProfile(
-      "openai_compatible",
-      getString("prefs-profile-default-name"),
+      "chatgpt_web",
+      "ChatGPT 网页版",
     );
     setPref("profiles" as any, JSON.stringify([profile]));
     setPref("activeProfileId" as any, profile.id);
   } else if (!activeId || !profiles.some((p) => p.id === activeId)) {
     setPref("activeProfileId" as any, profiles[0].id);
+  }
+  if (profiles.length && !profiles.some((p) => p.providerType === "chatgpt_web")) {
+    const nextProfiles = [...profiles, createProfile("chatgpt_web", "ChatGPT 网页版")];
+    setPref("profiles" as any, JSON.stringify(nextProfiles));
   }
 
   const promptTemplateState = ensurePromptTemplateState(

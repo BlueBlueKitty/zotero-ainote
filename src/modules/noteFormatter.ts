@@ -829,6 +829,10 @@ function isSafeInlineDoubleDollarFormula(candidate: string): boolean {
   if (!trimmed || trimmed.includes("\n")) {
     return false;
   }
+  // Double-dollar is usually an explicit formula marker; accept concise identifiers like NF.
+  if (/^[A-Za-z][A-Za-z0-9]{0,31}$/.test(trimmed)) {
+    return true;
+  }
   return looksLikeMathFormula(trimmed);
 }
 

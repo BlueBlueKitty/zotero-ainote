@@ -47,6 +47,10 @@ export class NoteGenerator {
     if (!model) {
       throw new Error("当前活动模型配置缺少模型名称，请先在设置中填写模型名称");
     }
+    const profileName = String(activeProfile?.name || "").trim();
+    if (profileName) {
+      return `${profileName} / ${model}`;
+    }
     return `${this.getProviderLabel(activeProfile.providerType)} / ${model}`;
   }
 
@@ -62,6 +66,7 @@ export class NoteGenerator {
     outputWindow?: OutputWindow,
     progressCallback?: (message: string, progress: number) => void,
     setCancelCurrentFn?: (fn: () => void) => void,
+    onStreamChunk?: (chunk: string) => void,
   ): Promise<{ note: Zotero.Item; content: string }> {
     const { item, preferredPdfAttachment } = target;
     const itemTitle = item.getField("title") as string;
@@ -201,7 +206,10 @@ export class NoteGenerator {
       const onProgress = async (chunk: string) => {
         receivedStreamChunk = true;
         fullContent += chunk;
-        OutputWindowManager.recordItemContent(chunk);
+        if (outputWindow) {
+          OutputWindowManager.recordItemContent(chunk);
+        }
+        onStreamChunk?.(chunk);
         if (outputWindow) {
           outputWindow.appendContent(chunk);
         }

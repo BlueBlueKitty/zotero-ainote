@@ -35,6 +35,12 @@ export interface WebSummaryRunResult {
   stopped: boolean;
 }
 
+export interface WebSummarySingleRunHooks {
+  onStage?: (stage: string, progress?: number) => void;
+  onContent?: (content: string) => void;
+  onCancelReady?: (cancelFn: () => void) => void;
+}
+
 const WEB_SUMMARY_MODEL_LABEL = "ChatGPT Web";
 const EXTENSION_CLAIM_TIMEOUT_MS = 10000;
 const EXTENSION_CLAIM_STALL_TIMEOUT_MS = 25000;
@@ -115,6 +121,12 @@ function getChatGPTMode(): WebSummaryChatGPTMode {
     : "thinking";
 }
 
+export function getWebSummaryModelLabel(
+  mode: WebSummaryChatGPTMode,
+): string {
+  return `${WEB_SUMMARY_MODEL_LABEL} (${mode === "instant" ? "Instant" : "Thinking"})`;
+}
+
 function launchChatGPTSurface(url: string): void {
   const targetUrl = String(url || "").trim() || "https://chatgpt.com/";
   try {
@@ -165,6 +177,152 @@ function getStatusMessage(task: WebSummaryTask): string {
 }
 
 export class WebSummaryWorkflow {
+  public static async summarizeSingleTarget(
+    target: WebSummaryTarget,
+    hooks?: WebSummarySingleRunHooks,
+  ): Promise<{ content: string; noteID: number }> {
+    let currentTaskId = "";
+    let currentTaskCanceled = false;
+    hooks?.onCancelReady?.(() => {
+      currentTaskCanceled = true;
+      if (currentTaskId) {
+        void WebSummaryBridgeClient.cancelTask(
+          currentTaskId,
+          "已停止当前条目的AI总结",
+        ).catch((error) => {
+          ztoolkit.log(
+            "[AiNote][WebSummaryWorkflow] cancel current task failed",
+            error,
+          );
+        });
+      }
+    });
+
+    const promptTemplate = getPromptTemplate(target.templateId);
+    const attachment = await PDFExtractor.resolvePdfAttachment(
+      target.item,
+      target.preferredPdfAttachment,
+    );
+    const pdfPath = await attachment.getFilePathAsync();
+    if (!pdfPath) {
+      throw new Error("无法获取 PDF 文件路径");
+    }
+
+    const chatgptMode = getChatGPTMode();
+    const payload: CreateTaskRequest = {
+      itemId: target.item.id,
+      libraryId: target.item.libraryID,
+      title: String(target.item.getField("title") || ""),
+      pdfPath,
+      pdfFileName: String(attachment.getField("title") || "paper.pdf"),
+      prompt: promptTemplate.content,
+      platform: "chatgpt",
+      actionType: "summarize",
+      conversationMode: "new-per-item",
+      projectUrl: getProjectUrl(),
+      chatgptMode,
+      conversationTitle: buildConversationTitleFromItem(target.item),
+    };
+
+    launchChatGPTSurface(payload.projectUrl || "https://chatgpt.com/");
+    hooks?.onStage?.("正在提交网页总结任务...", 5);
+    await sleep(4000);
+
+    const { task } = await WebSummaryBridgeClient.createTask(payload);
+    currentTaskId = task.taskId;
+    let latestTask = task;
+    const queuedStartedAt = Date.now();
+    let conversationLinked = false;
+    let lastObservedStatus = latestTask.status;
+    let sameStatusSince = Date.now();
+    while (!["succeeded", "failed", "canceled"].includes(latestTask.status)) {
+      if (currentTaskCanceled) {
+        await WebSummaryBridgeClient.cancelTask(
+          latestTask.taskId,
+          "已停止当前条目的AI总结",
+        );
+      }
+      await sleep(getPollIntervalMs());
+      latestTask = await WebSummaryBridgeClient.getTask(task.taskId);
+      if (latestTask.status !== lastObservedStatus) {
+        lastObservedStatus = latestTask.status;
+        sameStatusSince = Date.now();
+      }
+      if (
+        latestTask.status === "queued" &&
+        Date.now() - queuedStartedAt >= EXTENSION_CLAIM_TIMEOUT_MS
+      ) {
+        launchChatGPTSurface(payload.projectUrl || "https://chatgpt.com/");
+        throw new Error(
+          "已尝试主动打开 ChatGPT，但浏览器扩展仍未领取任务。请确认 Chrome 已启动、扩展已启用，并且扩展中的 Bridge URL 与 Zotero 中的端口一致。",
+        );
+      }
+      if (
+        latestTask.status === "claimed" &&
+        Date.now() - sameStatusSince >= EXTENSION_CLAIM_STALL_TIMEOUT_MS
+      ) {
+        throw new Error(
+          "浏览器扩展已领取任务但尚未开始唤起网页。请确认扩展后台仍在运行；若持续出现，请重启 Chrome 和扩展后再试。",
+        );
+      }
+      if (
+        latestTask.status === "opening_chat" &&
+        Date.now() - sameStatusSince >= EXTENSION_OPENING_CHAT_TIMEOUT_MS
+      ) {
+        throw new Error(
+          "浏览器扩展已开始打开 ChatGPT，但页面脚本长时间未就绪。请确认 ChatGPT 页面已正常加载；若持续出现，请重启 Chrome 和扩展后再试。",
+        );
+      }
+      hooks?.onStage?.(getStatusMessage(latestTask), 15);
+      if (
+        !conversationLinked &&
+        latestTask.conversationMeta?.conversationId &&
+        latestTask.conversationMeta?.conversationUrl
+      ) {
+        await WebSummaryRelationStore.saveLatestLink(
+          target.item,
+          toChatLink("chatgpt", latestTask.conversationMeta),
+        );
+        conversationLinked = true;
+      }
+    }
+    currentTaskId = "";
+
+    if (latestTask.status === "canceled") {
+      throw new WebSummaryCanceledError(
+        latestTask.errorMessage ||
+          latestTask.cancelReason ||
+          "已停止当前条目的AI总结",
+      );
+    }
+    if (latestTask.status !== "succeeded" || !latestTask.resultMarkdown) {
+      throw new Error(latestTask.errorMessage || "网页总结任务失败");
+    }
+
+    const itemTitle = String(target.item.getField("title") || "");
+    const summaryHeading = buildSummaryHeading(promptTemplate.name, itemTitle);
+    const noteBody = stripLeadingSummaryHeading(
+      latestTask.resultMarkdown,
+      summaryHeading,
+    );
+    hooks?.onContent?.(noteBody || latestTask.resultMarkdown);
+    hooks?.onStage?.("正在保存网页总结笔记...", 80);
+    const noteHtml = buildNoteHtmlFromMarkdown(
+      summaryHeading,
+      getWebSummaryModelLabel(chatgptMode),
+      latestTask.resultMarkdown,
+    );
+    const note = await createNote(target.item, noteHtml);
+    if (latestTask.conversationMeta?.conversationUrl) {
+      await WebSummaryRelationStore.saveLatestLink(
+        target.item,
+        toChatLink("chatgpt", latestTask.conversationMeta),
+      );
+    }
+    hooks?.onStage?.("完成", 100);
+    return { content: noteBody || latestTask.resultMarkdown, noteID: note.id };
+  }
+
   public static async summarizeItems(
     targets: WebSummaryTarget[],
     progressCallback?: (

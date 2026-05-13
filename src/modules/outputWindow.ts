@@ -1,6 +1,8 @@
 import { config } from "../../package.json";
 import { marked } from "marked";
 
+type OutputItemStatus = "processing" | "completed" | "failed" | "canceled";
+
 /**
  * OutputWindow - 用于显示流式 AI 输出的对话框窗口
  * 支持多个条目的分段显示
@@ -8,6 +10,7 @@ import { marked } from "marked";
 export class OutputWindow {
   private dialog: any;
   private outputContainer: HTMLElement | null = null;
+  private currentItemWrapper: HTMLElement | null = null;
   private currentItemContainer: HTMLElement | null = null;
   private currentStatusContainer: HTMLElement | null = null;
   private currentItemBuffer: string = ""; // 累积当前条目的完整内容
@@ -419,6 +422,64 @@ export class OutputWindow {
            isDarkMode;
   }
 
+  private getItemStatusAppearance(status: OutputItemStatus, isDark: boolean): {
+    backgroundColor: string;
+    borderColor: string;
+    accentColor: string;
+  } {
+    if (status === "completed") {
+      return {
+        backgroundColor: isDark ? "#3a3a3a" : "#f9f9f9",
+        borderColor: isDark ? "#22c55e" : "#16a34a",
+        accentColor: "#22c55e",
+      };
+    }
+    if (status === "failed") {
+      return {
+        backgroundColor: isDark ? "#3a3a3a" : "#f9f9f9",
+        borderColor: isDark ? "#ef4444" : "#dc2626",
+        accentColor: "#ef4444",
+      };
+    }
+    if (status === "canceled") {
+      return {
+        backgroundColor: isDark ? "#3a3a3a" : "#f9f9f9",
+        borderColor: isDark ? "#f59e0b" : "#d97706",
+        accentColor: "#f59e0b",
+      };
+    }
+    return {
+      backgroundColor: isDark ? "#3a3a3a" : "#f9f9f9",
+      borderColor: isDark ? "#3b82f6" : "#2563eb",
+      accentColor: "#3b82f6",
+    };
+  }
+
+  private applyItemStatusAppearance(
+    itemWrapper: HTMLElement | null,
+    status: OutputItemStatus,
+  ): void {
+    if (!itemWrapper) return;
+    const isDark = this.isDarkTheme();
+    const appearance = this.getItemStatusAppearance(status, isDark);
+    itemWrapper.dataset.status = status;
+    itemWrapper.style.setProperty(
+      "background-color",
+      appearance.backgroundColor,
+      "important",
+    );
+    itemWrapper.style.setProperty(
+      "border",
+      `2px solid ${appearance.borderColor}`,
+      "important",
+    );
+    itemWrapper.style.setProperty(
+      "border-left",
+      `6px solid ${appearance.accentColor}`,
+      "important",
+    );
+  }
+
   /**
    * 开始新的条目
    * @param itemTitle 条目标题
@@ -448,9 +509,15 @@ export class OutputWindow {
         styles: {
           marginBottom: "30px",
           padding: "15px",
-          backgroundColor: isDark ? "#3a3a3a" : "#f9f9f9",
+          backgroundColor: this.getItemStatusAppearance("processing", isDark)
+            .backgroundColor,
           borderRadius: "8px",
-          border: isDark ? "1px solid #555" : "1px solid #e0e0e0",
+          border: `2px solid ${
+            this.getItemStatusAppearance("processing", isDark).borderColor
+          }`,
+          borderLeft: `6px solid ${
+            this.getItemStatusAppearance("processing", isDark).accentColor
+          }`,
         },
         children: [
           {
@@ -516,6 +583,9 @@ export class OutputWindow {
       },
       this.outputContainer
     );
+
+    this.currentItemWrapper = itemDiv as HTMLElement;
+    this.applyItemStatusAppearance(this.currentItemWrapper, "processing");
 
     // 找到内容容器
     this.currentItemContainer = (itemDiv as HTMLElement).querySelector(
@@ -633,8 +703,9 @@ export class OutputWindow {
       this.renderMath();
       
       // 添加一个完成标记
-      const parent = this.currentItemContainer.parentElement;
+      const parent = this.currentItemContainer.parentElement as HTMLElement | null;
       if (parent) {
+        this.applyItemStatusAppearance(parent, "completed");
         ztoolkit.UI.appendElement(
           {
             tag: "div",
@@ -655,6 +726,7 @@ export class OutputWindow {
     this.incrementProgress();
     this.disableCurrentStopButton("✓ 当前条目已完成");
     this.updateCurrentStatus("");
+    this.currentItemWrapper = null;
     this.currentStatusContainer = null;
     this.currentItemContainer = null;
     this.scrollToBottom();
@@ -662,8 +734,9 @@ export class OutputWindow {
 
   public stopCurrentItem(message: string = "已停止当前条目的AI总结，未保存到笔记。"): void {
     if (this.currentItemContainer) {
-      const parent = this.currentItemContainer.parentElement;
+      const parent = this.currentItemContainer.parentElement as HTMLElement | null;
       if (parent) {
+        this.applyItemStatusAppearance(parent, "canceled");
         ztoolkit.UI.appendElement(
           {
             tag: "div",
@@ -684,6 +757,7 @@ export class OutputWindow {
     this.incrementProgress();
     this.disableCurrentStopButton("✓ 当前条目已停止");
     this.updateCurrentStatus("");
+    this.currentItemWrapper = null;
     this.currentStatusContainer = null;
     this.currentItemContainer = null;
     this.scrollToBottom();
@@ -899,15 +973,21 @@ export class OutputWindow {
 
     const isDark = this.isDarkTheme();
 
-    ztoolkit.UI.appendElement(
+    const itemDiv = ztoolkit.UI.appendElement(
       {
         tag: "div",
         styles: {
           marginBottom: "20px",
           padding: "15px",
-          backgroundColor: isDark ? "#4a2d2d" : "#ffebee",
+          backgroundColor: this.getItemStatusAppearance("failed", isDark)
+            .backgroundColor,
           borderRadius: "8px",
-          border: isDark ? "1px solid #e57373" : "1px solid #ef5350",
+          border: `2px solid ${
+            this.getItemStatusAppearance("failed", isDark).borderColor
+          }`,
+          borderLeft: `6px solid ${
+            this.getItemStatusAppearance("failed", isDark).accentColor
+          }`,
         },
         children: [
           {
@@ -936,6 +1016,7 @@ export class OutputWindow {
       },
       this.outputContainer
     );
+    this.applyItemStatusAppearance(itemDiv as HTMLElement, "failed");
 
     this.scrollToBottom();
     this.incrementProgress();
@@ -957,6 +1038,7 @@ export class OutputWindow {
     this.isOpen = false;
     this.dialog = undefined;
     this.outputContainer = null;
+    this.currentItemWrapper = null;
     this.currentItemContainer = null;
     this.currentStatusContainer = null;
     this.onStopCallback = null;

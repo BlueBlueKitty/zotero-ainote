@@ -88,4 +88,4 @@ web-summary-error-generic = Web summary failed
 web-summary-open-conversation-start = Opening the mapped web AI conversation...
 web-summary-open-conversation-success = Web AI conversation opened successfully
 web-summary-open-conversation-failed = Failed to open the mapped web AI conversation
-menuitem-reopenOutputWindow = Re-open Output Window
+menuitem-reopenOutputWindow = Open Item Summary Manager

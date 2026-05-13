@@ -20,6 +20,8 @@ other_plugins
 test/*
 !test/
 !test/noteFormatter.test.ts
+!test/summaryHistoryStore.test.ts
+!test/summaryTaskTypes.test.ts
 releases
 update_docs
 *.backup
