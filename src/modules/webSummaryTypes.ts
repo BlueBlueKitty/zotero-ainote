@@ -63,6 +63,13 @@ export interface WebSummaryTask {
   existingConversationId?: string;
   existingConversationUrl?: string;
   resultMarkdown?: string;
+  resultSource?: "api" | "dom";
+  resultDebugInfo?: string;
+  modeSwitchOk?: boolean;
+  modeSwitchFailed?: boolean;
+  modeSwitchError?: string;
+  pdfUploadReady?: boolean;
+  debugMessage?: string;
   errorCode?: BridgeErrorCode;
   errorMessage?: string;
   cancelRequestedAt?: string;
@@ -108,10 +115,17 @@ export interface ReportTaskStatusRequest {
   folderResolved?: boolean;
   errorCode?: BridgeErrorCode;
   errorMessage?: string;
+  modeSwitchOk?: boolean;
+  modeSwitchFailed?: boolean;
+  modeSwitchError?: string;
+  pdfUploadReady?: boolean;
+  debugMessage?: string;
 }
 
 export interface ReportTaskResultRequest extends WebSummaryConversationMeta {
   resultMarkdown: string;
+  resultSource?: "api" | "dom";
+  resultDebugInfo?: string;
 }
 
 export interface ReportTaskFailureRequest extends WebSummaryConversationMeta {

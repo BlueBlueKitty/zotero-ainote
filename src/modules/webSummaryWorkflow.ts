@@ -2,6 +2,7 @@ import { getPref } from "../utils/prefs";
 import { PDFExtractor } from "./pdfExtractor";
 import { buildNoteHtmlFromMarkdown } from "./noteHtmlBuilder";
 import { OutputWindow } from "./outputWindow";
+import { OutputWindowManager } from "./outputWindowManager";
 import { WebSummaryBridgeClient } from "./webSummaryBridgeClient";
 import { buildConversationTitleFromItem } from "./webSummaryConversation";
 import { WebSummaryRelationStore } from "./webSummaryRelations";
@@ -36,6 +37,8 @@ export interface WebSummaryRunResult {
 
 const WEB_SUMMARY_MODEL_LABEL = "ChatGPT Web";
 const EXTENSION_CLAIM_TIMEOUT_MS = 10000;
+const EXTENSION_CLAIM_STALL_TIMEOUT_MS = 25000;
+const EXTENSION_OPENING_CHAT_TIMEOUT_MS = 65000;
 
 class WebSummaryCanceledError extends Error {
   constructor(message = "已停止当前条目的AI总结") {
@@ -153,7 +156,7 @@ function getStatusMessage(task: WebSummaryTask): string {
     creating_conversation: "正在创建独立对话",
     downloading_pdf: "正在准备 PDF 上传",
     awaiting_user_send: "已填入内容，请在网页确认发送",
-    running: "正在等待网页模型生成结果",
+    running: "正在等待网页模型生成结果，请在网页中查看模型实时输出内容",
     succeeded: "网页总结完成",
     failed: "网页总结失败",
     canceled: "网页总结已取消",
@@ -178,14 +181,11 @@ export class WebSummaryWorkflow {
     let stopped = false;
     let currentTaskId = "";
     let currentTaskCanceled = false;
-    let allCompleted = false;
-
-    const outputWindow = new OutputWindow();
-    await outputWindow.open();
-    outputWindow.setOnStop(() => {
+    const outputWindow = await OutputWindowManager.startBatch('web-summary', total);
+    OutputWindowManager.setOnStop(() => {
       stopped = true;
     });
-    outputWindow.setOnStopCurrent(() => {
+    OutputWindowManager.setOnStopCurrent(() => {
       currentTaskCanceled = true;
       if (currentTaskId) {
         void WebSummaryBridgeClient.cancelTask(
@@ -197,16 +197,6 @@ export class WebSummaryWorkflow {
             error,
           );
         });
-      }
-    });
-    outputWindow.setOnClose(() => {
-      if (!allCompleted) {
-        new ztoolkit.ProgressWindow("AiNote", { closeTime: 3000 })
-          .createLine({
-            text: "输出窗口已关闭，网页版总结将在后台继续进行",
-            type: "default",
-          })
-          .show();
       }
     });
 
@@ -252,14 +242,25 @@ export class WebSummaryWorkflow {
         currentTaskCanceled = false;
         progressCallback?.(current, total, 5, "正在提交网页总结任务...");
         await outputWindow.startItem(itemTitle, WEB_SUMMARY_MODEL_LABEL);
+        OutputWindowManager.recordItemStart(itemTitle, WEB_SUMMARY_MODEL_LABEL);
         outputWindow.updateCurrentStatus("正在提交网页总结任务...");
+        OutputWindowManager.recordStatusUpdate("正在提交网页总结任务...");
         launchChatGPTSurface(payload.projectUrl || "https://chatgpt.com/");
+
+        // 等待浏览器和扩展初始化（冷启动时 Chrome 需要时间启动，扩展 Service Worker 需要初始化轮询）
+        await sleep(4000);
 
         const { task } = await WebSummaryBridgeClient.createTask(payload);
         currentTaskId = task.taskId;
         let latestTask = task;
         const queuedStartedAt = Date.now();
         let lastStatusMessage = "";
+        let conversationLinked = false;
+        let lastObservedStatus = latestTask.status;
+        let sameStatusSince = Date.now();
+        let lastModeSwitchLog = "";
+        let lastPdfUploadLog = "";
+        let lastDebugMessage = "";
 
         while (
           !["succeeded", "failed", "canceled"].includes(latestTask.status)
@@ -272,6 +273,10 @@ export class WebSummaryWorkflow {
           }
           await sleep(getPollIntervalMs());
           latestTask = await WebSummaryBridgeClient.getTask(task.taskId);
+          if (latestTask.status !== lastObservedStatus) {
+            lastObservedStatus = latestTask.status;
+            sameStatusSince = Date.now();
+          }
           if (
             latestTask.status === "queued" &&
             Date.now() - queuedStartedAt >= EXTENSION_CLAIM_TIMEOUT_MS
@@ -281,10 +286,83 @@ export class WebSummaryWorkflow {
               "已尝试主动打开 ChatGPT，但浏览器扩展仍未领取任务。请确认 Chrome 已启动、扩展已启用，并且扩展中的 Bridge URL 与 Zotero 中的端口一致。",
             );
           }
+          if (
+            latestTask.status === "claimed" &&
+            Date.now() - sameStatusSince >= EXTENSION_CLAIM_STALL_TIMEOUT_MS
+          ) {
+            throw new Error(
+              "浏览器扩展已领取任务但尚未开始唤起网页。请确认扩展后台仍在运行；若持续出现，请重启 Chrome 和扩展后再试。",
+            );
+          }
+          if (
+            latestTask.status === "opening_chat" &&
+            Date.now() - sameStatusSince >= EXTENSION_OPENING_CHAT_TIMEOUT_MS
+          ) {
+            throw new Error(
+              "浏览器扩展已开始打开 ChatGPT，但页面脚本长时间未就绪。请确认 ChatGPT 页面已正常加载；若持续出现，请重启 Chrome 和扩展后再试。",
+            );
+          }
           const statusMessage = getStatusMessage(latestTask);
           if (statusMessage !== lastStatusMessage) {
             outputWindow.updateCurrentStatus(statusMessage);
+            OutputWindowManager.recordStatusUpdate(statusMessage);
             lastStatusMessage = statusMessage;
+          }
+          if (
+            !conversationLinked &&
+            latestTask.conversationMeta?.conversationId &&
+            latestTask.conversationMeta?.conversationUrl
+          ) {
+            try {
+              await WebSummaryRelationStore.saveLatestLink(
+                target.item,
+                toChatLink("chatgpt", latestTask.conversationMeta),
+              );
+              conversationLinked = true;
+              ztoolkit.log(
+                "[AiNote][WebSummaryWorkflow] conversation linked early",
+                {
+                  taskId: latestTask.taskId,
+                  conversationUrl: latestTask.conversationMeta?.conversationUrl,
+                },
+              );
+            } catch (linkError) {
+              ztoolkit.log(
+                "[AiNote][WebSummaryWorkflow] failed to link conversation early",
+                {
+                  taskId: latestTask.taskId,
+                  error: linkError,
+                },
+              );
+            }
+          }
+          if (latestTask.modeSwitchOk) {
+            const logText = `task=${latestTask.taskId}: 模型切换成功`;
+            if (logText !== lastModeSwitchLog) {
+              ztoolkit.log("[AiNote][WebSummaryWorkflow]", logText);
+              lastModeSwitchLog = logText;
+            }
+          }
+          if (latestTask.modeSwitchFailed || latestTask.modeSwitchError) {
+            const logText = `task=${latestTask.taskId}: 模型切换失败 ${latestTask.modeSwitchError || ""}`.trim();
+            if (logText !== lastModeSwitchLog) {
+              ztoolkit.log("[AiNote][WebSummaryWorkflow]", logText);
+              lastModeSwitchLog = logText;
+            }
+          }
+          if (latestTask.pdfUploadReady) {
+            const logText = `task=${latestTask.taskId}: PDF 上传完成`;
+            if (logText !== lastPdfUploadLog) {
+              ztoolkit.log("[AiNote][WebSummaryWorkflow]", logText);
+              lastPdfUploadLog = logText;
+            }
+          }
+          if (latestTask.debugMessage && latestTask.debugMessage !== lastDebugMessage) {
+            ztoolkit.log("[AiNote][WebSummaryWorkflow][Debug]", {
+              taskId: latestTask.taskId,
+              message: latestTask.debugMessage,
+            });
+            lastDebugMessage = latestTask.debugMessage;
           }
           progressCallback?.(current, total, 15, statusMessage);
         }
@@ -309,6 +387,12 @@ export class WebSummaryWorkflow {
           });
           throw new Error(latestTask.errorMessage || "网页总结任务失败");
         }
+        ztoolkit.log("[AiNote][WebSummaryWorkflow] summary content fetched", {
+          taskId: latestTask.taskId,
+          source: latestTask.resultSource || "unknown",
+          debugInfo: latestTask.resultDebugInfo || "",
+          length: latestTask.resultMarkdown.length,
+        });
 
         const noteBody = stripLeadingSummaryHeading(
           latestTask.resultMarkdown,
@@ -317,7 +401,11 @@ export class WebSummaryWorkflow {
         outputWindow.replaceCurrentContent(
           noteBody || latestTask.resultMarkdown,
         );
+        OutputWindowManager.recordItemReplaceContent(
+          noteBody || latestTask.resultMarkdown,
+        );
         outputWindow.updateCurrentStatus("正在保存网页总结笔记...");
+        OutputWindowManager.recordStatusUpdate("正在保存网页总结笔记...");
 
         const noteHtml = buildNoteHtmlFromMarkdown(
           summaryHeading,
@@ -334,6 +422,7 @@ export class WebSummaryWorkflow {
         }
 
         outputWindow.finishItem();
+        OutputWindowManager.recordItemComplete();
         successCount++;
         progressCallback?.(current, total, 100, "已保存网页总结笔记");
       } catch (error: any) {
@@ -343,6 +432,7 @@ export class WebSummaryWorkflow {
           outputWindow.stopCurrentItem(
             "已停止当前条目的AI总结，未保存到笔记。",
           );
+          OutputWindowManager.recordItemCanceled();
           progressCallback?.(
             current,
             total,
@@ -352,6 +442,7 @@ export class WebSummaryWorkflow {
         } else {
           failedCount++;
           outputWindow.showError(itemTitle, error?.message || String(error));
+          OutputWindowManager.recordItemError(itemTitle, error?.message || String(error));
           progressCallback?.(
             current,
             total,
@@ -364,6 +455,7 @@ export class WebSummaryWorkflow {
 
     if (stopped) {
       const notProcessed = total - successCount - failedCount - canceledCount;
+      OutputWindowManager.recordStopped();
       outputWindow.disableStopButton(true);
       outputWindow.showStopped(
         successCount,
@@ -390,7 +482,7 @@ export class WebSummaryWorkflow {
       );
     }
 
-    allCompleted = true;
+    OutputWindowManager.endBatch();
     return {
       successCount,
       failedCount,
@@ -411,7 +503,7 @@ export class WebSummaryWorkflow {
 
   public static async debugFetchConversationContent(
     item: Zotero.Item,
-  ): Promise<void> {
+  ): Promise<{ source: string; length: number; debugInfo: string }> {
     const link = WebSummaryRelationStore.getLatestLink(item, "chatgpt");
     if (!link?.conversationUrl) {
       throw new Error("当前文献还没有可继续对话的 ChatGPT 会话记录");
@@ -454,6 +546,12 @@ export class WebSummaryWorkflow {
     if (latestTask.status !== "succeeded" || !latestTask.resultMarkdown) {
       throw new Error(latestTask.errorMessage || "调试获取网页总结内容失败");
     }
+    ztoolkit.log("[AiNote][WebSummaryWorkflow][DebugFetch] content fetched", {
+      taskId,
+      source: latestTask.resultSource || "unknown",
+      debugInfo: latestTask.resultDebugInfo || "",
+      length: latestTask.resultMarkdown.length,
+    });
 
     const summaryHeading = `## AI Summary (Debug Fetch)\n\n`;
     const noteHtml = buildNoteHtmlFromMarkdown(
@@ -469,5 +567,11 @@ export class WebSummaryWorkflow {
         toChatLink("chatgpt", latestTask.conversationMeta),
       );
     }
+
+    return {
+      source: latestTask.resultSource || "unknown",
+      length: latestTask.resultMarkdown.length,
+      debugInfo: latestTask.resultDebugInfo || "",
+    };
   }
 }

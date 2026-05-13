@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sed -n '203,235p' \"D:/work/zotero-ainote/src/modules/outputWindowManager.ts\")",
+      "Bash(sed -n '257,291p' \"D:/work/zotero-ainote/web-extension/background.js\")"
+    ]
+  }
+}

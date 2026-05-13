@@ -3,6 +3,7 @@ import { registerPrefsScripts } from "./modules/preferenceScript";
 import { createZToolkit } from "./utils/ztoolkit";
 import { NoteGenerationTarget, NoteGenerator } from "./modules/noteGenerator";
 import { WebSummaryWorkflow } from "./modules/webSummaryWorkflow";
+import { OutputWindowManager } from "./modules/outputWindowManager";
 import {
   formatSelectedNote,
   NOTE_FORMAT_ACTIONS,
@@ -32,7 +33,7 @@ import { WebSummaryRelationStore } from "./modules/webSummaryRelations";
 const GENERATE_SUMMARY_MENU_ID = "ainote-generate-summary-menu";
 const WEB_CONTINUE_CHAT_MENU_ID = "ainote-web-continue-chat-menu";
 const NOTE_FORMAT_MENU_ID = "ainote-note-format-menu";
-const WEB_DEBUG_FETCH_MENU_ID = "ainote-web-debug-fetch-menu";
+const REOPEN_OUTPUT_WINDOW_MENU_ID = "ainote-reopen-output-window";
 
 async function onStartup() {
   await Promise.all([
@@ -46,6 +47,9 @@ async function onStartup() {
   // 在插件启动时立即初始化默认配置
   initializeDefaultPrefsOnStartup();
   startWebSummaryBridgeIfNeeded();
+  void WebSummaryRelationStore.migrateLegacyRelations().catch((error) => {
+    ztoolkit.log("[AiNote] Legacy web-summary relation migration failed:", error);
+  });
 
   // Register preferences pane
   registerPrefsPane();
@@ -260,12 +264,19 @@ function registerContextMenuItemForWindow(win: Window) {
   win.document.getElementById(GENERATE_SUMMARY_MENU_ID)?.remove();
   win.document.getElementById(WEB_CONTINUE_CHAT_MENU_ID)?.remove();
   win.document.getElementById(NOTE_FORMAT_MENU_ID)?.remove();
-  win.document.getElementById(WEB_DEBUG_FETCH_MENU_ID)?.remove();
+  win.document.getElementById(REOPEN_OUTPUT_WINDOW_MENU_ID)?.remove();
 
   ztoolkit.Menu.register(popup, buildGenerateSummaryMenuOptions(menuIcon));
   ztoolkit.Menu.register(popup, buildContinueChatMenuOptions(menuIcon));
   ztoolkit.Menu.register(popup, buildNoteFormatMenuOptions(menuIcon));
-  ztoolkit.Menu.register(popup, buildDebugFetchMenuOptions(menuIcon));
+  ztoolkit.Menu.register(popup, {
+    tag: "menuitem",
+    id: REOPEN_OUTPUT_WINDOW_MENU_ID,
+    label: getString("menuitem-reopenOutputWindow" as any),
+    icon: menuIcon,
+    commandListener: () => { void OutputWindowManager.reopenWindow(); },
+    getVisibility: () => OutputWindowManager.hasActiveBatch(),
+  });
 }
 
 function refreshContextMenuItems() {
@@ -329,28 +340,6 @@ function buildContinueChatMenuOptions(menuIcon: string): any {
   };
 }
 
-function buildDebugFetchMenuOptions(menuIcon: string): any {
-  return {
-    tag: "menuitem",
-    id: WEB_DEBUG_FETCH_MENU_ID,
-    label: getString("menuitem-debugFetchWebContent" as any),
-    icon: menuIcon,
-    commandListener: () => {
-      void handleDebugFetchWebContent();
-    },
-    getVisibility: () => {
-      const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
-      if (selectedItems?.length !== 1) {
-        return false;
-      }
-      const regularItem = resolveSelectedRegularItemSync(selectedItems[0]);
-      if (!regularItem) {
-        return false;
-      }
-      return WebSummaryRelationStore.hasPlatformLink(regularItem, "chatgpt");
-    },
-  };
-}
 
 function buildNoteFormatMenuOptions(menuIcon: string): any {
   return {
@@ -490,124 +479,13 @@ async function handleGenerateSummary(templateId?: string) {
     return;
   }
 
-  // Create progress window
-  const progressWin = new ztoolkit.ProgressWindow("AiNote", {
-    closeOnClick: false,
-    closeTime: -1, // 不自动关闭,直到处理完成
-  });
-
   try {
-    const total = targets.length;
-    let successCount = 0;
-    let failedCount = 0;
-    const failedItems: Array<{ title: string; error: string }> = [];
-
     await NoteGenerator.generateNotesForItems(
       targets,
-      (current, total, progress, message) => {
-        const itemTitle = targets[current - 1].item.getField("title") as string;
-        const mainText = `正在处理 ${current}/${total}: ${itemTitle}`;
-
-        if (current === 1 && progress === 10) {
-          progressWin
-            .createLine({
-              text: mainText,
-              type: "default",
-              progress: 0,
-            })
-            .show();
-        } else {
-          const overallProgress =
-            ((current - 1) / total) * 100 + progress / total;
-
-          // 检测是否是错误消息
-          if (message.startsWith("Error:")) {
-            failedCount++;
-            failedItems.push({
-              title: itemTitle,
-              error: message.replace("Error: ", ""),
-            });
-
-            progressWin.changeLine({
-              text: `${mainText} - ${getString("progress-failed")}`,
-              type: "error",
-              progress: overallProgress,
-            });
-
-            // 短暂停留后继续下一个
-            setTimeout(() => {
-              if (current < total) {
-                progressWin.changeLine({
-                  text: getString("progress-continue-next"),
-                  type: "default",
-                  progress: overallProgress,
-                });
-              }
-            }, 1000);
-          } else {
-            progressWin.changeLine({
-              text: `${mainText} - ${message}`,
-              progress: overallProgress,
-            });
-
-            // 如果完成了一个条目
-            if (progress === 100) {
-              successCount++;
-            }
-          }
-        }
-
-        if (current === total && progress === 100) {
-          // 显示最终统计
-          if (failedCount === 0) {
-            progressWin.changeLine({
-              text: getString("success-allCompleteDetailed", { args: { total: String(total) } }),
-              type: "success",
-              progress: 100,
-            });
-          } else {
-            progressWin.changeLine({
-              text: getString("success-partialComplete", { args: { success: String(successCount), failed: String(failedCount) } }),
-              type: failedCount === total ? "error" : "default",
-              progress: 100,
-            });
-          }
-
-          // 如果有失败的条目，显示详细错误信息
-          if (failedCount > 0) {
-            setTimeout(() => {
-              let errorDetails = `处理失败的条目:\n\n`;
-              failedItems.forEach((item, index) => {
-                errorDetails += `${index + 1}. ${item.title}\n   错误: ${item.error}\n\n`;
-              });
-
-              new ztoolkit.ProgressWindow("处理失败详情", {
-                closeOnClick: true,
-                closeTime: -1, // 不自动关闭
-              })
-                .createLine({
-                  text: `共 ${failedCount} 个条目失败，点击查看详情`,
-                  type: "error",
-                })
-                .show();
-
-              // 同时在控制台输出详细错误（仅在调试时使用）
-              // ztoolkit.log("[AiNote] Failed items details:", failedItems);
-            }, 2000);
-          }
-
-          // 标记完成，允许进度窗在短时间后关闭
-          progressWin.startCloseTimer(5000);
-        }
-      },
+      // 进度仅通过输出窗口显示，此处无需额外 UI
     );
   } catch (error: any) {
     ztoolkit.log("[AiNote] Fatal error in handleGenerateSummary:", error);
-    progressWin.changeLine({
-      text: `严重错误: ${error.message}`,
-      type: "error",
-    });
-    progressWin.startCloseTimer(10000);
   }
 }
 
@@ -640,52 +518,11 @@ async function handleGenerateSummaryViaWeb(templateId?: string) {
     return;
   }
 
-  const progressWin = new ztoolkit.ProgressWindow("AiNote", {
-    closeOnClick: false,
-    closeTime: -1,
-  });
-
   try {
-    progressWin
-      .createLine({
-        text: getString("web-summary-progress-submitting" as any),
-        type: "default",
-        progress: 0,
-      })
-      .show();
-
-    const result = await WebSummaryWorkflow.summarizeItems(targets, (current, total, progress, message) => {
-      const itemTitle = String(targets[current - 1]?.item.getField("title") || "");
-      const overall = ((current - 1) / total) * 100 + progress / total;
-      progressWin.changeLine({
-        text: `正在处理 ${current}/${total}: ${itemTitle} - ${message}`,
-        type: message.includes("失败") ? "error" : progress === 100 && current === total ? "success" : "default",
-        progress: overall,
-      });
-    });
-    const failedCount = result.failedCount;
-    const canceledCount = result.canceledCount;
-    const successCount = result.successCount;
-    const finalText =
-      failedCount === 0 && canceledCount === 0
-        ? getString("web-summary-success-all-complete" as any, {
-            args: { total: String(targets.length) },
-          })
-        : `网页总结完成：成功 ${successCount} 个，失败 ${failedCount} 个，取消 ${canceledCount} 个`;
-    progressWin.changeLine({
-      text: finalText,
-      type: failedCount > 0 ? "error" : canceledCount > 0 ? "default" : "success",
-      progress: 100,
-    });
-    progressWin.startCloseTimer(5000);
+    // 进度仅通过输出窗口显示，此处无需额外 UI
+    await WebSummaryWorkflow.summarizeItems(targets);
   } catch (error: any) {
     ztoolkit.log("[AiNote] Web summary failed:", error);
-    progressWin.changeLine({
-      text: `${getString("web-summary-error-generic" as any)}：${error?.message || ""}`,
-      type: "error",
-      progress: 100,
-    });
-    progressWin.startCloseTimer(10000);
   }
 }
 
@@ -727,47 +564,6 @@ async function handleContinueWebChat() {
   }
 }
 
-async function handleDebugFetchWebContent() {
-  const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
-  if (selectedItems.length !== 1) {
-    return;
-  }
-  const item = resolveSelectedRegularItemSync(selectedItems[0]);
-  if (!item) {
-    return;
-  }
-
-  const progressWin = new ztoolkit.ProgressWindow("AiNote", {
-    closeOnClick: false,
-    closeTime: -1,
-  });
-
-  try {
-    progressWin
-      .createLine({
-        text: getString("web-summary-debug-fetch-start" as any),
-        type: "default",
-        progress: 0,
-      })
-      .show();
-
-    const result = await WebSummaryWorkflow.debugFetchConversationContent(item);
-    progressWin.changeLine({
-      text: getString("web-summary-debug-fetch-success" as any),
-      type: "success",
-      progress: 100,
-    });
-    progressWin.startCloseTimer(5000);
-  } catch (error: any) {
-    ztoolkit.log("[AiNote][DebugFetch] failed:", error);
-    progressWin.changeLine({
-      text: `${getString("web-summary-debug-fetch-failed" as any)}：${error?.message || ""}`,
-      type: "error",
-      progress: 100,
-    });
-    progressWin.startCloseTimer(10000);
-  }
-}
 
 async function handleNoteFormatAction(actionType: NoteFormatActionType) {
   try {

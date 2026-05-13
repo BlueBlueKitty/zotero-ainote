@@ -17,78 +17,282 @@ const CHATGPT_URL_PREFIXES = [
 ];
 let pollingTimer = null;
 let runningTaskId = "";
+let runningTaskTabId = 0;
 const pendingTaskResolvers = new Map();
+let workerLoopRunning = false;
+let workerLoopStopToken = 0;
+const LONG_POLL_WAIT_MS = 25000;
+const CHATGPT_TAB_READY_TIMEOUT_MS = 60000;
+const CONTENT_SCRIPT_READY_TIMEOUT_MS = 20000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForChatGPTTabReady(tabId, timeoutMs = 45000) {
+/** 长时间等待时定期调用扩展 API 以防止 Service Worker 被终止 */
+async function safeSleep(ms) {
+  const CHUNK_MS = 8000;
+  if (ms <= CHUNK_MS) {
+    return sleep(ms);
+  }
+  const start = Date.now();
+  while (Date.now() - start < ms) {
+    const remaining = ms - (Date.now() - start);
+    await sleep(Math.min(CHUNK_MS, remaining));
+    // MV3: 扩展 API 调用可重置 30 秒空闲终止计时器
+    try { await chrome.storage.local.get("__sw_keepalive__"); } catch {}
+  }
+}
+
+async function withTimeout(promise, timeoutMs, fallbackMessage) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(fallbackMessage || "Operation timeout")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isChatGPTUrlCandidate(value) {
+  const url = String(value || "");
+  return CHATGPT_URL_PREFIXES.some((prefix) => url.startsWith(prefix));
+}
+
+async function waitForChatGPTTabReady(tabId, timeoutMs = CHATGPT_TAB_READY_TIMEOUT_MS) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const tab = await chrome.tabs.get(tabId);
     const url = tab.url || "";
-    if (
-      tab.status === "complete" &&
-      CHATGPT_URL_PREFIXES.some((prefix) => url.startsWith(prefix))
-    ) {
+    if (isChatGPTUrlCandidate(url)) {
       return tab;
     }
     await sleep(300);
   }
-  throw new Error("ChatGPT tab did not finish loading in time");
+  throw new Error("ChatGPT 标签页长时间未进入目标页面");
+}
+
+async function pingContentScript(tabId) {
+  return sendTabMessage(
+    tabId,
+    { type: "ainote-ping" },
+    1,
+  );
+}
+
+async function waitForContentScriptReady(
+  tabId,
+  timeoutMs = CONTENT_SCRIPT_READY_TIMEOUT_MS,
+) {
+  const startedAt = Date.now();
+  let lastError = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await pingContentScript(tabId);
+      if (response?.ok) {
+        return;
+      }
+      lastError = new Error(response?.error || "Content script 未返回 ready");
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+    await sleep(350);
+  }
+  throw lastError || new Error("Content script 未在预期时间内就绪");
+}
+
+function isTransientPortError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return (
+    message.includes("The message port closed before a response was received") ||
+    message.includes("Receiving end does not exist") ||
+    message.includes("Could not establish connection")
+  );
+}
+
+async function waitForStableContentScript(
+  tabId,
+  timeoutMs = CONTENT_SCRIPT_READY_TIMEOUT_MS,
+) {
+  const startedAt = Date.now();
+  let lastHref = "";
+  let stableCount = 0;
+  let lastError = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await pingContentScript(tabId);
+      const href = String(response?.href || "");
+      const readyState = String(response?.readyState || "");
+      if (
+        response?.ok &&
+        isChatGPTUrlCandidate(href) &&
+        ["interactive", "complete"].includes(readyState)
+      ) {
+        stableCount = href === lastHref ? stableCount + 1 : 1;
+        lastHref = href;
+        if (stableCount >= 2) {
+          return response;
+        }
+      } else {
+        stableCount = 0;
+        lastHref = href;
+      }
+    } catch (error) {
+      stableCount = 0;
+      lastHref = "";
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+    await sleep(400);
+  }
+
+  throw lastError || new Error("ChatGPT 页面尚未稳定，无法执行任务");
 }
 
 async function ensureContentScript(tabId) {
-  await waitForChatGPTTabReady(tabId);
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: ["content.js"],
-  });
+  console.log("[AiNote][WebExtension] ensureContentScript start", { tabId });
+  // 快速验证：标签页应该已在 ensureChatGPTTab 中就绪，5s 内未就绪视为异常
+  try {
+    await waitForChatGPTTabReady(tabId, 5000);
+  } catch {
+    throw new Error(
+      "ChatGPT 标签页在内容脚本注入前状态异常，请确认页面已正常加载。若持续出现，请重启 Chrome 和扩展后再试。",
+    );
+  }
+
+  // 给 manifest 的 document_idle 注入足够时间（冷启动页面加载慢，延长到 10s）
+  try {
+    await waitForStableContentScript(tabId, 10000);
+    console.log("[AiNote][WebExtension] Content script already ready");
+    return;
+  } catch {
+    console.log("[AiNote][WebExtension] Content script not ready, will inject programmatically");
+  }
+
+  // 冷启动时扩展刚初始化，tab 的渲染进程可能尚未就绪，延长注入重试窗口到 30s
+  const COLD_START_INJECT_TIMEOUT = 30000;
+  const startedAt = Date.now();
+  let lastError = null;
+  let injectAttempt = 0;
+  while (Date.now() - startedAt < COLD_START_INJECT_TIMEOUT) {
+    injectAttempt += 1;
+    console.log("[AiNote][WebExtension] Injecting content script, attempt", injectAttempt);
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["content.js"],
+        injectImmediately: true,
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.warn("[AiNote][WebExtension] executeScript failed", lastError?.message);
+    }
+    try {
+      await waitForContentScriptReady(tabId, 3000);
+      console.log("[AiNote][WebExtension] Content script ready after injection");
+      return;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+    await safeSleep(1000);
+  }
+  console.error("[AiNote][WebExtension] ensureContentScript failed after", injectAttempt, "attempts");
+  throw lastError || new Error("Content script 注入后仍未就绪");
 }
 
-async function ensureChatGPTTab(url = CHATGPT_URL, options = {}) {
-  const { reuseExisting = true } = options;
-  if (!reuseExisting) {
-    const created = await chrome.tabs.create({ url, active: true });
-    if (!created.id) {
-      throw new Error("Failed to create ChatGPT tab");
+async function sendTabMessage(tabId, payload, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await new Promise((resolve, reject) => {
+        chrome.tabs.sendMessage(tabId, payload, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve(response);
+        });
+      });
+    } catch (error) {
+      if (attempt < retries) {
+        console.warn(
+          `[AiNote] sendTabMessage attempt ${attempt} failed, retrying...`,
+          error,
+        );
+        await sleep(1000);
+      } else {
+        throw error;
+      }
     }
-    await waitForChatGPTTabReady(created.id);
-    return created.id;
   }
-  const tabs = await chrome.tabs.query({
+}
+
+async function dispatchTaskMessage(tabId, payload, retries = 3) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      return await sendTabMessage(tabId, payload, 1);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt >= retries || !isTransientPortError(lastError)) {
+        throw lastError;
+      }
+      console.warn(
+        `[AiNote][WebExtension] Task dispatch attempt ${attempt} hit transient port error, retrying...`,
+        lastError,
+      );
+      await sleep(700);
+      await ensureContentScript(tabId);
+    }
+  }
+  throw lastError || new Error("Task dispatch failed");
+}
+
+async function ensureChatGPTTab(targetUrl) {
+  // 先尝试按 URL 模式查找已加载的标签页
+  let all = await chrome.tabs.query({
     url: ["https://chatgpt.com/*", "https://chat.openai.com/*"],
   });
-  const tab = tabs[0];
-  if (tab?.id) {
-    await chrome.tabs.update(tab.id, { active: true, url });
-    await waitForChatGPTTabReady(tab.id);
-    return tab.id;
+  // 优先使用最新创建的标签页（launchChatGPTSurface 刚打开的），避免拿到旧的
+  // chrome.tabs.query 通常按创建时间排序，reverse 后取最新的
+  let matching = [...all].reverse().find((t) => {
+    const tabUrl = String(t.url || t.pendingUrl || "");
+    return tabUrl.startsWith(targetUrl);
+  });
+
+  // 冷启动时：标签页可能还在加载中（url 尚未匹配），通过 pendingUrl 再找一次
+  if (!matching) {
+    all = await chrome.tabs.query({});
+    matching = [...all].reverse().find((t) => {
+      const pending = String(t.pendingUrl || "");
+      return isChatGPTUrlCandidate(pending) && pending.startsWith(targetUrl);
+    });
   }
-  const created = await chrome.tabs.create({ url, active: true });
+
+  if (matching?.id) {
+    // 如果标签页当前 URL 不是 targetUrl，导航到 targetUrl 确保内容脚本运行在正确页面
+    const currentUrl = String(matching.url || matching.pendingUrl || "");
+    if (currentUrl !== targetUrl) {
+      await chrome.tabs.update(matching.id, { url: targetUrl, active: true });
+    } else {
+      await chrome.tabs.update(matching.id, { active: true });
+    }
+    await waitForChatGPTTabReady(matching.id);
+    return matching.id;
+  }
+  // 没找到匹配的标签页，创建新的
+  const created = await chrome.tabs.create({ url: targetUrl, active: true });
   if (!created.id) {
     throw new Error("Failed to create ChatGPT tab");
   }
   await waitForChatGPTTabReady(created.id);
   return created.id;
-}
-
-/**
- * @param {number} tabId
- * @param {unknown} payload
- * @returns {Promise<any>}
- */
-function sendTabMessage(tabId, payload) {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, payload, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve(response);
-    });
-  });
 }
 
 function arrayBufferToBase64(buffer) {
@@ -136,12 +340,22 @@ function settleContentTask(taskId, error) {
 
 async function runSummarizeTask(task) {
   const settings = await getSettings();
-  await reportTaskStatus(task.taskId, { status: "opening_chat" });
+  // task 在 claim 时已自动设为 opening_chat 状态，无需再重复上报
+  // 此处仅更新 debugMessage 以便调试
   const targetUrl = task.projectUrl || CHATGPT_URL;
-  const tabId = await ensureChatGPTTab(targetUrl, { reuseExisting: true });
+  const tabId = await ensureChatGPTTab(targetUrl);
+  runningTaskTabId = tabId;
+  await withTimeout(
+    reportTaskStatus(task.taskId, {
+      status: "opening_chat",
+      debugMessage: `已定位 ChatGPT 标签页 tabId=${tabId}，等待页面脚本就绪`,
+    }),
+    4000,
+    "report tab-selected timeout",
+  ).catch(() => {});
   await ensureContentScript(tabId);
   const completion = waitForContentTask(task.taskId);
-  const response = await sendTabMessage(tabId, {
+  const response = await dispatchTaskMessage(tabId, {
     type: "ainote-run-summarize-task",
     task,
     autoSend: settings.autoSend,
@@ -157,12 +371,30 @@ async function runSummarizeTask(task) {
 }
 
 async function runOpenConversationTask(task) {
-  await reportTaskStatus(task.taskId, { status: "opening_chat" });
+  await withTimeout(
+    reportTaskStatus(task.taskId, {
+      status: "opening_chat",
+      debugMessage: "扩展已领取任务，准备打开现有对话",
+    }),
+    4000,
+    "report opening_chat timeout",
+  ).catch((error) => {
+    console.warn("[AiNote][WebExtension] report opening_chat failed", error);
+  });
   const url = task.existingConversationUrl || CHATGPT_URL;
   const tabId = await ensureChatGPTTab(url);
+  runningTaskTabId = tabId;
+  await withTimeout(
+    reportTaskStatus(task.taskId, {
+      status: "opening_chat",
+      debugMessage: `已定位现有对话标签页 tabId=${tabId}，等待页面脚本就绪`,
+    }),
+    4000,
+    "report tab-selected timeout",
+  ).catch(() => {});
   await ensureContentScript(tabId);
   const completion = waitForContentTask(task.taskId);
-  const response = await sendTabMessage(tabId, {
+  const response = await dispatchTaskMessage(tabId, {
     type: "ainote-open-conversation-task",
     task,
   });
@@ -183,13 +415,14 @@ async function processNextTask() {
     return;
   }
 
-  const data = await claimNextTask();
+  const data = await claimNextTask(LONG_POLL_WAIT_MS);
   const task = data?.task;
   if (!task) {
     return;
   }
 
   runningTaskId = task.taskId;
+  runningTaskTabId = 0;
   try {
     if (task.actionType === "open_conversation") {
       await runOpenConversationTask(task);
@@ -215,6 +448,106 @@ async function processNextTask() {
     }
   } finally {
     runningTaskId = "";
+    runningTaskTabId = 0;
+  }
+}
+
+async function handleRunningTaskTabClosed(closedTabId) {
+  if (!runningTaskId || !runningTaskTabId || closedTabId !== runningTaskTabId) {
+    return;
+  }
+  try {
+    const task = await getTask(runningTaskId);
+    if (!task) return;
+
+    const earlyStages = new Set([
+      "claimed",
+      "opening_chat",
+      "creating_conversation",
+      "downloading_pdf",
+      "awaiting_user_send",
+    ]);
+
+    if (earlyStages.has(task.status)) {
+      await reportTaskFailure(task.taskId, {
+        errorCode: "INTERNAL_ERROR",
+        errorMessage: "网页在开始总结前被关闭，任务已停止。请重新发起总结。",
+      });
+      settleContentTask(
+        task.taskId,
+        new Error("网页在开始总结前被关闭，任务已停止。请重新发起总结。"),
+      );
+      return;
+    }
+
+    if (task.status === "running") {
+      const reopenUrl = task.conversationMeta?.conversationUrl || task.existingConversationUrl || "";
+      if (!reopenUrl || !/\/c\//.test(reopenUrl)) {
+        await reportTaskFailure(task.taskId, {
+          errorCode: "INTERNAL_ERROR",
+          errorMessage:
+            "网页已关闭且尚未拿到对话链接，无法恢复。请重新发起总结。",
+        });
+        settleContentTask(
+          task.taskId,
+          new Error("网页已关闭且尚未拿到对话链接，无法恢复。请重新发起总结。"),
+        );
+        return;
+      }
+      const tabId = await ensureChatGPTTab(reopenUrl);
+      runningTaskTabId = tabId;
+      await ensureContentScript(tabId);
+      const response = await dispatchTaskMessage(tabId, {
+        type: "ainote-open-conversation-task",
+        task: {
+          ...task,
+          existingConversationId: task.conversationMeta?.conversationId || task.existingConversationId,
+          existingConversationUrl: task.conversationMeta?.conversationUrl || task.existingConversationUrl,
+        },
+        recoverRunningTask: true,
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error || "Recovery from closed tab failed");
+      }
+    }
+  } catch (error) {
+    console.error(
+      "[AiNote][WebExtension] Tab-close handler failed",
+      runningTaskId,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+async function runWorkerLoop(stopToken) {
+  if (workerLoopRunning) return;
+  workerLoopRunning = true;
+  try {
+    while (true) {
+      if (stopToken !== workerLoopStopToken) {
+        break;
+      }
+      const settings = await getSettings();
+      if (!settings.pollingEnabled) {
+        await sleep(1000);
+        continue;
+      }
+      try {
+        await processNextTask();
+      } catch (error) {
+        console.error(
+          "[AiNote][WebExtension] Worker loop iteration failed",
+          error instanceof Error ? error.message : String(error),
+        );
+        await sleep(1200);
+      }
+    }
+  } finally {
+    workerLoopRunning = false;
+    // 如果在运行中收到新的 stopToken，确保自动拉起新循环，避免“claimed 后不继续”
+    if (stopToken !== workerLoopStopToken) {
+      void runWorkerLoop(workerLoopStopToken);
+    }
   }
 }
 
@@ -224,16 +557,9 @@ async function schedulePolling() {
     clearInterval(pollingTimer);
     pollingTimer = null;
   }
-  if (!settings.pollingEnabled) {
-    return;
-  }
-  pollingTimer = setInterval(
-    () => {
-      void processNextTask();
-    },
-    Math.max(1000, settings.pollingIntervalMs || 1500),
-  );
-  void processNextTask();
+  workerLoopStopToken += 1;
+  if (!settings.pollingEnabled) return;
+  void runWorkerLoop(workerLoopStopToken);
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -246,6 +572,10 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.storage.onChanged.addListener(() => {
   void schedulePolling();
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void handleRunningTaskTabClosed(tabId);
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

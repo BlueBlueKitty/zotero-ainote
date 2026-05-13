@@ -408,8 +408,15 @@ export class WebSummaryBridgeServer {
     }
 
     if (request.pathname === "/api/ext/tasks/next" && request.method === "GET") {
+      const waitMs = Math.max(
+        0,
+        Math.min(
+          30000,
+          parseInt(String(request.query.waitMs || "0"), 10) || 0,
+        ),
+      );
       const payload: ClaimNextTaskResponse = {
-        task: this.taskStore.claimNextTask(),
+        task: await this.taskStore.claimNextTaskOrWait(waitMs),
       };
       return buildJsonResponse(200, jsonEnvelope(payload));
     }

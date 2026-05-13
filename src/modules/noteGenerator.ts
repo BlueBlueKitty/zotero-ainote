@@ -2,6 +2,7 @@ import { config } from "../../package.json";
 import { PDFExtractor } from "./pdfExtractor";
 import AIService, { AIRequestCanceledError, CancelSignal } from "./aiService";
 import { OutputWindow } from "./outputWindow";
+import { OutputWindowManager } from "./outputWindowManager";
 import { getPref } from "../utils/prefs";
 import { parseProfiles, ProviderType } from "./llmProfiles";
 import {
@@ -59,7 +60,8 @@ export class NoteGenerator {
   public static async generateNoteForItem(
     target: NoteGenerationTarget,
     outputWindow?: OutputWindow,
-    progressCallback?: (message: string, progress: number) => void
+    progressCallback?: (message: string, progress: number) => void,
+    setCancelCurrentFn?: (fn: () => void) => void,
   ): Promise<{ note: Zotero.Item; content: string }> {
     const { item, preferredPdfAttachment } = target;
     const itemTitle = item.getField("title") as string;
@@ -121,9 +123,14 @@ export class NoteGenerator {
           );
       const summaryHeading = buildSummaryHeading(promptTemplate.name, itemTitle);
 
+      // 将当前条目的取消函数注册到 Manager，确保窗口重开后停止按钮仍然有效
+      if (setCancelCurrentFn) {
+        setCancelCurrentFn(cancelCurrentItem);
+      }
       // 如果有输出窗口，先开始显示这个条目，后续提示和内容都写入当前条目区域
       if (outputWindow) {
         await outputWindow.startItem(itemTitle, modelLabel);
+        OutputWindowManager.recordItemStart(itemTitle, modelLabel);
         outputWindow.setOnStopCurrent(cancelCurrentItem);
         outputWindow.appendContent(`${summaryHeading}\n\n`);
       }
@@ -194,6 +201,7 @@ export class NoteGenerator {
       const onProgress = async (chunk: string) => {
         receivedStreamChunk = true;
         fullContent += chunk;
+        OutputWindowManager.recordItemContent(chunk);
         if (outputWindow) {
           outputWindow.appendContent(chunk);
         }
@@ -216,6 +224,9 @@ export class NoteGenerator {
         outputWindow.appendContent(
           stripLeadingSummaryHeading(fullContent, summaryHeading),
         );
+        OutputWindowManager.recordItemContent(
+          stripLeadingSummaryHeading(fullContent, summaryHeading),
+        );
       }
 
       ensureNotCanceled();
@@ -229,6 +240,7 @@ export class NoteGenerator {
       // 如果有输出窗口，标记完成
       if (outputWindow) {
         outputWindow.finishItem();
+        OutputWindowManager.recordItemComplete();
       }
 
       progressCallback?.("完成！", 100);
@@ -239,6 +251,7 @@ export class NoteGenerator {
         ztoolkit.log(`[AiNote] Current item canceled by user: "${itemTitle}"`);
         if (outputWindow) {
           outputWindow.stopCurrentItem("已停止当前条目的AI总结，未保存到笔记。");
+          OutputWindowManager.recordItemCanceled();
         }
         throw error;
       }
@@ -251,6 +264,7 @@ export class NoteGenerator {
       // 如果有输出窗口，显示错误
       if (outputWindow) {
         outputWindow.showError(itemTitle, error.message);
+        OutputWindowManager.recordItemError(itemTitle, error.message);
       }
 
       // 不创建包含错误的笔记，直接抛出错误
@@ -329,30 +343,16 @@ export class NoteGenerator {
     let failedCount = 0;
     let canceledCount = 0;
     let stopped = false; // 标记是否被用户停止
-    let windowClosed = false; // 标记输出窗口是否被关闭
-    let allCompleted = false; // 标记是否所有处理已完成
+    // 可变的取消函数引用，随每个条目更新，通过 Manager 持久化以便窗口重开仍有效
+    let cancelCurrentFn: (() => void) | null = null;
 
-    // 创建并打开输出窗口
-    const outputWindow = new OutputWindow();
-    await outputWindow.open();
-
-    // 设置停止回调
-    outputWindow.setOnStop(() => {
+    // 创建并打开输出窗口（通过 Manager 管理）
+    const outputWindow = await OutputWindowManager.startBatch('ai-summary', total);
+    OutputWindowManager.setOnStop(() => {
       stopped = true;
     });
-
-    // 设置窗口关闭回调
-    outputWindow.setOnClose(() => {
-      windowClosed = true;
-      // 只有在处理未完成时才显示后台继续处理的通知
-      if (!allCompleted) {
-        new ztoolkit.ProgressWindow("AiNote", { closeTime: 3000 })
-          .createLine({
-            text: "输出窗口已关闭,AI 生成将在后台继续进行",
-            type: "default",
-          })
-          .show();
-      }
+    OutputWindowManager.setOnStopCurrent(() => {
+      cancelCurrentFn?.();
     });
 
     // 等待窗口完全初始化
@@ -378,7 +378,8 @@ export class NoteGenerator {
             outputWindow,
             (message, progress) => {
               progressCallback?.(current, total, progress, message);
-            }
+            },
+            (fn) => { cancelCurrentFn = fn; },
           );
 
           successCount++;
@@ -402,6 +403,7 @@ export class NoteGenerator {
       if (stopped) {
         // 如果被停止，显示停止消息和统计
         const notProcessed = total - successCount - failedCount - canceledCount;
+        OutputWindowManager.recordStopped();
         outputWindow.disableStopButton(true); // 传入 true 表示是停止状态
         outputWindow.showStopped(successCount, failedCount, notProcessed, canceledCount);
         progressCallback?.(total, total, 100, `已停止 (已完成 ${successCount} 个，失败 ${failedCount} 个，取消 ${canceledCount} 个，未处理 ${notProcessed} 个)`);
@@ -419,8 +421,7 @@ export class NoteGenerator {
         }
       }
       
-      // 标记为所有处理已完成
-      allCompleted = true;
+      OutputWindowManager.endBatch();
     } catch (error: any) {
       // 禁用停止按钮
       outputWindow.disableStopButton(false);

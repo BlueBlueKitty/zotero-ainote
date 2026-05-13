@@ -21,6 +21,8 @@ export class OutputWindow {
   private renderMathTimer: ReturnType<typeof setTimeout> | null = null; // 公式渲染节流定时器
   private userHasScrolled: boolean = false; // 用户是否手动滚动过
   private lastScrollTop: number = 0; // 上次滚动位置
+  private totalCount: number = 0; // 总条目数（用于进度显示）
+  private processedCount: number = 0; // 已处理条目数
 
   private async ensureOutputContainerReady(timeoutMs = 3000): Promise<boolean> {
     const startedAt = Date.now();
@@ -66,10 +68,10 @@ export class OutputWindow {
     const dialog = new ztoolkit.Dialog(1, 1) as any;
     const originalCreateElement = dialog.createElement?.bind(dialog);
 
-    // `title` 同时属于 HTML/SVG 标签名；toolkit 未指定 namespace 时会产生警告。
+    // `title` / `style` 同时属于多种命名空间；toolkit 未指定 namespace 时会产生警告。
     if (originalCreateElement) {
       dialog.createElement = (doc: Document, tagName: string, props: any = {}) => {
-        if (tagName === "title" && !props.namespace) {
+        if ((tagName === "title" || tagName === "style") && !props.namespace) {
           props = { ...props, namespace: "html" };
         }
         return originalCreateElement(doc, tagName, props);
@@ -88,29 +90,43 @@ export class OutputWindow {
           fontFamily: "system-ui, -apple-system, sans-serif",
         },
         children: [
-          // 标题区域
-          {
-            tag: "div",
-            styles: {
-              padding: "20px 20px 0 20px",
-              flexShrink: "0",
-            },
-            children: [
-              {
-                tag: "h2",
-                namespace: "html",
-                styles: {
-                  margin: "0 0 20px 0",
-                  fontSize: "20px",
-                  borderBottom: "2px solid #59c0bc",
-                  paddingBottom: "10px",
-                },
-                properties: {
-                  innerHTML: "AI 总结输出",
-                },
-              },
-            ],
-          },
+	          // 标题区域
+	          {
+	            tag: "div",
+	            styles: {
+	              padding: "20px 20px 0 20px",
+	              flexShrink: "0",
+	            },
+	            children: [
+	              {
+	                tag: "h2",
+	                namespace: "html",
+	                styles: {
+	                  margin: "0 0 20px 0",
+	                  fontSize: "20px",
+	                  borderBottom: "2px solid #59c0bc",
+	                  paddingBottom: "10px",
+	                },
+	                properties: {
+	                  innerHTML: "AI 总结输出",
+	                },
+	              },
+	              {
+	                tag: "div",
+	                id: "ainote-progress",
+	                namespace: "html",
+	                styles: {
+	                  margin: "0 0 15px 0",
+	                  fontSize: "13px",
+	                  color: "#6b7280",
+	                  lineHeight: "1.5",
+	                },
+	                properties: {
+	                  innerHTML: "",
+	                },
+	              },
+	            ],
+	          },
           // 可滚动内容区域
           {
             tag: "div",
@@ -543,9 +559,7 @@ export class OutputWindow {
 
     this.currentItemBuffer = markdown;
     this.currentItemContainer.innerHTML = this.convertMarkdownToHTML(markdown);
-    if (/\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\$[^\$\n]+?\$/.test(markdown)) {
-      this.scheduleRenderMath();
-    }
+    this.scheduleRenderMath();
     this.scrollToBottom();
   }
 
@@ -556,6 +570,36 @@ export class OutputWindow {
     this.currentStatusContainer.innerHTML = message
       ? `进度：${this.escapeHtml(message)}`
       : "";
+  }
+
+  /**
+   * 初始化总体进度显示
+   */
+  public initializeProgress(totalCount: number): void {
+    this.totalCount = totalCount;
+    this.processedCount = 0;
+    this.updateProgressDisplay();
+  }
+
+  /**
+   * 更新总体进度计数并刷新显示
+   */
+  public incrementProgress(): void {
+    this.processedCount++;
+    this.updateProgressDisplay();
+  }
+
+  private updateProgressDisplay(): void {
+    if (!this.dialog?.window) return;
+    const doc = this.dialog.window.document;
+    const progressEl = doc.getElementById("ainote-progress");
+    if (progressEl) {
+      if (this.totalCount > 0) {
+        progressEl.innerHTML = `共 ${this.totalCount} 个条目，已处理 ${this.processedCount} 个`;
+      } else {
+        progressEl.innerHTML = "";
+      }
+    }
   }
 
   private scheduleRenderMath(): void {
@@ -608,6 +652,7 @@ export class OutputWindow {
         );
       }
     }
+    this.incrementProgress();
     this.disableCurrentStopButton("✓ 当前条目已完成");
     this.updateCurrentStatus("");
     this.currentStatusContainer = null;
@@ -636,6 +681,7 @@ export class OutputWindow {
         );
       }
     }
+    this.incrementProgress();
     this.disableCurrentStopButton("✓ 当前条目已停止");
     this.updateCurrentStatus("");
     this.currentStatusContainer = null;
@@ -892,6 +938,7 @@ export class OutputWindow {
     );
 
     this.scrollToBottom();
+    this.incrementProgress();
   }
 
   /**
@@ -985,6 +1032,13 @@ export class OutputWindow {
    */
   public get opened(): boolean {
     return this.isOpen && !!this.dialog && !!this.dialog.window;
+  }
+
+  /**
+   * 返回当前累积内容（供 OutputWindowManager 快照用）
+   */
+  public getCurrentContent(): string {
+    return this.currentItemBuffer;
   }
 
   /**

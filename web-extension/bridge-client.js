@@ -80,8 +80,9 @@ export async function healthCheck() {
   return request("/api/health");
 }
 
-export async function claimNextTask() {
-  return request("/api/ext/tasks/next");
+export async function claimNextTask(waitMs = 0) {
+  const timeout = Number.isFinite(waitMs) ? Math.max(0, Math.floor(waitMs)) : 0;
+  return request(`/api/ext/tasks/next?waitMs=${encodeURIComponent(String(timeout))}`);
 }
 
 export async function getTask(taskId) {

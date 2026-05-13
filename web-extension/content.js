@@ -272,10 +272,18 @@
 
   function getOaiDeviceId() {
     try {
-      return localStorage.getItem("oai-device-id") || "";
+      const fromLocalStorage = localStorage.getItem("oai-device-id");
+      if (fromLocalStorage) return fromLocalStorage;
     } catch {
-      return "";
+      // ignore
     }
+    try {
+      const match = document.cookie.match(/oai-did=([^;]+)/);
+      if (match?.[1]) return decodeURIComponent(match[1]);
+    } catch {
+      // ignore
+    }
+    return "";
   }
 
   async function getAccessToken() {
@@ -378,10 +386,6 @@
   async function applyChatGPTMode(mode) {
     const normalizedMode = mode === "instant" ? "instant" : "thinking";
     const desiredLabels = MODE_LABELS[normalizedMode];
-    const otherLabels =
-      normalizedMode === "instant"
-        ? MODE_LABELS.thinking
-        : MODE_LABELS.instant;
 
     await waitFor(
       () => queryFirst(SELECTORS.promptInput),
@@ -389,8 +393,8 @@
     );
 
     const findPickerButton = () => {
-      const buttons = document.querySelectorAll(
-        SELECTORS.modelPickerButton.join(","),
+      const buttons = Array.from(
+        document.querySelectorAll(SELECTORS.modelPickerButton.join(",")),
       );
       for (const btn of buttons) {
         if (!(btn instanceof HTMLElement)) continue;
@@ -432,6 +436,22 @@
 
     const findMenuOption = (menuRoot) => {
       if (!menuRoot) return null;
+      if (normalizedMode === "thinking") {
+        const exactThinking = menuRoot.querySelector(
+          '[data-model-picker-thinking-effort-menu-item="true"], [data-testid="model-switcher-gpt-5-5-thinking"]',
+        );
+        if (exactThinking instanceof HTMLElement && isVisibleElement(exactThinking)) {
+          return exactThinking;
+        }
+      }
+      if (normalizedMode === "instant") {
+        const exactInstant = menuRoot.querySelector(
+          '[data-testid="model-switcher-gpt-5-5"]',
+        );
+        if (exactInstant instanceof HTMLElement && isVisibleElement(exactInstant)) {
+          return exactInstant;
+        }
+      }
       const options = menuRoot.querySelectorAll(
         '[role="menuitemradio"], [role="menuitem"], [role="option"], button',
       );
@@ -499,17 +519,33 @@
 
     await new Promise((resolve) => setTimeout(resolve, 600));
 
-    const refreshedButton = document.querySelector(
-      SELECTORS.modelPickerButton.join(","),
-    );
+    const refreshedButton = findPickerButton();
     const refreshedText = normalizeText(
       (refreshedButton instanceof HTMLElement
         ? refreshedButton.textContent
         : "") || "",
     );
-    const switchedOk =
-      desiredLabels.some((l) => refreshedText.includes(l)) &&
-      !otherLabels.some((l) => refreshedText.includes(l));
+    let switchedOk = desiredLabels.some((l) => refreshedText.includes(l));
+    const openMenu = document.querySelector(
+      '[role="menu"][data-state="open"], [role="listbox"][data-state="open"]',
+    );
+    if (!switchedOk && openMenu instanceof HTMLElement) {
+      const activeOption = openMenu.querySelector(
+        '[role="menuitemradio"][aria-checked="true"], [role="option"][aria-selected="true"]',
+      );
+      if (activeOption instanceof HTMLElement) {
+        const activeText = normalizeText(activeOption.textContent || "");
+        if (normalizedMode === "thinking") {
+          switchedOk =
+            activeOption.getAttribute("data-model-picker-thinking-effort-menu-item") === "true" ||
+            activeText.includes("thinking");
+        } else {
+          switchedOk =
+            activeOption.getAttribute("data-testid") === "model-switcher-gpt-5-5" ||
+            activeText.includes("instant");
+        }
+      }
+    }
 
     if (!switchedOk) {
       debugLog("ModeSwitch", `切换失败，按钮文本为 "${refreshedText}"`);
@@ -543,7 +579,9 @@
 
   function findAttachmentElement(fileName) {
     const normalizedName = normalizeText(fileName);
-    const buttons = document.querySelectorAll(SELECTORS.attachmentButton.join(","));
+    const buttons = Array.from(
+      document.querySelectorAll(SELECTORS.attachmentButton.join(",")),
+    );
     for (const btn of buttons) {
       if (!(btn instanceof HTMLElement) || !isVisibleElement(btn)) continue;
       const ariaLabel = normalizeText(btn.getAttribute("aria-label") || "");
@@ -847,12 +885,107 @@
     });
   }
 
+  async function waitForConversationMetaReady(timeoutMs = 12000) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const meta = getConversationMeta();
+      if (meta.conversationId && /\/c\//.test(meta.conversationUrl || "")) {
+        return meta;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return getConversationMeta();
+  }
+
   function cleanMessageContent(text) {
     if (!text) return "";
     return String(text)
       .replace(/\uE200cite(?:\uE202turn\d+(?:search|view)\d+)+\uE201/gi, "")
       .replace(/cite(?:turn\d+(?:search|view)\d+)+/gi, "")
       .trim();
+  }
+
+  function processContentReferences(text, contentReferences) {
+    if (!text || !Array.isArray(contentReferences) || contentReferences.length === 0) {
+      return { text, footnotes: [] };
+    }
+
+    const references = contentReferences.filter(
+      (ref) => ref && typeof ref.matched_text === "string" && ref.matched_text.length > 0,
+    );
+    if (references.length === 0) {
+      return { text, footnotes: [] };
+    }
+
+    const getReferenceInfo = (ref) => {
+      const item = Array.isArray(ref.items) ? ref.items[0] : null;
+      const url = item?.url || (Array.isArray(ref.safe_urls) ? ref.safe_urls[0] : "") || "";
+      const title = item?.title || "";
+      let label = item?.attribution || "";
+      if (!label && typeof ref.alt === "string") {
+        const match = ref.alt.match(/\[([^\]]+)\]\([^)]+\)/);
+        if (match) label = match[1];
+      }
+      if (!label) label = title || url;
+      return { url, title, label };
+    };
+
+    const footnotes = [];
+    const footnoteIndexByKey = new Map();
+    const citationRefs = references
+      .filter((ref) => ref.type === "grouped_webpages")
+      .sort((a, b) => {
+        const aIdx = Number.isFinite(a.start_idx) ? a.start_idx : Number.MAX_SAFE_INTEGER;
+        const bIdx = Number.isFinite(b.start_idx) ? b.start_idx : Number.MAX_SAFE_INTEGER;
+        return aIdx - bIdx;
+      });
+
+    citationRefs.forEach((ref) => {
+      const info = getReferenceInfo(ref);
+      if (!info.url) return;
+      const key = `${info.url}|${info.title}`;
+      if (footnoteIndexByKey.has(key)) return;
+      const index = footnotes.length + 1;
+      footnoteIndexByKey.set(key, index);
+      footnotes.push({ index, url: info.url, title: info.title, label: info.label });
+    });
+
+    const sortedByReplacement = references.slice().sort((a, b) => {
+      const aIdx = Number.isFinite(a.start_idx) ? a.start_idx : -1;
+      const bIdx = Number.isFinite(b.start_idx) ? b.start_idx : -1;
+      if (aIdx !== -1 || bIdx !== -1) {
+        return bIdx - aIdx;
+      }
+      return (b.matched_text?.length || 0) - (a.matched_text?.length || 0);
+    });
+
+    let output = text;
+    sortedByReplacement.forEach((ref) => {
+      if (!ref?.matched_text || ref.type === "sources_footnote") return;
+      let replacement = "";
+      if (ref.type === "grouped_webpages") {
+        const info = getReferenceInfo(ref);
+        if (info.url) {
+          const key = `${info.url}|${info.title}`;
+          const index = footnoteIndexByKey.get(key);
+          replacement = index ? `([${info.label}][${index}])` : ref.alt || "";
+        } else {
+          replacement = ref.alt || "";
+        }
+      } else {
+        replacement = ref.alt || "";
+      }
+
+      if (Number.isFinite(ref.start_idx) && Number.isFinite(ref.end_idx)) {
+        if (output.slice(ref.start_idx, ref.end_idx) === ref.matched_text) {
+          output = output.slice(0, ref.start_idx) + replacement + output.slice(ref.end_idx);
+          return;
+        }
+      }
+      output = output.split(ref.matched_text).join(replacement);
+    });
+
+    return { text: output, footnotes };
   }
 
   function extractConversationMessages(convData) {
@@ -891,11 +1024,33 @@
               )
               .filter(Boolean)
               .join("");
-            const cleaned = cleanMessageContent(rawText);
+            const contentReferences = msg.metadata?.content_references || [];
+            let processedText = rawText;
+            let footnotes = [];
+            if (Array.isArray(contentReferences) && contentReferences.length > 0) {
+              const processed = processContentReferences(rawText, contentReferences);
+              processedText = processed.text;
+              footnotes = processed.footnotes;
+            }
+            const cleaned = cleanMessageContent(processedText);
             if (cleaned) {
+              let finalContent = cleaned;
+              if (footnotes.length > 0) {
+                const footnoteText = footnotes
+                  .slice()
+                  .sort((a, b) => a.index - b.index)
+                  .map((note) => {
+                    if (!note.url) return "";
+                    const title = note.title ? ` "${note.title}"` : "";
+                    return `[${note.index}]: ${note.url}${title}`;
+                  })
+                  .filter(Boolean)
+                  .join("\n");
+                finalContent = cleaned + "\n\n" + footnoteText;
+              }
               messages.push({
                 role: author,
-                content: cleaned,
+                content: finalContent,
                 create_time: msg.create_time || null,
               });
             }
@@ -941,6 +1096,7 @@
     const token = await getAccessToken();
     const deviceId = getOaiDeviceId();
     if (!token || !deviceId) {
+      debugLog("ResultFetch", `API 跳过: token=${!!token}, deviceId=${!!deviceId}`);
       return null;
     }
     const headers = {
@@ -1085,32 +1241,10 @@
     return "";
   }
 
-  async function navigateToTarget(targetUrl) {
-    if (!targetUrl) return;
-    const normalized = String(targetUrl).trim();
-    if (!normalized) return;
-
-    if (location.href === normalized) return;
-
-    location.href = normalized;
-    await waitFor(
-      () => {
-        return location.href.startsWith(normalized) ||
-          location.href.includes(new URL(normalized).pathname)
-          ? true
-          : null;
-      },
-      20000, 250, "target page navigation",
-    );
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
-
   async function runSummarizeTask(message) {
     const task = message.task;
     try {
       await ensureTaskActive(task.taskId);
-
-      await navigateToTarget(message.projectUrl);
 
       await waitFor(
         () => queryFirst(SELECTORS.promptInput),
@@ -1131,6 +1265,13 @@
             status: "creating_conversation",
             modeSwitchFailed: true,
             modeSwitchError: "未找到或未成功切换 ChatGPT 模型入口",
+            ...getConversationMeta(),
+          });
+        } else {
+          await reportTaskStatus(task.taskId, {
+            status: "creating_conversation",
+            modeSwitchOk: true,
+            debugMessage: "模型切换成功",
             ...getConversationMeta(),
           });
         }
@@ -1159,16 +1300,36 @@
         task.pdfFileName || "paper.pdf",
         { type: "application/pdf" },
       );
+      debugLog("PdfUpload", `开始上传 PDF: ${pdfFile.name}, ${pdfBuffer.byteLength} bytes`);
       await attachFile(pdfFile);
       await waitForAttachmentReady(pdfFile.name, task.taskId);
+      await reportTaskStatus(task.taskId, {
+        status: "downloading_pdf",
+        pdfUploadReady: true,
+        debugMessage: `PDF 上传完成: ${pdfFile.name}`,
+        ...getConversationMeta(),
+      });
+      debugLog("PdfUpload", `PDF 上传完成: ${pdfFile.name}`);
 
       await ensureTaskActive(task.taskId);
       await fillPrompt(task.prompt || "");
 
       if (message.autoSend) {
         await clickSendButton();
+        const metaAfterSend = await waitForConversationMetaReady();
+        await reportTaskStatus(task.taskId, {
+          status: "running",
+          debugMessage: "已点击发送，等待模型完成",
+          ...metaAfterSend,
+        });
       } else {
         await waitForUserSend(task.taskId);
+        const metaAfterSend = await waitForConversationMetaReady();
+        await reportTaskStatus(task.taskId, {
+          status: "running",
+          debugMessage: "用户已发送，等待模型完成",
+          ...metaAfterSend,
+        });
       }
 
       await waitForResponseComplete(task.taskId);
@@ -1203,6 +1364,8 @@
       }
       return {
         resultMarkdown,
+        resultSource: resultFetchSource === "API" ? "api" : resultFetchSource === "DOM" ? "dom" : undefined,
+        resultDebugInfo: `fetch-source=${resultFetchSource}; length=${resultMarkdown.length}`,
         ...getConversationMeta(),
       };
     } catch (error) {
@@ -1218,10 +1381,6 @@
     if (!targetUrl) {
       throw new Error("缺少已保存的会话 URL");
     }
-    if (location.href !== targetUrl) {
-      location.href = targetUrl;
-      await new Promise((resolve) => setTimeout(resolve, 2500));
-    }
     await waitFor(
       () => queryFirst(SELECTORS.promptInput),
       30000, 250, "prompt input",
@@ -1230,7 +1389,8 @@
     if (
       message.task.existingConversationId &&
       meta.conversationId &&
-      meta.conversationId !== message.task.existingConversationId
+      meta.conversationId !== message.task.existingConversationId &&
+      !message.recoverRunningTask
     ) {
       throw new Error("当前页面不是预期的历史会话");
     }
@@ -1276,12 +1436,23 @@
 
     return {
       resultMarkdown: resultMarkdown ? debugHeader + resultMarkdown : "",
-      resultFetchSource,
+      resultSource: resultFetchSource === "API" ? "api" : resultFetchSource === "DOM" ? "dom" : undefined,
+      resultDebugInfo: `debug-refetch; fetch-source=${resultFetchSource}; length=${resultMarkdown.length}`,
       ...meta,
     };
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "ainote-ping") {
+      sendResponse({
+        ok: true,
+        ready: true,
+        href: location.href,
+        title: document.title || "",
+        readyState: document.readyState || "",
+      });
+      return false;
+    }
     if (message?.type === "ainote-run-summarize-task") {
       sendResponse({ ok: true, started: true });
       void runSummarizeTask(message)
@@ -1290,7 +1461,9 @@
           if (error instanceof TaskCanceledError) {
             return;
           }
-          return reportTaskFailure(message.task.taskId, error);
+          reportTaskFailure(message.task.taskId, error).catch((reportErr) => {
+            console.error("[AiNote] Failed to report task failure", reportErr);
+          });
         });
       return false;
     }
@@ -1299,11 +1472,17 @@
       void openConversationTask(message)
         .then((result) =>
           reportTaskResult(message.task.taskId, {
-            resultMarkdown: "",
+            resultMarkdown: result.resultMarkdown || "",
+            resultSource: result.resultSource,
+            resultDebugInfo: result.resultDebugInfo,
             ...result,
           }),
         )
-        .catch((error) => reportTaskFailure(message.task.taskId, error));
+        .catch((error) => {
+          reportTaskFailure(message.task.taskId, error).catch((reportErr) => {
+            console.error("[AiNote] Failed to report task failure", reportErr);
+          });
+        });
       return false;
     }
     return false;

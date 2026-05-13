@@ -94,6 +94,7 @@ function applyConversationMeta(
 
 export class WebSummaryTaskStore {
   private readonly tasks = new Map<string, WebSummaryTask>();
+  private readonly nextTaskWaiters = new Set<() => void>();
 
   public createTask(request: CreateTaskRequest): WebSummaryTask {
     const now = new Date().toISOString();
@@ -125,6 +126,7 @@ export class WebSummaryTaskStore {
       },
     };
     this.tasks.set(task.taskId, task);
+    this.notifyTaskAvailable();
     return cloneTask(task);
   }
 
@@ -140,9 +142,37 @@ export class WebSummaryTaskStore {
     if (!task) {
       return null;
     }
-    task.status = "claimed";
+    // 直接从 queued 跳到 opening_chat，避免 extension 需要二次 HTTP 请求
+    // 将状态从 claimed 推进到 opening_chat，消除冷启动时 HTTP 可能失败的时间窗口
+    task.status = "opening_chat";
     task.updatedAt = new Date().toISOString();
     return cloneTask(task);
+  }
+
+  public async claimNextTaskOrWait(waitMs: number): Promise<WebSummaryTask | null> {
+    const immediate = this.claimNextTask();
+    if (immediate) {
+      return immediate;
+    }
+    const timeout = Number.isFinite(waitMs) ? Math.max(0, Math.floor(waitMs)) : 0;
+    if (timeout <= 0) {
+      return null;
+    }
+    return new Promise<WebSummaryTask | null>((resolve) => {
+      let settled = false;
+      const done = (task: WebSummaryTask | null) => {
+        if (settled) return;
+        settled = true;
+        this.nextTaskWaiters.delete(onTaskReady);
+        clearTimeout(timer);
+        resolve(task);
+      };
+      const onTaskReady = () => {
+        done(this.claimNextTask());
+      };
+      const timer = setTimeout(() => done(null), timeout);
+      this.nextTaskWaiters.add(onTaskReady);
+    });
   }
 
   public requestCancel(taskId: string, reason?: string): WebSummaryTask {
@@ -185,6 +215,21 @@ export class WebSummaryTaskStore {
     if (request.errorMessage) {
       task.errorMessage = request.errorMessage;
     }
+    if (typeof request.modeSwitchOk === "boolean") {
+      task.modeSwitchOk = request.modeSwitchOk;
+    }
+    if (typeof request.modeSwitchFailed === "boolean") {
+      task.modeSwitchFailed = request.modeSwitchFailed;
+    }
+    if (typeof request.modeSwitchError === "string") {
+      task.modeSwitchError = request.modeSwitchError;
+    }
+    if (typeof request.pdfUploadReady === "boolean") {
+      task.pdfUploadReady = request.pdfUploadReady;
+    }
+    if (typeof request.debugMessage === "string") {
+      task.debugMessage = request.debugMessage;
+    }
     return cloneTask(task);
   }
 
@@ -198,6 +243,8 @@ export class WebSummaryTaskStore {
     }
     task.status = "succeeded";
     task.resultMarkdown = request.resultMarkdown;
+    task.resultSource = request.resultSource;
+    task.resultDebugInfo = request.resultDebugInfo;
     task.updatedAt = new Date().toISOString();
     applyConversationMeta(task, {
       conversationId: request.conversationId,
@@ -257,5 +304,20 @@ export class WebSummaryTaskStore {
     };
     error.bridgeCode = "INVALID_STATUS_TRANSITION";
     return error;
+  }
+
+  private notifyTaskAvailable(): void {
+    if (this.nextTaskWaiters.size === 0) {
+      return;
+    }
+    const waiters = Array.from(this.nextTaskWaiters);
+    this.nextTaskWaiters.clear();
+    for (const waiter of waiters) {
+      try {
+        waiter();
+      } catch {
+        // ignore
+      }
+    }
   }
 }
