@@ -41,6 +41,10 @@
       '[data-testid*="file-preview"]',
       '[data-testid*="uploaded-file"]',
     ],
+    removeAttachmentButton: [
+      'button[aria-label^="移除文件"]',
+      'button[aria-label^="Remove file"]',
+    ],
     assistantMessage: [
       '[data-message-author-role="assistant"]',
     ],
@@ -302,7 +306,10 @@
       throw new TaskCanceledError("网页总结任务不存在，已停止");
     }
     if (task.status === "canceled" || task.cancelRequestedAt) {
-      await tryStopGeneration();
+      const stopped = await tryStopGeneration();
+      if (!stopped) {
+        await cleanupPendingComposerState();
+      }
       throw new TaskCanceledError(
         task.cancelReason || task.errorMessage || "已停止当前条目的AI总结",
       );
@@ -318,6 +325,61 @@
       return true;
     }
     return false;
+  }
+
+  function clearPromptInputContent(input) {
+    if (
+      input instanceof HTMLTextAreaElement ||
+      input instanceof HTMLInputElement
+    ) {
+      input.focus();
+      input.value = "";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      return;
+    }
+    if (input instanceof HTMLElement) {
+      input.focus();
+      input.textContent = "";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
+  async function clearPromptInput() {
+    const input = queryFirst(SELECTORS.promptInput);
+    if (!input) return;
+    clearPromptInputContent(input);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    clearPromptInputContent(input);
+  }
+
+  async function removeUploadedFiles() {
+    const clicked = new Set();
+    for (let round = 0; round < 6; round++) {
+      const removeButtons = Array.from(
+        document.querySelectorAll(SELECTORS.removeAttachmentButton.join(",")),
+      ).filter(
+        (node) =>
+          node instanceof HTMLElement &&
+          isVisibleElement(node) &&
+          !clicked.has(node),
+      );
+      if (!removeButtons.length) {
+        return;
+      }
+      for (const button of removeButtons) {
+        clicked.add(button);
+        dispatchPointerMouseClick(button);
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 180));
+    }
+  }
+
+  async function cleanupPendingComposerState() {
+    await removeUploadedFiles();
+    await clearPromptInput();
   }
 
   async function waitForMutationObserved(options) {
