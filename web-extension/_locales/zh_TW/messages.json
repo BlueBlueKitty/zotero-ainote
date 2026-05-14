@@ -1,0 +1,38 @@
+{
+  "extName": {
+    "message": "AiNote 網頁摘要橋接擴充功能"
+  },
+  "extDescription": {
+    "message": "將 Zotero 網頁摘要任務橋接到 ChatGPT 對話。"
+  },
+  "actionTitle": {
+    "message": "AiNote 網頁摘要橋接擴充功能"
+  },
+  "optionsTitle": {
+    "message": "AiNote 網頁摘要設定"
+  },
+  "optionsHeading": {
+    "message": "AiNote 網頁摘要設定"
+  },
+  "bridgeUrlLabel": {
+    "message": "橋接服務位址"
+  },
+  "saveButton": {
+    "message": "儲存"
+  },
+  "testButton": {
+    "message": "測試連線"
+  },
+  "statusSaved": {
+    "message": "設定已儲存。"
+  },
+  "statusTesting": {
+    "message": "正在測試連線..."
+  },
+  "statusTestSuccess": {
+    "message": "連線成功"
+  },
+  "statusTestFailed": {
+    "message": "連線失敗"
+  }
+}

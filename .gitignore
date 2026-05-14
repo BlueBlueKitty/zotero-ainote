@@ -28,5 +28,6 @@ update_docs
 *.copilot-instructions.md
 
 .mindfs/
+dist/
 CLAUDE.md
 AGENTS.md

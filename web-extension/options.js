@@ -6,6 +6,25 @@ import { DEFAULT_SETTINGS, getSettings, saveSettings } from "./storage.js";
 const bridgeUrl = /** @type {HTMLInputElement} */ (document.getElementById("bridgeUrl"));
 const status = /** @type {HTMLDivElement} */ (document.getElementById("status"));
 
+function t(key) {
+  return chrome.i18n.getMessage(key) || key;
+}
+
+function applyI18n() {
+  for (const element of Array.from(document.querySelectorAll("[data-i18n]"))) {
+    const key = element.getAttribute("data-i18n");
+    if (!key) continue;
+    const text = t(key);
+    if (text) {
+      element.textContent = text;
+    }
+  }
+  const title = t("optionsTitle");
+  if (title) {
+    document.title = title;
+  }
+}
+
 async function load() {
   const settings = await getSettings();
   bridgeUrl.value = settings.bridgeUrl;
@@ -15,16 +34,16 @@ async function onSave() {
   await saveSettings({
     bridgeUrl: bridgeUrl.value.trim() || DEFAULT_SETTINGS.bridgeUrl,
   });
-  status.textContent = "设置已保存。";
+  status.textContent = t("statusSaved");
 }
 
 async function onTest() {
-  status.textContent = "正在测试连接...";
+  status.textContent = t("statusTesting");
   try {
     const result = await healthCheck();
-    status.textContent = `连接成功：${JSON.stringify(result)}`;
+    status.textContent = `${t("statusTestSuccess")}: ${JSON.stringify(result)}`;
   } catch (error) {
-    status.textContent = `连接失败：${error instanceof Error ? error.message : String(error)}`;
+    status.textContent = `${t("statusTestFailed")}: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
 
@@ -35,4 +54,5 @@ document.getElementById("test")?.addEventListener("click", () => {
   void onTest();
 });
 
+applyI18n();
 void load();

@@ -1,0 +1,38 @@
+{
+  "extName": {
+    "message": "AiNote Web Summary Bridge"
+  },
+  "extDescription": {
+    "message": "Bridge Zotero web-summary tasks to ChatGPT conversations."
+  },
+  "actionTitle": {
+    "message": "AiNote Web Summary Bridge"
+  },
+  "optionsTitle": {
+    "message": "AiNote Web Summary Settings"
+  },
+  "optionsHeading": {
+    "message": "AiNote Web Summary Settings"
+  },
+  "bridgeUrlLabel": {
+    "message": "Bridge URL"
+  },
+  "saveButton": {
+    "message": "Save"
+  },
+  "testButton": {
+    "message": "Test Connection"
+  },
+  "statusSaved": {
+    "message": "Settings saved."
+  },
+  "statusTesting": {
+    "message": "Testing connection..."
+  },
+  "statusTestSuccess": {
+    "message": "Connection successful"
+  },
+  "statusTestFailed": {
+    "message": "Connection failed"
+  }
+}

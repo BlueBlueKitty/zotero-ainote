@@ -1,0 +1,38 @@
+{
+  "extName": {
+    "message": "AiNote 网页总结桥接扩展"
+  },
+  "extDescription": {
+    "message": "将 Zotero 网页总结任务桥接到 ChatGPT 对话。"
+  },
+  "actionTitle": {
+    "message": "AiNote 网页总结桥接扩展"
+  },
+  "optionsTitle": {
+    "message": "AiNote 网页总结设置"
+  },
+  "optionsHeading": {
+    "message": "AiNote 网页总结设置"
+  },
+  "bridgeUrlLabel": {
+    "message": "桥接服务地址"
+  },
+  "saveButton": {
+    "message": "保存"
+  },
+  "testButton": {
+    "message": "测试连接"
+  },
+  "statusSaved": {
+    "message": "设置已保存。"
+  },
+  "statusTesting": {
+    "message": "正在测试连接..."
+  },
+  "statusTestSuccess": {
+    "message": "连接成功"
+  },
+  "statusTestFailed": {
+    "message": "连接失败"
+  }
+}
