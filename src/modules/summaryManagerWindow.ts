@@ -1,10 +1,18 @@
-import { marked } from "marked";
+import { config } from "../../package.json";
 import { getPref, setPref } from "../utils/prefs";
 import { ensurePromptTemplateState } from "../utils/prompts";
 import { parseProfiles } from "./llmProfiles";
+import {
+  isActiveTask,
+  isHistoryTask,
+  sortActiveTasks,
+  sortHistoryTasks,
+} from "./summaryTaskPartition";
 import { SummaryHistoryStore } from "./summaryHistoryStore";
+import { OutputWindow } from "./outputWindow";
 import { SummaryTaskManager } from "./summaryTaskManager";
 import { SummaryTask, SummaryTaskSnapshot } from "./summaryTaskTypes";
+import { WebSummaryWorkflow } from "./webSummaryWorkflow";
 
 const LIMIT_OPTIONS = [20, 50, 100, 200, 500, 0];
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -33,14 +41,14 @@ type SelectOption = { value: string; label: string };
 function normalizeVisualStatus(status: string): SummaryTask["status"] {
   if (status === "succeeded") return "completed";
   if (status === "canceled") return "cancelled";
+  if (status === "interrupted") return "cancelled";
   if (status === "processing") return "running";
   if (
     status === "pending" ||
     status === "running" ||
     status === "completed" ||
     status === "failed" ||
-    status === "cancelled" ||
-    status === "interrupted"
+    status === "cancelled"
   ) {
     return status;
   }
@@ -53,8 +61,7 @@ function statusLabel(status: SummaryTask["status"]): string {
     running: "总结中",
     completed: "已完成",
     failed: "失败",
-    cancelled: "已取消",
-    interrupted: "已中断",
+    cancelled: "已停止",
   };
   return map[status] || status;
 }
@@ -69,7 +76,7 @@ function statusColor(
   if (status === "failed") {
     return isDark ? "#fca5a5" : "#b91c1c";
   }
-  if (status === "cancelled" || status === "interrupted") {
+  if (status === "cancelled") {
     return isDark ? "#fcd34d" : "#a16207";
   }
   return isDark ? "#c7ccd1" : "#666";
@@ -92,11 +99,11 @@ function rowBorderColor(
 ): string {
   if (status === "completed") return selected ? "#16a34a" : isDark ? "#22c55e" : "#16a34a";
   if (status === "failed") return selected ? "#dc2626" : isDark ? "#ef4444" : "#dc2626";
-  if (status === "cancelled" || status === "interrupted") {
+  if (status === "cancelled") {
     return selected ? "#d97706" : isDark ? "#f59e0b" : "#d97706";
   }
-  if (status === "running") return selected ? "#2563eb" : isDark ? "#3b82f6" : "#2563eb";
-  if (status === "pending") return selected ? "#64748b" : isDark ? "#475569" : "#cbd5e1";
+  if (status === "running") return selected ? "#1d4ed8" : isDark ? "#2563eb" : "#1d4ed8";
+  if (status === "pending") return selected ? "#60a5fa" : isDark ? "#60a5fa" : "#93c5fd";
   return selected ? "#59c0bc" : isDark ? "#4b5563" : "#ddd";
 }
 
@@ -111,13 +118,13 @@ function rowAccentColor(
   if (status === "failed") {
     return isDark ? "#ef4444" : "#dc2626";
   }
-  if (status === "cancelled" || status === "interrupted") {
+  if (status === "cancelled") {
     return isDark ? "#f59e0b" : "#d97706";
   }
   if (status === "running") {
-    return isDark ? "#3b82f6" : "#2563eb";
+    return isDark ? "#2563eb" : "#1d4ed8";
   }
-  return selected ? "#59c0bc" : isDark ? "#4b5563" : "#ddd";
+  return selected ? "#93c5fd" : isDark ? "#60a5fa" : "#93c5fd";
 }
 
 function applyTaskRowAppearance(
@@ -295,6 +302,9 @@ export class SummaryManagerWindow {
   private themeMediaQuery: MediaQueryList | null = null;
   private themeObserver: MutationObserver | null = null;
   private initializePromise: Promise<void> | null = null;
+  private activeCollapsed = false;
+  private historyCollapsed = false;
+  private mathJaxInjected = false;
 
   private async open(): Promise<void> {
     await this.manager.ensureLoaded();
@@ -338,8 +348,9 @@ export class SummaryManagerWindow {
         tag: "div",
         id: "ainote-summary-manager",
         styles: {
-          width: "980px",
-          height: "680px",
+          position: "fixed",
+          inset: "0",
+          minHeight: "0",
           display: "flex",
           flexDirection: "column",
           fontFamily: "system-ui, -apple-system, sans-serif",
@@ -481,7 +492,7 @@ export class SummaryManagerWindow {
                     tag: "button",
                     namespace: "html",
                     id: "ainote-clear-history",
-                    properties: { innerHTML: "🗑 清空总结历史" },
+                    properties: { innerHTML: "🗑 清空历史任务" },
                   },
                 ],
               },
@@ -489,16 +500,19 @@ export class SummaryManagerWindow {
           },
           {
             tag: "div",
+            id: "ainote-main",
             styles: { flex: "1", display: "flex", minHeight: "0" },
             children: [
               {
                 tag: "div",
+                id: "ainote-task-list-pane",
                 styles: {
                   width: "360px",
                   borderRight: "1px solid #ddd",
                   display: "flex",
                   flexDirection: "column",
                   minHeight: "0",
+                  overflow: "hidden",
                 },
                 children: [
                   {
@@ -506,8 +520,14 @@ export class SummaryManagerWindow {
                     id: "ainote-task-list",
                     styles: {
                       flex: "1",
-                      overflow: "auto",
+                      overflow: "hidden",
+                      overflowY: "auto",
+                      overflowX: "hidden",
+                      overscrollBehavior: "contain",
                       padding: "8px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "8px",
                     },
                   },
                   {
@@ -550,7 +570,11 @@ export class SummaryManagerWindow {
                 id: "ainote-task-detail",
                 styles: {
                   flex: "1",
+                  minWidth: "0",
                   overflow: "auto",
+                  overflowY: "auto",
+                  overflowX: "hidden",
+                  overscrollBehavior: "contain",
                   padding: "12px",
                 },
               },
@@ -560,10 +584,11 @@ export class SummaryManagerWindow {
       })
       .setDialogData(dialogData)
       .open("条目总结管理窗口", {
-        width: 1080,
-        height: 740,
+        width: 980,
+        height: 680,
         centerscreen: true,
         resizable: true,
+        noDialogMode: true,
       });
 
     this.isOpen = true;
@@ -589,6 +614,7 @@ export class SummaryManagerWindow {
     if (!ready || this.initialized || !this.dialog?.window) return;
 
     this.bindEvents();
+    this.ensureMathJax();
     this.populateTopSelectors(true);
     this.populateHistoryLimit(true);
     this.installThemeListener();
@@ -709,6 +735,35 @@ export class SummaryManagerWindow {
     const listEl = doc.getElementById("ainote-task-list") as HTMLElement | null;
     listEl?.addEventListener("click", (evt: Event) => {
       const target = evt.target as HTMLElement;
+      const listActionBtn = target.closest(
+        "button[data-list-action]",
+      ) as HTMLButtonElement | null;
+      if (listActionBtn) {
+        evt.stopPropagation();
+        const action = listActionBtn.dataset.listAction;
+        if (action === "toggle-active") {
+          this.activeCollapsed = !this.activeCollapsed;
+          this.render(this.manager.getSnapshot());
+        }
+        if (action === "toggle-history") {
+          this.historyCollapsed = !this.historyCollapsed;
+          this.render(this.manager.getSnapshot());
+        }
+        if (action === "stop-active") {
+          this.manager.stopActiveTasks();
+        }
+        if (action === "retry-active") {
+          this.manager.retryActiveTasks();
+        }
+        if (action === "remove-active") {
+          this.manager.removeActiveTasks();
+        }
+        if (action === "clear-history") {
+          void this.manager.clearHistory();
+        }
+        return;
+      }
+
       const actionBtn = target.closest(
         "button[data-action]",
       ) as HTMLButtonElement | null;
@@ -720,6 +775,13 @@ export class SummaryManagerWindow {
         if (action === "stop") this.manager.stopTask(taskId);
         if (action === "retry") this.manager.retryTask(taskId);
         if (action === "remove") this.manager.removeTask(taskId);
+        if (action === "view") this.manager.setSelected(taskId);
+        if (action === "continue-chat") {
+          void this.openConversationForTask(taskId);
+        }
+        if (action === "view-note") {
+          void this.openNoteForTask(taskId);
+        }
         return;
       }
 
@@ -745,7 +807,57 @@ export class SummaryManagerWindow {
       if (action === "stop") this.manager.stopTask(taskId);
       if (action === "retry") this.manager.retryTask(taskId);
       if (action === "remove") this.manager.removeTask(taskId);
+      if (action === "view") this.manager.setSelected(taskId);
+      if (action === "continue-chat") {
+        void this.openConversationForTask(taskId);
+      }
+      if (action === "view-note") {
+        void this.openNoteForTask(taskId);
+      }
     });
+  }
+
+  private async openConversationForTask(taskId: string): Promise<void> {
+    const task = this.manager.getTaskById(taskId);
+    if (!task || task.kind !== "web" || task.status !== "completed") return;
+    const item = Zotero.Items.get(task.itemID);
+    if (!item) return;
+
+    if (task.webConversationUrl) {
+      try {
+        if (typeof (Zotero as any).launchURL === "function") {
+          (Zotero as any).launchURL(task.webConversationUrl);
+          return;
+        }
+      } catch (error) {
+        ztoolkit.log("[AiNote][SummaryManagerWindow] Failed to launch conversation URL", error);
+      }
+    }
+
+    await WebSummaryWorkflow.openConversationForItem(item);
+  }
+
+  private async openNoteForTask(taskId: string): Promise<void> {
+    const task = this.manager.getTaskById(taskId);
+    const noteID = task?.noteID;
+    if (!task || !noteID) return;
+    const note = Zotero.Items.get(noteID);
+    if (!note) return;
+    const pane = Zotero.getActiveZoteroPane?.();
+    if (pane?.selectItem) {
+      try {
+        await pane.selectItem(noteID);
+        return;
+      } catch (error) {
+        ztoolkit.log("[AiNote][SummaryManagerWindow] Failed to select note in pane", error);
+      }
+    }
+    if (note.libraryID) {
+      const itemURI = Zotero.URI.getItemURI(note);
+      if (itemURI) {
+        Zotero.launchURL(itemURI);
+      }
+    }
   }
 
   private bindCustomSelect(select: Element, onChange: () => void): void {
@@ -878,6 +990,13 @@ export class SummaryManagerWindow {
     if (!root) return;
     doc.documentElement.style.background = isDark ? "#1f2329" : "#ffffff";
     doc.body.style.background = isDark ? "#1f2329" : "#ffffff";
+    doc.documentElement.style.height = "100%";
+    doc.body.style.height = "100%";
+    doc.body.style.margin = "0";
+    doc.documentElement.style.overflow = "hidden";
+    doc.body.style.overflow = "hidden";
+    root.style.height = "100%";
+    root.style.minHeight = "0";
     root.style.background = isDark ? "#2b2b2b" : "#fff";
     root.style.color = isDark ? "#e6e6e6" : "#1f1f1f";
 
@@ -895,7 +1014,37 @@ export class SummaryManagerWindow {
         .ainote-row-actions { display:flex; gap:8px; margin-top:8px; flex-wrap: wrap; }
         #ainote-header { background: ${isDark ? "#23262d" : "#f8fafc"}; border-bottom-color: ${isDark ? "#4b5563" : "#d1d5db"} !important; }
         #ainote-header label { color: ${isDark ? "#d1d5db" : "#111827"}; }
+        #ainote-summary-manager {
+          width: 100%;
+          height: 100%;
+          min-height: 0;
+          box-sizing: border-box;
+        }
+        #ainote-main {
+          flex: 1 1 auto;
+          min-height: 0;
+        }
         #ainote-task-list, #ainote-task-detail { background: ${isDark ? "#2b2b2b" : "#ffffff"}; }
+        #ainote-task-list-pane { min-height: 0; overflow: hidden; }
+        #ainote-task-list {
+          overflow: hidden !important;
+          overflow-y: hidden !important;
+          overflow-x: hidden !important;
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        #ainote-task-list > .ainote-section {
+          min-height: 0;
+        }
+        #ainote-task-detail {
+          overflow-y: auto !important;
+          overflow-x: hidden !important;
+          overscroll-behavior: contain;
+          min-height: 0;
+          min-width: 0;
+        }
         #ainote-summary-manager strong, #ainote-summary-manager h3 { color: ${isDark ? "#f3f4f6" : "#111827"}; }
         #ainote-summary-manager .ainote-custom-select {
           position: relative;
@@ -1022,17 +1171,91 @@ export class SummaryManagerWindow {
           border-left-color: ${rowAccentColor("failed", isDark, true)};
           background-color: ${rowBackgroundColor("failed", isDark, true)};
         }
-        #ainote-summary-manager .ainote-task-row[data-status="cancelled"],
-        #ainote-summary-manager .ainote-task-row[data-status="interrupted"] {
+        #ainote-summary-manager .ainote-task-row[data-status="cancelled"] {
           border-color: ${rowBorderColor("cancelled", isDark, false)};
           border-left-color: ${rowAccentColor("cancelled", isDark, false)};
           background-color: ${rowBackgroundColor("cancelled", isDark, false)};
         }
-        #ainote-summary-manager .ainote-task-row[data-status="cancelled"].is-selected,
-        #ainote-summary-manager .ainote-task-row[data-status="interrupted"].is-selected {
+        #ainote-summary-manager .ainote-task-row[data-status="cancelled"].is-selected {
           border-color: ${rowBorderColor("cancelled", isDark, true)};
           border-left-color: ${rowAccentColor("cancelled", isDark, true)};
           background-color: ${rowBackgroundColor("cancelled", isDark, true)};
+        }
+        #ainote-summary-manager .ainote-section {
+          border: 1px solid ${isDark ? "#4b5563" : "#d1d5db"};
+          border-radius: 8px;
+          display: flex;
+          flex-direction: column;
+          min-height: 0;
+          overflow: hidden;
+        }
+        #ainote-summary-manager .ainote-section-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+          padding: 8px;
+          border-bottom: 1px solid ${isDark ? "#4b5563" : "#e5e7eb"};
+          background: ${isDark ? "#23262d" : "#f8fafc"};
+        }
+        #ainote-summary-manager .ainote-section-title {
+          font-size: 12px;
+          font-weight: 700;
+        }
+        #ainote-summary-manager .ainote-section-actions {
+          display: flex;
+          gap: 6px;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+        }
+        #ainote-summary-manager .ainote-section-body {
+          flex: 1;
+          min-height: 0;
+          overflow-y: auto;
+          overflow-x: hidden;
+          padding: 8px;
+        }
+        #ainote-summary-manager .ainote-section.is-empty .ainote-section-body {
+          flex: 0 0 auto;
+          min-height: 56px;
+        }
+        #ainote-summary-manager .ainote-section-footer {
+          padding: 8px;
+          border-top: 1px solid ${isDark ? "#4b5563" : "#e5e7eb"};
+          display: flex;
+          gap: 6px;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          background: ${isDark ? "#23262d" : "#f8fafc"};
+        }
+        #ainote-summary-manager .ainote-task-title {
+          font-size: 13px;
+          font-weight: 600;
+          line-height: 1.4;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        #ainote-task-detail mjx-container,
+        #ainote-task-detail .MathJax {
+          font-size: 1em !important;
+          max-width: 100%;
+        }
+        #ainote-task-detail mjx-container[display="true"] {
+          display: block;
+          overflow-x: auto;
+          overflow-y: hidden;
+          padding: 2px 0;
+        }
+        #ainote-task-detail mjx-container svg {
+          max-width: 100% !important;
+          height: auto !important;
+        }
+        #ainote-stop-active,
+        #ainote-retry-active,
+        #ainote-remove-active,
+        #ainote-clear-history {
+          display: none !important;
         }
       `;
     }
@@ -1124,7 +1347,10 @@ export class SummaryManagerWindow {
     const isDark = this.isDarkTheme();
     listEl.replaceChildren();
 
-    if (!snapshot.tasks.length) {
+    const activeTasks = sortActiveTasks(snapshot.tasks.filter((task) => isActiveTask(task)));
+    const historyTasks = sortHistoryTasks(snapshot.tasks.filter((task) => isHistoryTask(task)));
+
+    if (!activeTasks.length && !historyTasks.length) {
       const empty = createHtmlElement(doc, "div");
       empty.style.color = isDark ? "#9ca3af" : "#888";
       empty.textContent = "暂无任务";
@@ -1132,14 +1358,10 @@ export class SummaryManagerWindow {
       return;
     }
 
-    snapshot.tasks
-      .slice()
-      .reverse()
-      .forEach((task) => {
+    const renderTaskRow = (task: SummaryTask) => {
         const selected = snapshot.selectedTaskId === task.id;
         const visualStatus = normalizeVisualStatus(task.status);
-        const progress =
-          typeof task.progress === "number" ? `${task.progress}%` : "";
+        const progress = typeof task.progress === "number" ? `${task.progress}%` : "";
 
         const row = createHtmlElement(doc, "div");
         row.className = "ainote-task-row";
@@ -1150,62 +1372,230 @@ export class SummaryManagerWindow {
         applyTaskRowAppearance(row, visualStatus, isDark, selected);
 
         const title = createHtmlElement(doc, "div");
-        title.style.fontSize = "13px";
-        title.style.fontWeight = "600";
-        title.style.lineHeight = "1.4";
+        title.className = "ainote-task-title";
         title.textContent = task.title;
+        title.title = task.title;
 
         const status = createHtmlElement(doc, "div");
         status.style.fontSize = "12px";
         status.style.color = statusColor(visualStatus, isDark);
         status.style.marginTop = "4px";
-        status.textContent = `${statusLabel(visualStatus)}${progress ? ` · ${progress}` : ""}`;
+        status.textContent = `${statusLabel(visualStatus)}${progress ? ` ${progress}` : ""}`;
 
         const stage = createHtmlElement(doc, "div");
         stage.style.fontSize = "12px";
         stage.style.color = isDark ? "#a8b0b8" : "#888";
         stage.style.marginTop = "4px";
-        stage.textContent = task.stage || "";
+        const stageText = String(task.stage || "").trim();
+        const statusText = statusLabel(visualStatus);
+        stage.textContent = stageText === statusText ? "" : stageText;
 
         const actions = createHtmlElement(doc, "div");
         actions.className = "ainote-row-actions";
 
-        [
-          {
-            action: "stop",
-            label: "⏹ 停止",
-            className: buttonClass("default"),
-            disabled: task.status !== "running",
-            title: "停止",
-          },
-          {
-            action: "retry",
-            label: "🔁 重试",
-            className: buttonClass("primary"),
-            disabled: false,
-            title: "重试",
-          },
-          {
+        const buttonConfigs: Array<{
+          action: "stop" | "retry" | "remove" | "view" | "continue-chat" | "view-note";
+          label: string;
+          className: string;
+          title: string;
+        }> = [];
+        if (visualStatus === "pending") {
+          buttonConfigs.push({
             action: "remove",
-            label: "🗑 移除总结",
+            label: "🗑 移除任务",
             className: buttonClass("danger"),
-            disabled: false,
-            title: "移除总结",
-          },
-        ].forEach((buttonConfig) => {
+            title: "移除",
+          });
+        } else if (visualStatus === "running") {
+          buttonConfigs.push(
+            {
+              action: "stop",
+              label: "⏹ 停止",
+              className: buttonClass("default"),
+              title: "停止",
+            },
+            {
+              action: "remove",
+              label: "🗑 移除任务",
+              className: buttonClass("danger"),
+              title: "移除",
+            },
+          );
+        } else if (visualStatus === "failed" || visualStatus === "cancelled") {
+          buttonConfigs.push(
+            {
+              action: "retry",
+              label: "🔁 重试",
+              className: buttonClass("primary"),
+              title: "重试",
+            },
+            {
+              action: "remove",
+              label: "🗑 移除任务",
+              className: buttonClass("danger"),
+              title: "移除",
+            },
+          );
+        } else if (visualStatus === "completed") {
+          if (task.kind === "web" && task.webConversationUrl) {
+            buttonConfigs.push({
+              action: "continue-chat",
+              label: "继续对话",
+              className: buttonClass("primary"),
+              title: "继续对话",
+            });
+          }
+          if (task.noteID) {
+            buttonConfigs.push({
+              action: "view-note",
+              label: "查看笔记",
+              className: buttonClass("default"),
+              title: "查看笔记",
+            });
+          }
+          buttonConfigs.push({
+            action: "remove",
+            label: "🗑 移除任务",
+            className: buttonClass("danger"),
+            title: "移除",
+          });
+        }
+
+        buttonConfigs.forEach((buttonConfig) => {
           const button = createHtmlElement(doc, "button");
           button.className = buttonConfig.className;
           button.dataset.action = buttonConfig.action;
           button.dataset.taskId = task.id;
           button.title = buttonConfig.title;
-          button.disabled = buttonConfig.disabled;
           button.textContent = buttonConfig.label;
           actions.appendChild(button);
         });
 
-        row.append(title, status, stage, actions);
-        listEl.appendChild(row);
+        if (stage.textContent) {
+          row.append(title, status, stage, actions);
+        } else {
+          row.append(title, status, actions);
+        }
+        return row;
+    };
+
+    const activeSection = createHtmlElement(doc, "div");
+    activeSection.className = "ainote-section";
+    const historySection = createHtmlElement(doc, "div");
+    historySection.className = "ainote-section";
+
+    const bothExpanded = !this.activeCollapsed && !this.historyCollapsed;
+
+    if (this.activeCollapsed) {
+      activeSection.style.flex = "0 0 auto";
+      historySection.style.flex = "1 1 auto";
+    } else if (this.historyCollapsed) {
+      activeSection.style.flex = "1 1 auto";
+      historySection.style.flex = "0 0 auto";
+    } else if (bothExpanded) {
+      // When both are expanded, always split 50/50 even if one section is empty.
+      activeSection.style.flex = "1 1 0";
+      historySection.style.flex = "1 1 0";
+    }
+
+    const buildSectionHeader = (
+      titleText: string,
+      count: number,
+      collapsed: boolean,
+      toggleAction: "toggle-active" | "toggle-history",
+      actions: Array<{ action: string; label: string; className: string }>,
+    ) => {
+      const header = createHtmlElement(doc, "div");
+      header.className = "ainote-section-header";
+
+      const title = createHtmlElement(doc, "div");
+      title.className = "ainote-section-title";
+      title.textContent = `${titleText}（${count}）`;
+
+      const right = createHtmlElement(doc, "div");
+      right.className = "ainote-section-actions";
+
+      actions.forEach((actionCfg) => {
+        const btn = createHtmlElement(doc, "button");
+        btn.className = actionCfg.className;
+        btn.dataset.listAction = actionCfg.action;
+        btn.textContent = actionCfg.label;
+        right.appendChild(btn);
       });
+
+      const toggle = createHtmlElement(doc, "button");
+      toggle.className = buttonClass("default");
+      toggle.dataset.listAction = toggleAction;
+      toggle.textContent = collapsed ? "▲" : "▼";
+      toggle.title = collapsed ? "展开" : "折叠";
+      right.appendChild(toggle);
+
+      header.append(title, right);
+      return header;
+    };
+
+    const activeHeader = buildSectionHeader(
+      "活动任务",
+      activeTasks.length,
+      this.activeCollapsed,
+      "toggle-active",
+      [
+        { action: "stop-active", label: "停止", className: buttonClass("default") },
+        { action: "retry-active", label: "重试", className: buttonClass("primary") },
+        { action: "remove-active", label: "清空", className: buttonClass("danger") },
+      ],
+    );
+    activeSection.appendChild(activeHeader);
+
+    if (!this.activeCollapsed) {
+      const body = createHtmlElement(doc, "div");
+      body.className = "ainote-section-body";
+      if (!activeTasks.length) {
+        activeSection.classList.add("is-empty");
+        const empty = createHtmlElement(doc, "div");
+        empty.style.color = isDark ? "#9ca3af" : "#888";
+        empty.textContent = "暂无活动任务";
+        body.appendChild(empty);
+      } else {
+        activeSection.classList.remove("is-empty");
+        activeTasks.forEach((task) => body.appendChild(renderTaskRow(task)));
+      }
+      activeSection.appendChild(body);
+
+    }
+
+    const historyHeader = buildSectionHeader(
+      "历史任务",
+      historyTasks.length,
+      this.historyCollapsed,
+      "toggle-history",
+      [
+        {
+          action: "clear-history",
+          label: "🗑 清空历史任务",
+          className: buttonClass("danger"),
+        },
+      ],
+    );
+    historySection.appendChild(historyHeader);
+
+    if (!this.historyCollapsed) {
+      const body = createHtmlElement(doc, "div");
+      body.className = "ainote-section-body";
+      if (!historyTasks.length) {
+        historySection.classList.add("is-empty");
+        const empty = createHtmlElement(doc, "div");
+        empty.style.color = isDark ? "#9ca3af" : "#888";
+        empty.textContent = "暂无历史任务";
+        body.appendChild(empty);
+      } else {
+        historySection.classList.remove("is-empty");
+        historyTasks.forEach((task) => body.appendChild(renderTaskRow(task)));
+      }
+      historySection.appendChild(body);
+    }
+
+    listEl.append(activeSection, historySection);
   }
 
   private renderDetail(snapshot: SummaryTaskSnapshot): void {
@@ -1246,6 +1636,11 @@ export class SummaryManagerWindow {
     const status = createHtmlElement(doc, "div");
     status.style.fontSize = "12px";
     status.style.color = statusColor(visualStatus, isDark);
+    status.style.writingMode = "vertical-rl";
+    status.style.textOrientation = "upright";
+    status.style.letterSpacing = "1px";
+    status.style.lineHeight = "1.1";
+    status.style.flex = "0 0 auto";
     status.textContent = statusLabel(visualStatus);
 
     header.append(title, status);
@@ -1254,31 +1649,72 @@ export class SummaryManagerWindow {
     actions.className = "ainote-row-actions";
     actions.style.marginTop = "10px";
 
-    [
-      {
-        action: "stop",
-        label: "⏹ 停止",
-        className: buttonClass("default"),
-        disabled: task.status !== "running",
-      },
-      {
-        action: "retry",
-        label: "🔁 重试",
-        className: buttonClass("primary"),
-        disabled: false,
-      },
-      {
+    const detailButtons: Array<{
+      action: "stop" | "retry" | "remove" | "view" | "continue-chat" | "view-note";
+      label: string;
+      className: string;
+      disabled?: boolean;
+    }> = [];
+    if (visualStatus === "pending") {
+      detailButtons.push({
         action: "remove",
-        label: "🗑 移除总结",
+        label: "🗑 移除任务",
         className: buttonClass("danger"),
-        disabled: false,
-      },
-    ].forEach((buttonConfig) => {
+      });
+    } else if (visualStatus === "running") {
+      detailButtons.push(
+        {
+          action: "stop",
+          label: "⏹ 停止",
+          className: buttonClass("default"),
+        },
+        {
+          action: "remove",
+          label: "🗑 移除任务",
+          className: buttonClass("danger"),
+        },
+      );
+    } else if (visualStatus === "failed" || visualStatus === "cancelled") {
+      detailButtons.push(
+        {
+          action: "retry",
+          label: "🔁 重试",
+          className: buttonClass("primary"),
+        },
+        {
+          action: "remove",
+          label: "🗑 移除任务",
+          className: buttonClass("danger"),
+        },
+      );
+    } else if (visualStatus === "completed") {
+      if (task.kind === "web" && task.webConversationUrl) {
+        detailButtons.push({
+          action: "continue-chat",
+          label: "继续对话",
+          className: buttonClass("primary"),
+        });
+      }
+      if (task.noteID) {
+        detailButtons.push({
+          action: "view-note",
+          label: "查看笔记",
+          className: buttonClass("default"),
+        });
+      }
+      detailButtons.push({
+        action: "remove",
+        label: "🗑 移除任务",
+        className: buttonClass("danger"),
+      });
+    }
+
+    detailButtons.forEach((buttonConfig) => {
       const button = createHtmlElement(doc, "button");
       button.className = buttonConfig.className;
       button.dataset.detailAction = buttonConfig.action;
       button.dataset.taskId = task.id;
-      button.disabled = buttonConfig.disabled;
+      button.disabled = Boolean(buttonConfig.disabled);
       button.textContent = buttonConfig.label;
       actions.appendChild(button);
     });
@@ -1326,7 +1762,7 @@ export class SummaryManagerWindow {
     content.style.borderTop = `1px solid ${isDark ? "#4b5563" : "#ddd"}`;
     content.style.paddingTop = "12px";
     if (body) {
-      content.innerHTML = String(marked.parse(body));
+      content.innerHTML = this.convertDetailMarkdownToHTML(body);
     } else {
       const empty = createHtmlElement(doc, "div");
       empty.style.color = isDark ? "#9ca3af" : "#888";
@@ -1334,5 +1770,92 @@ export class SummaryManagerWindow {
       content.appendChild(empty);
     }
     detailEl.appendChild(content);
+    if (body) {
+      // MathJax needs the target node attached to DOM to measure `ex` units.
+      // Calling typeset on detached nodes can produce NaNex width/height.
+      void this.renderMathInElement(content);
+    }
+  }
+
+  private ensureMathJax(): void {
+    if (this.mathJaxInjected || !this.dialog?.window?.document) return;
+    this.mathJaxInjected = true;
+    try {
+      const doc = this.dialog.window.document;
+      const win = this.dialog.window as any;
+      if (win.MathJax) return;
+
+      const configScript = doc.createElement("script");
+      configScript.type = "text/javascript";
+      configScript.text = `
+        window.MathJax = {
+          tex: {
+            // Do NOT enable single-$ delimiters here; they can accidentally
+            // capture non-math text and produce giant broken SVG output.
+            inlineMath: [['\\\\(', '\\\\)']],
+            displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
+            processEscapes: true
+          },
+          svg: { fontCache: 'global' },
+          options: {
+            enableAssistiveMml: false,
+            renderActions: { assistiveMml: [] }
+          }
+        };
+      `;
+      doc.head.appendChild(configScript);
+
+      const script = doc.createElement("script");
+      const candidates = [
+        `chrome://${config.addonRef}/content/lib/mathjax/tex-svg.js`,
+        `chrome://${config.addonRef}/content/lib/mathjax/es5/tex-svg.js`,
+      ];
+      let idx = 0;
+      script.src = candidates[idx];
+      script.async = true;
+      script.onerror = () => {
+        idx += 1;
+        if (idx < candidates.length) {
+          script.src = candidates[idx];
+          doc.head.appendChild(script);
+        }
+      };
+      doc.head.appendChild(script);
+    } catch (error) {
+      ztoolkit.log("[AiNote][SummaryManagerWindow] Failed to inject MathJax", error);
+    }
+  }
+
+  private async renderMathInElement(element: HTMLElement): Promise<void> {
+    try {
+      const win = this.dialog?.window as any;
+      if (!win) return;
+      let attempts = 0;
+      while (attempts < 10) {
+        if (win.MathJax?.typesetPromise) {
+          await win.MathJax.typesetPromise([element]);
+          return;
+        }
+        attempts += 1;
+        await Zotero.Promise.delay(150);
+      }
+    } catch {
+      // ignore math rendering failures and keep plain text content visible
+    }
+  }
+
+  private convertDetailMarkdownToHTML(markdown: string): string {
+    const normalized = this.normalizeInlineMathDelimiters(markdown);
+    return String(OutputWindow.convertMarkdownToHTMLCore(normalized));
+  }
+
+  private normalizeInlineMathDelimiters(markdown: string): string {
+    // Convert simple inline `$...$` into `\\(...\\)` so we can disable
+    // single-dollar delimiters in MathJax and avoid accidental over-matching.
+    // Keep display math `$$...$$` unchanged.
+    return markdown.replace(
+      /(^|[^\\$])\$([^\$\n]+?)\$(?!\$)/g,
+      (_match, prefix: string, expr: string) => `${prefix}\\(${expr.trim()}\\)`,
+    );
   }
 }

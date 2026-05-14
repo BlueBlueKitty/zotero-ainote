@@ -19,6 +19,9 @@ export interface SummaryRunnerHooks {
 export interface SummaryRunnerResult {
   content: string;
   noteID?: number;
+  webConversationId?: string;
+  webConversationUrl?: string;
+  webConversationTitle?: string;
   model?: string;
   promptVersion?: string;
 }
@@ -124,6 +127,9 @@ export class SummaryRunner {
     return {
       content: result.content,
       noteID: result.noteID,
+      webConversationId: result.webConversationId,
+      webConversationUrl: result.webConversationUrl,
+      webConversationTitle: result.webConversationTitle,
       model: getWebSummaryModelLabel(mode),
       promptVersion: String(getPref("promptTemplatesVersion" as any) || ""),
     };

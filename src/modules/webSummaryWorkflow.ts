@@ -180,7 +180,13 @@ export class WebSummaryWorkflow {
   public static async summarizeSingleTarget(
     target: WebSummaryTarget,
     hooks?: WebSummarySingleRunHooks,
-  ): Promise<{ content: string; noteID: number }> {
+  ): Promise<{
+    content: string;
+    noteID: number;
+    webConversationId?: string;
+    webConversationUrl?: string;
+    webConversationTitle?: string;
+  }> {
     let currentTaskId = "";
     let currentTaskCanceled = false;
     hooks?.onCancelReady?.(() => {
@@ -320,7 +326,13 @@ export class WebSummaryWorkflow {
       );
     }
     hooks?.onStage?.("完成", 100);
-    return { content: noteBody || latestTask.resultMarkdown, noteID: note.id };
+    return {
+      content: noteBody || latestTask.resultMarkdown,
+      noteID: note.id,
+      webConversationId: latestTask.conversationMeta?.conversationId,
+      webConversationUrl: latestTask.conversationMeta?.conversationUrl,
+      webConversationTitle: latestTask.conversationMeta?.conversationTitle,
+    };
   }
 
   public static async summarizeItems(

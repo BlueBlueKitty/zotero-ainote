@@ -35,6 +35,17 @@ describe("summaryHistoryStore", function () {
       makeTask("5", "cancelled", 5),
     ];
     const pruned = SummaryHistoryStore.prune(tasks, 3);
-    expect(pruned.map((t) => t.id)).to.deep.equal(["3", "4", "5"]);
+    expect(pruned.map((t) => t.id)).to.deep.equal(["2", "3", "4", "5"]);
+  });
+
+  it("should prune only completed tasks", function () {
+    const tasks = [
+      makeTask("1", "completed", 1),
+      makeTask("2", "completed", 2),
+      makeTask("3", "failed", 3),
+      makeTask("4", "cancelled", 4),
+    ];
+    const pruned = SummaryHistoryStore.prune(tasks, 2);
+    expect(pruned.map((t) => t.id)).to.deep.equal(["3", "4"]);
   });
 });

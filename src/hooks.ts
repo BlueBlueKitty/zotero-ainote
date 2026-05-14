@@ -379,11 +379,27 @@ function buildNoteFormatMenuOptions(menuIcon: string): any {
 async function normalizeSelectionTargets(
   items: Zotero.Item[],
   templateId?: string,
-): Promise<NoteGenerationTarget[]> {
+): Promise<{ targets: NoteGenerationTarget[]; skippedNoAttachmentTitles: string[] }> {
   const targets: NoteGenerationTarget[] = [];
+  const skippedNoAttachmentTitles: string[] = [];
 
   for (const item of items) {
     if (item.isRegularItem()) {
+      const attachmentIds = item.getAttachments();
+      let hasPdf = false;
+      for (const attachmentId of attachmentIds) {
+        const attachment = await Zotero.Items.getAsync(attachmentId);
+        if (attachment?.attachmentContentType === "application/pdf") {
+          hasPdf = true;
+          break;
+        }
+      }
+      if (!hasPdf) {
+        skippedNoAttachmentTitles.push(
+          String(item.getField("title") || `Item ${item.id || ""}`).trim(),
+        );
+        continue;
+      }
       targets.push({ item, templateId });
       continue;
     }
@@ -409,7 +425,7 @@ async function normalizeSelectionTargets(
     });
   }
 
-  return targets;
+  return { targets, skippedNoAttachmentTitles };
 }
 
 /**
@@ -470,7 +486,25 @@ async function handleGenerateSummary(templateId?: string) {
     return;
   }
 
-  const targets = await normalizeSelectionTargets(selectedItems, templateId);
+  const { targets, skippedNoAttachmentTitles } = await normalizeSelectionTargets(
+    selectedItems,
+    templateId,
+  );
+
+  if (skippedNoAttachmentTitles.length > 0) {
+    const count = skippedNoAttachmentTitles.length;
+    const preview = skippedNoAttachmentTitles.slice(0, 2).join("、");
+    const suffix = count > 2 ? ` 等 ${count} 个条目` : "";
+    new ztoolkit.ProgressWindow("AiNote", {
+      closeOnClick: true,
+      closeTime: 3500,
+    })
+      .createLine({
+        text: `以下条目没有PDF附件，已跳过：${preview}${suffix}`,
+        type: "warning",
+      })
+      .show();
+  }
 
   if (targets.length === 0) {
     new ztoolkit.ProgressWindow("AiNote", {

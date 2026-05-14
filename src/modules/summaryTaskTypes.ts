@@ -5,8 +5,7 @@ export type SummaryTaskStatus =
   | "running"
   | "completed"
   | "failed"
-  | "cancelled"
-  | "interrupted";
+  | "cancelled";
 
 export interface SummaryTask {
   id: string;
@@ -24,6 +23,9 @@ export interface SummaryTask {
   startedAt?: number;
   finishedAt?: number;
   noteID?: number;
+  webConversationId?: string;
+  webConversationUrl?: string;
+  webConversationTitle?: string;
   model?: string;
   promptVersion?: string;
   templateId?: string;
@@ -41,10 +43,5 @@ export interface SummaryTaskSnapshot {
 }
 
 export function isTerminalStatus(status: SummaryTaskStatus): boolean {
-  return (
-    status === "completed" ||
-    status === "failed" ||
-    status === "cancelled" ||
-    status === "interrupted"
-  );
+  return status === "completed" || status === "failed" || status === "cancelled";
 }

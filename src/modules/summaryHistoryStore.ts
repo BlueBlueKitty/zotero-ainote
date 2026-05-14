@@ -19,8 +19,18 @@ function getHistoryFilePath(): string {
 }
 
 function normalizeTask(task: SummaryTask): SummaryTask {
+  const rawStatus = String((task as any).status || "");
+  let normalizedStatus = rawStatus;
+  if (rawStatus === "interrupted") {
+    normalizedStatus = "cancelled";
+  }
+  if (rawStatus === "running") {
+    normalizedStatus = "cancelled";
+  }
+
   const normalized: SummaryTask = {
     ...task,
+    status: normalizedStatus as SummaryTask["status"],
     progress: typeof task.progress === "number" ? task.progress : undefined,
     stage: task.stage || "",
     content: task.content || "",
@@ -28,9 +38,9 @@ function normalizeTask(task: SummaryTask): SummaryTask {
     updatedAt: task.updatedAt || now(),
     createdAt: task.createdAt || now(),
   };
-  if (normalized.status === "running") {
-    normalized.status = "interrupted";
-    normalized.error = normalized.error || "插件重启导致任务中断";
+  if (rawStatus === "running" || rawStatus === "interrupted") {
+    normalized.error = normalized.error || "插件重启导致任务停止";
+    normalized.stage = normalized.stage || "已停止";
     normalized.finishedAt = normalized.finishedAt || now();
     normalized.updatedAt = now();
   }
@@ -38,12 +48,7 @@ function normalizeTask(task: SummaryTask): SummaryTask {
 }
 
 function canPrune(status: SummaryTaskStatus): boolean {
-  return (
-    status === "completed" ||
-    status === "failed" ||
-    status === "cancelled" ||
-    status === "interrupted"
-  );
+  return status === "completed";
 }
 
 function getHistoryLimit(): number {

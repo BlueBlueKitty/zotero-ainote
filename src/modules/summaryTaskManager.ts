@@ -7,6 +7,7 @@ import {
   SummaryTaskSnapshot,
   isTerminalStatus,
 } from "./summaryTaskTypes";
+import { isActiveTask, isHistoryTask } from "./summaryTaskPartition";
 import { SummaryRunner } from "./summaryRunner";
 
 export interface EnqueueTarget {
@@ -216,7 +217,7 @@ export class SummaryTaskManager {
     this.tasks.forEach((task) => {
       if (task.status === "pending") {
         task.status = "cancelled";
-        task.stage = "已取消（批量停止）";
+        task.stage = "已停止";
         task.error = "已停止后续条目的AI总结";
         task.finishedAt = nowAt;
         task.updatedAt = nowAt;
@@ -229,7 +230,7 @@ export class SummaryTaskManager {
 
   public retryActiveTasks(): SummaryTask[] {
     const activeTaskIds = this.tasks
-      .filter((task) => task.status === "running" || task.status === "pending")
+      .filter((task) => task.status === "failed" || task.status === "cancelled")
       .map((task) => task.id);
 
     const created: SummaryTask[] = [];
@@ -243,7 +244,7 @@ export class SummaryTaskManager {
 
   public removeActiveTasks(): number {
     const activeTaskIds = this.tasks
-      .filter((task) => task.status === "running" || task.status === "pending")
+      .filter((task) => isActiveTask(task))
       .map((task) => task.id);
 
     activeTaskIds.forEach((taskId) => {
@@ -277,9 +278,7 @@ export class SummaryTaskManager {
   }
 
   public async clearHistory(): Promise<void> {
-    this.tasks = this.tasks.filter(
-      (task) => task.status === "running" || task.status === "pending",
-    );
+    this.tasks = this.tasks.filter((task) => !isHistoryTask(task));
     this.selectedTaskId = this.tasks.at(-1)?.id;
     this.emit();
     await this.persist();
@@ -358,6 +357,9 @@ export class SummaryTaskManager {
       task.progress = 100;
       task.stage = "已完成";
       task.noteID = result.noteID;
+      task.webConversationId = result.webConversationId;
+      task.webConversationUrl = result.webConversationUrl;
+      task.webConversationTitle = result.webConversationTitle;
       task.model = result.model || task.model;
       task.promptVersion = result.promptVersion || task.promptVersion;
       if (result.content && !task.content) {
@@ -372,7 +374,7 @@ export class SummaryTaskManager {
       }
       if (SummaryRunner.isCanceledError(error)) {
         task.status = "cancelled";
-        task.stage = "已取消";
+        task.stage = "已停止";
       } else {
         task.status = "failed";
         task.stage = "失败";
