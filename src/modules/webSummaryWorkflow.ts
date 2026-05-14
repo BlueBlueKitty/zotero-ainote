@@ -1,4 +1,5 @@
 import { getPref } from "../utils/prefs";
+import { getString } from "../utils/locale";
 import { PDFExtractor } from "./pdfExtractor";
 import { buildNoteHtmlFromMarkdown } from "./noteHtmlBuilder";
 import { OutputWindow } from "./outputWindow";
@@ -176,6 +177,38 @@ function getStatusMessage(task: WebSummaryTask): string {
   return map[task.status] || task.status;
 }
 
+function formatCreateTaskError(error: any): string {
+  const code = String(error?.bridgeCode || "");
+  if (code === "PROTOCOL_MISMATCH") {
+    return getString("web-summary-block-protocol-mismatch");
+  }
+  if (code === "REQUIRED_CAPABILITY_MISSING") {
+    return getString("web-summary-block-capability-missing");
+  }
+  if (code === "PERMISSION_MISSING") {
+    return getString("web-summary-block-permission-missing");
+  }
+  if (code === "TARGET_PAGE_UNAVAILABLE") {
+    return getString("web-summary-block-target-unavailable");
+  }
+  if (code === "EXTENSION_OFFLINE") {
+    return getString("web-summary-block-extension-offline");
+  }
+  return error?.message || String(error);
+}
+
+async function checkCompatibilityWarnings(): Promise<void> {
+  try {
+    const health = await WebSummaryBridgeClient.healthCheck();
+    const warnings = health.compatibilityWarnings || [];
+    for (const warning of warnings) {
+      ztoolkit.log("[AiNote][WebSummaryWorkflow][CompatibilityWarning]", warning);
+    }
+  } catch (error) {
+    ztoolkit.log("[AiNote][WebSummaryWorkflow] health check failed", error);
+  }
+}
+
 export class WebSummaryWorkflow {
   public static async summarizeSingleTarget(
     target: WebSummaryTarget,
@@ -234,7 +267,13 @@ export class WebSummaryWorkflow {
     hooks?.onStage?.("正在提交网页总结任务...", 5);
     await sleep(4000);
 
-    const { task } = await WebSummaryBridgeClient.createTask(payload);
+    await checkCompatibilityWarnings();
+    let task;
+    try {
+      task = (await WebSummaryBridgeClient.createTask(payload)).task;
+    } catch (error: any) {
+      throw new Error(formatCreateTaskError(error));
+    }
     currentTaskId = task.taskId;
     let latestTask = task;
     const queuedStartedAt = Date.now();
@@ -420,7 +459,13 @@ export class WebSummaryWorkflow {
         // 等待浏览器和扩展初始化（冷启动时 Chrome 需要时间启动，扩展 Service Worker 需要初始化轮询）
         await sleep(4000);
 
-        const { task } = await WebSummaryBridgeClient.createTask(payload);
+        await checkCompatibilityWarnings();
+        let task;
+        try {
+          task = (await WebSummaryBridgeClient.createTask(payload)).task;
+        } catch (error: any) {
+          throw new Error(formatCreateTaskError(error));
+        }
         currentTaskId = task.taskId;
         let latestTask = task;
         const queuedStartedAt = Date.now();

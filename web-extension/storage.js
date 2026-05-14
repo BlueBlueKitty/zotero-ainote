@@ -2,10 +2,6 @@
 
 export const DEFAULT_SETTINGS = {
   bridgeUrl: "http://127.0.0.1:23123",
-  pollingEnabled: true,
-  pollingIntervalMs: 350,
-  autoSend: true,
-  autoRenameConversation: true,
 };
 
 const LEGACY_BRIDGE_URLS = new Set([
@@ -20,10 +16,6 @@ const LEGACY_BRIDGE_URLS = new Set([
 export async function getSettings() {
   const result = await chrome.storage.local.get(DEFAULT_SETTINGS);
   const merged = { ...DEFAULT_SETTINGS, ...result };
-  if (typeof result.autoSend !== "boolean") {
-    merged.autoSend = true;
-    await chrome.storage.local.set({ autoSend: true });
-  }
   if (LEGACY_BRIDGE_URLS.has(String(merged.bridgeUrl || "").trim())) {
     merged.bridgeUrl = DEFAULT_SETTINGS.bridgeUrl;
     await chrome.storage.local.set({ bridgeUrl: merged.bridgeUrl });

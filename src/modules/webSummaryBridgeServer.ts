@@ -1,16 +1,20 @@
 import { getPref } from "../utils/prefs";
 import {
+  BridgeHealthResponse,
   BridgeEnvelope,
   BridgeErrorCode,
   CancelTaskResponse,
   ClaimNextTaskResponse,
+  CompatibilityReport,
   CreateTaskRequest,
   CreateTaskResponse,
+  ExtensionHandshakePayload,
   ReportTaskFailureRequest,
   ReportTaskResultRequest,
   ReportTaskStatusRequest,
   WebSummaryTask,
 } from "./webSummaryTypes";
+import { WebSummaryCompatibilityManager } from "./webSummaryCompat";
 import { WebSummaryTaskStore } from "./webSummaryTaskStore";
 
 const LOG_PREFIX = "[AiNote][WebSummaryBridge]";
@@ -214,6 +218,7 @@ function getPort(): number {
 
 export class WebSummaryBridgeServer {
   private readonly taskStore = new WebSummaryTaskStore();
+  private readonly compatibilityManager = new WebSummaryCompatibilityManager();
   private serverSocket: nsIServerSocket | null = null;
   private isRunning = false;
   private readonly activeTransports = new Set<nsISocketTransport>();
@@ -223,7 +228,46 @@ export class WebSummaryBridgeServer {
   }
 
   public createTask(request: CreateTaskRequest): CreateTaskResponse {
+    if (request.actionType === "summarize") {
+      void this.refreshVersionInfo();
+      const report = this.compatibilityManager.evaluate("summarize");
+      if (!report.allowCreateSummarize) {
+        const primaryReason = report.blockingReasons[0];
+        const error = new Error(
+          this.buildCompatibilityErrorMessage(report),
+        ) as Error & {
+          bridgeCode?: BridgeErrorCode;
+        };
+        error.bridgeCode = primaryReason?.code || "INTERNAL_ERROR";
+        throw error;
+      }
+    }
     return { task: this.taskStore.createTask(request) };
+  }
+
+  public getHealth(): BridgeHealthResponse {
+    return this.compatibilityManager.buildHealth();
+  }
+
+  public async refreshVersionInfo(): Promise<void> {
+    await this.compatibilityManager.refreshRemoteVersionInfo();
+  }
+
+  public reportHandshake(payload: ExtensionHandshakePayload): CompatibilityReport {
+    return this.compatibilityManager.recordHandshake(payload);
+  }
+
+  private buildCompatibilityErrorMessage(report: CompatibilityReport): string {
+    const reasons = report.blockingReasons
+      .map((entry, index) => `${index + 1}. ${entry.message}`)
+      .join(" ");
+    const warnings = report.warnings
+      .map((entry) => entry.message)
+      .filter(Boolean);
+    if (warnings.length) {
+      return `${reasons} 建议：${warnings.join("；")}`;
+    }
+    return reasons || "网页总结任务创建被兼容性门禁阻止";
   }
 
   public getTask(taskId: string): WebSummaryTask {
@@ -384,7 +428,13 @@ export class WebSummaryBridgeServer {
     }
 
     if (request.pathname === "/api/health" && request.method === "GET") {
-      return buildJsonResponse(200, jsonEnvelope({ status: "ok" }));
+      void this.refreshVersionInfo();
+      return buildJsonResponse(200, jsonEnvelope(this.getHealth()));
+    }
+
+    if (request.pathname === "/api/ext/handshake" && request.method === "POST") {
+      const payload = parseJsonBody<ExtensionHandshakePayload>(request);
+      return buildJsonResponse(200, jsonEnvelope(this.reportHandshake(payload)));
     }
 
     if (request.pathname === "/api/tasks" && request.method === "POST") {

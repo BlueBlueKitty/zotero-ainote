@@ -1,4 +1,5 @@
 import {
+  BridgeHealthResponse,
   CancelTaskResponse,
   CreateTaskRequest,
   CreateTaskResponse,
@@ -6,8 +7,8 @@ import {
 } from "./webSummaryTypes";
 
 export class WebSummaryBridgeClient {
-  public static async healthCheck(): Promise<{ status: string }> {
-    return { status: "ok" };
+  public static async healthCheck(): Promise<BridgeHealthResponse> {
+    return addon.data.webSummaryBridge!.getHealth();
   }
 
   public static async createTask(

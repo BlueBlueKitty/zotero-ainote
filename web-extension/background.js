@@ -4,11 +4,19 @@ import {
   getTask,
   claimNextTask,
   fetchTaskPdf,
+  healthCheck,
   reportTaskFailure,
+  reportHandshake,
   reportTaskResult,
   reportTaskStatus,
 } from "./bridge-client.js";
 import { getSettings } from "./storage.js";
+import {
+  WEB_SUMMARY_CAPABILITIES,
+  WEB_SUMMARY_PROTOCOL_VERSION,
+  WEB_SUMMARY_REQUIRED_PERMISSIONS,
+  WEB_SUMMARY_TASK_CONTRACT_VERSION,
+} from "./compat.js";
 
 const CHATGPT_URL = "https://chatgpt.com/";
 const CHATGPT_URL_PREFIXES = [
@@ -21,9 +29,13 @@ let runningTaskTabId = 0;
 const pendingTaskResolvers = new Map();
 let workerLoopRunning = false;
 let workerLoopStopToken = 0;
-const LONG_POLL_WAIT_MS = 25000;
+const SHORT_POLL_WAIT_MS = 0;
+const IDLE_POLL_DELAYS_MS = [300, 800, 1500, 3000, 5000];
 const CHATGPT_TAB_READY_TIMEOUT_MS = 60000;
 const CONTENT_SCRIPT_READY_TIMEOUT_MS = 20000;
+const HANDSHAKE_INTERVAL_MS = 15000;
+let lastHandshakeAtMs = 0;
+let idlePollStreak = 0;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -58,6 +70,103 @@ async function withTimeout(promise, timeoutMs, fallbackMessage) {
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+async function hasNamedPermissions(permissions) {
+  try {
+    return await chrome.permissions.contains({ permissions });
+  } catch {
+    return false;
+  }
+}
+
+async function hasHostPermission(originPattern) {
+  try {
+    return await chrome.permissions.contains({ origins: [originPattern] });
+  } catch {
+    return false;
+  }
+}
+
+async function detectEnvironmentSnapshot() {
+  let targetReachable = false;
+  let chatgptTabReady = false;
+  let contentScriptReady = false;
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+    });
+    targetReachable = tabs.length > 0;
+    const tab = tabs.find((entry) => !!entry.id);
+    if (tab?.id) {
+      chatgptTabReady = isChatGPTUrlCandidate(String(tab.url || tab.pendingUrl || ""));
+      try {
+        const ping = await withTimeout(
+          pingContentScript(tab.id),
+          1500,
+          "ping timeout",
+        );
+        contentScriptReady = !!ping?.ok;
+      } catch {
+        contentScriptReady = false;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return {
+    targetReachable,
+    contentScriptReady,
+    chatgptTabReady,
+  };
+}
+
+async function buildPermissionSnapshot() {
+  const namedPermissionsGranted = await hasNamedPermissions([
+    "storage",
+    "tabs",
+    "scripting",
+  ]);
+  const localhostGranted = await hasHostPermission("http://127.0.0.1/*");
+  const chatgptGranted = await hasHostPermission("https://chatgpt.com/*");
+  const chatOpenAiGranted = await hasHostPermission("https://chat.openai.com/*");
+
+  return WEB_SUMMARY_REQUIRED_PERMISSIONS.map((permission) => {
+    if (permission === "host:http://127.0.0.1/*") {
+      return { permission, granted: localhostGranted };
+    }
+    if (permission === "host:https://chatgpt.com/*") {
+      return { permission, granted: chatgptGranted || chatOpenAiGranted };
+    }
+    return { permission, granted: namedPermissionsGranted };
+  });
+}
+
+async function sendCompatibilityHeartbeat(reason, force = false) {
+  const now = Date.now();
+  if (!force && now - lastHandshakeAtMs < HANDSHAKE_INTERVAL_MS) {
+    return;
+  }
+  try {
+    await healthCheck();
+    const permissions = await buildPermissionSnapshot();
+    const environment = await detectEnvironmentSnapshot();
+    await reportHandshake({
+      extensionVersion: chrome.runtime.getManifest().version || "0.0.0",
+      protocolVersion: WEB_SUMMARY_PROTOCOL_VERSION,
+      taskContractVersion: WEB_SUMMARY_TASK_CONTRACT_VERSION,
+      capabilities: [...WEB_SUMMARY_CAPABILITIES],
+      permissions,
+      environment,
+      heartbeatAt: new Date().toISOString(),
+    });
+    lastHandshakeAtMs = now;
+  } catch (error) {
+    console.warn(
+      `[AiNote][WebExtension] heartbeat failed (${reason})`,
+      error instanceof Error ? error.message : String(error),
+    );
   }
 }
 
@@ -339,11 +448,11 @@ function settleContentTask(taskId, error) {
 }
 
 async function runSummarizeTask(task) {
-  const settings = await getSettings();
   // task 在 claim 时已自动设为 opening_chat 状态，无需再重复上报
   // 此处仅更新 debugMessage 以便调试
   const targetUrl = task.projectUrl || CHATGPT_URL;
   const tabId = await ensureChatGPTTab(targetUrl);
+  await sendCompatibilityHeartbeat("before-summarize-task", true);
   runningTaskTabId = tabId;
   await withTimeout(
     reportTaskStatus(task.taskId, {
@@ -358,9 +467,8 @@ async function runSummarizeTask(task) {
   const response = await dispatchTaskMessage(tabId, {
     type: "ainote-run-summarize-task",
     task,
-    autoSend: settings.autoSend,
+    autoSend: true,
     projectUrl: task.projectUrl || "",
-    autoRenameConversation: settings.autoRenameConversation,
     chatgptMode: task.chatgptMode || "thinking",
   });
   if (!response?.ok) {
@@ -371,6 +479,7 @@ async function runSummarizeTask(task) {
 }
 
 async function runOpenConversationTask(task) {
+  await sendCompatibilityHeartbeat("before-open-conversation-task", true);
   await withTimeout(
     reportTaskStatus(task.taskId, {
       status: "opening_chat",
@@ -407,18 +516,15 @@ async function runOpenConversationTask(task) {
 
 async function processNextTask() {
   if (runningTaskId) {
-    return;
+    return "busy";
   }
 
-  const settings = await getSettings();
-  if (!settings.pollingEnabled) {
-    return;
-  }
+  await sendCompatibilityHeartbeat("poll-loop");
 
-  const data = await claimNextTask(LONG_POLL_WAIT_MS);
+  const data = await claimNextTask(SHORT_POLL_WAIT_MS);
   const task = data?.task;
   if (!task) {
-    return;
+    return "idle";
   }
 
   runningTaskId = task.taskId;
@@ -450,6 +556,7 @@ async function processNextTask() {
     runningTaskId = "";
     runningTaskTabId = 0;
   }
+  return "task";
 }
 
 async function handleRunningTaskTabClosed(closedTabId) {
@@ -527,19 +634,29 @@ async function runWorkerLoop(stopToken) {
       if (stopToken !== workerLoopStopToken) {
         break;
       }
-      const settings = await getSettings();
-      if (!settings.pollingEnabled) {
-        await sleep(1000);
-        continue;
-      }
       try {
-        await processNextTask();
+        const result = await processNextTask();
+        if (result === "task") {
+          idlePollStreak = 0;
+          continue;
+        }
+        if (result === "busy") {
+          await sleep(200);
+          continue;
+        }
+        idlePollStreak = Math.min(idlePollStreak + 1, IDLE_POLL_DELAYS_MS.length - 1);
+        await sleep(IDLE_POLL_DELAYS_MS[idlePollStreak]);
       } catch (error) {
-        console.error(
+        const delayIndex = Math.min(
+          idlePollStreak + 1,
+          IDLE_POLL_DELAYS_MS.length - 1,
+        );
+        idlePollStreak = delayIndex;
+        console.warn(
           "[AiNote][WebExtension] Worker loop iteration failed",
           error instanceof Error ? error.message : String(error),
         );
-        await sleep(1200);
+        await sleep(IDLE_POLL_DELAYS_MS[delayIndex]);
       }
     }
   } finally {
@@ -552,13 +669,13 @@ async function runWorkerLoop(stopToken) {
 }
 
 async function schedulePolling() {
-  const settings = await getSettings();
   if (pollingTimer) {
     clearInterval(pollingTimer);
     pollingTimer = null;
   }
   workerLoopStopToken += 1;
-  if (!settings.pollingEnabled) return;
+  idlePollStreak = 0;
+  await sendCompatibilityHeartbeat("schedule-polling", true);
   void runWorkerLoop(workerLoopStopToken);
 }
 

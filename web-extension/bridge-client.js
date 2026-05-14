@@ -80,6 +80,13 @@ export async function healthCheck() {
   return request("/api/health");
 }
 
+export async function reportHandshake(payload) {
+  return request("/api/ext/handshake", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function claimNextTask(waitMs = 0) {
   const timeout = Number.isFinite(waitMs) ? Math.max(0, Math.floor(waitMs)) : 0;
   return request(`/api/ext/tasks/next?waitMs=${encodeURIComponent(String(timeout))}`);
