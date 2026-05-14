@@ -174,7 +174,10 @@ function initializeDefaultPrefsOnStartup() {
   const profiles = parseProfiles(getPref("profiles"));
   const activeId = String(getPref("activeProfileId") || "").trim();
   if (!profiles.length) {
-    const chatgptProfile = createProfile("chatgpt_web", "ChatGPT 网页版");
+    const chatgptProfile = createProfile(
+      "chatgpt_web",
+      getString("prefs-provider-chatgpt-web" as any),
+    );
     setPref("profiles" as any, JSON.stringify([chatgptProfile]));
     setPref("activeProfileId" as any, chatgptProfile.id);
   } else if (!activeId || !profiles.some((p) => p.id === activeId)) {
@@ -182,7 +185,10 @@ function initializeDefaultPrefsOnStartup() {
   }
 
   if (profiles.length && !profiles.some((p) => p.providerType === "chatgpt_web")) {
-    const nextProfiles = [...profiles, createProfile("chatgpt_web", "ChatGPT 网页版")];
+    const nextProfiles = [
+      ...profiles,
+      createProfile("chatgpt_web", getString("prefs-provider-chatgpt-web" as any)),
+    ];
     setPref("profiles" as any, JSON.stringify(nextProfiles));
   }
 
@@ -410,12 +416,12 @@ async function normalizeSelectionTargets(
 
     const parentID = item.parentItemID;
     if (!parentID) {
-      throw new Error("选中的 PDF 附件缺少父条目，无法创建总结笔记");
+      throw new Error(getString("error-pdf-parent-missing" as any));
     }
 
     const parentItem = await Zotero.Items.getAsync(parentID);
     if (!parentItem || !parentItem.isRegularItem()) {
-      throw new Error("选中的 PDF 附件未找到可用的父条目");
+      throw new Error(getString("error-pdf-parent-invalid" as any));
     }
 
     targets.push({
@@ -494,13 +500,17 @@ async function handleGenerateSummary(templateId?: string) {
   if (skippedNoAttachmentTitles.length > 0) {
     const count = skippedNoAttachmentTitles.length;
     const preview = skippedNoAttachmentTitles.slice(0, 2).join("、");
-    const suffix = count > 2 ? ` 等 ${count} 个条目` : "";
+    const suffix = count > 2
+      ? ` ${getString("warn-skip-no-pdf-suffix" as any, { args: { count } })}`
+      : "";
     new ztoolkit.ProgressWindow("AiNote", {
       closeOnClick: true,
       closeTime: 3500,
     })
       .createLine({
-        text: `以下条目没有PDF附件，已跳过：${preview}${suffix}`,
+        text: getString("warn-skip-no-pdf" as any, {
+          args: { preview, suffix },
+        }),
         type: "warning",
       })
       .show();

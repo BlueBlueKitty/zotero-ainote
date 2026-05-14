@@ -48,7 +48,7 @@ const EXTENSION_CLAIM_STALL_TIMEOUT_MS = 25000;
 const EXTENSION_OPENING_CHAT_TIMEOUT_MS = 65000;
 
 class WebSummaryCanceledError extends Error {
-  constructor(message = "已停止当前条目的AI总结") {
+  constructor(message = getString("summary-canceled-unsaved" as any)) {
     super(message);
     this.name = "WebSummaryCanceledError";
   }
@@ -162,17 +162,17 @@ function launchChatGPTSurface(url: string): void {
 
 function getStatusMessage(task: WebSummaryTask): string {
   const map: Record<string, string> = {
-    queued: "已加入本地任务队列",
-    claimed: "浏览器扩展已接收任务",
-    opening_chat: "正在打开 ChatGPT",
-    locating_folder: "正在定位目标文件夹",
-    creating_conversation: "正在创建独立对话",
-    downloading_pdf: "正在准备 PDF 上传",
-    awaiting_user_send: "已填入内容，请在网页确认发送",
-    running: "正在等待网页模型生成结果，请在网页中查看模型实时输出内容",
-    succeeded: "网页总结完成",
-    failed: "网页总结失败",
-    canceled: "网页总结已取消",
+    queued: getString("web-summary-stage-queued" as any),
+    claimed: getString("web-summary-stage-claimed" as any),
+    opening_chat: getString("web-summary-stage-opening-chat" as any),
+    locating_folder: getString("web-summary-stage-locating-folder" as any),
+    creating_conversation: getString("web-summary-stage-creating-conversation" as any),
+    downloading_pdf: getString("web-summary-stage-downloading-pdf" as any),
+    awaiting_user_send: getString("web-summary-stage-awaiting-user-send" as any),
+    running: getString("web-summary-stage-running" as any),
+    succeeded: getString("web-summary-stage-succeeded" as any),
+    failed: getString("web-summary-stage-failed" as any),
+    canceled: getString("web-summary-stage-canceled" as any),
   };
   return map[task.status] || task.status;
 }
@@ -227,7 +227,7 @@ export class WebSummaryWorkflow {
       if (currentTaskId) {
         void WebSummaryBridgeClient.cancelTask(
           currentTaskId,
-          "已停止当前条目的AI总结",
+          getString("summary-canceled-unsaved" as any),
         ).catch((error) => {
           ztoolkit.log(
             "[AiNote][WebSummaryWorkflow] cancel current task failed",
@@ -264,7 +264,7 @@ export class WebSummaryWorkflow {
     };
 
     launchChatGPTSurface(payload.projectUrl || "https://chatgpt.com/");
-    hooks?.onStage?.("正在提交网页总结任务...", 5);
+    hooks?.onStage?.(getString("web-summary-stage-submitting" as any), 5);
     await sleep(4000);
 
     await checkCompatibilityWarnings();
@@ -284,7 +284,7 @@ export class WebSummaryWorkflow {
       if (currentTaskCanceled) {
         await WebSummaryBridgeClient.cancelTask(
           latestTask.taskId,
-          "已停止当前条目的AI总结",
+          getString("summary-canceled-unsaved" as any),
         );
       }
       await sleep(getPollIntervalMs());
@@ -337,11 +337,11 @@ export class WebSummaryWorkflow {
       throw new WebSummaryCanceledError(
         latestTask.errorMessage ||
           latestTask.cancelReason ||
-          "已停止当前条目的AI总结",
+          getString("summary-canceled-unsaved" as any),
       );
     }
     if (latestTask.status !== "succeeded" || !latestTask.resultMarkdown) {
-      throw new Error(latestTask.errorMessage || "网页总结任务失败");
+      throw new Error(latestTask.errorMessage || getString("web-summary-error-generic" as any));
     }
 
     const itemTitle = String(target.item.getField("title") || "");
@@ -351,7 +351,7 @@ export class WebSummaryWorkflow {
       summaryHeading,
     );
     hooks?.onContent?.(noteBody || latestTask.resultMarkdown);
-    hooks?.onStage?.("正在保存网页总结笔记...", 80);
+    hooks?.onStage?.(getString("web-summary-stage-saving-note" as any), 80);
     const noteHtml = buildNoteHtmlFromMarkdown(
       summaryHeading,
       getWebSummaryModelLabel(chatgptMode),
@@ -449,11 +449,11 @@ export class WebSummaryWorkflow {
 
       try {
         currentTaskCanceled = false;
-        progressCallback?.(current, total, 5, "正在提交网页总结任务...");
+        progressCallback?.(current, total, 5, getString("web-summary-stage-submitting" as any));
         await outputWindow.startItem(itemTitle, WEB_SUMMARY_MODEL_LABEL);
         OutputWindowManager.recordItemStart(itemTitle, WEB_SUMMARY_MODEL_LABEL);
-        outputWindow.updateCurrentStatus("正在提交网页总结任务...");
-        OutputWindowManager.recordStatusUpdate("正在提交网页总结任务...");
+        outputWindow.updateCurrentStatus(getString("web-summary-stage-submitting" as any));
+        OutputWindowManager.recordStatusUpdate(getString("web-summary-stage-submitting" as any));
         launchChatGPTSurface(payload.projectUrl || "https://chatgpt.com/");
 
         // 等待浏览器和扩展初始化（冷启动时 Chrome 需要时间启动，扩展 Service Worker 需要初始化轮询）
@@ -483,7 +483,7 @@ export class WebSummaryWorkflow {
           if (currentTaskCanceled) {
             await WebSummaryBridgeClient.cancelTask(
               latestTask.taskId,
-              "已停止当前条目的AI总结",
+              getString("summary-canceled-unsaved" as any),
             );
           }
           await sleep(getPollIntervalMs());
@@ -592,7 +592,7 @@ export class WebSummaryWorkflow {
           throw new WebSummaryCanceledError(
             latestTask.errorMessage ||
               latestTask.cancelReason ||
-              "已停止当前条目的AI总结",
+              getString("summary-canceled-unsaved" as any),
           );
         }
         if (latestTask.status !== "succeeded" || !latestTask.resultMarkdown) {
@@ -600,7 +600,7 @@ export class WebSummaryWorkflow {
             taskId: latestTask.taskId,
             errorMessage: latestTask.errorMessage,
           });
-          throw new Error(latestTask.errorMessage || "网页总结任务失败");
+          throw new Error(latestTask.errorMessage || getString("web-summary-error-generic" as any));
         }
         ztoolkit.log("[AiNote][WebSummaryWorkflow] summary content fetched", {
           taskId: latestTask.taskId,
@@ -619,8 +619,8 @@ export class WebSummaryWorkflow {
         OutputWindowManager.recordItemReplaceContent(
           noteBody || latestTask.resultMarkdown,
         );
-        outputWindow.updateCurrentStatus("正在保存网页总结笔记...");
-        OutputWindowManager.recordStatusUpdate("正在保存网页总结笔记...");
+        outputWindow.updateCurrentStatus(getString("web-summary-stage-saving-note" as any));
+        OutputWindowManager.recordStatusUpdate(getString("web-summary-stage-saving-note" as any));
 
         const noteHtml = buildNoteHtmlFromMarkdown(
           summaryHeading,
@@ -639,20 +639,20 @@ export class WebSummaryWorkflow {
         outputWindow.finishItem();
         OutputWindowManager.recordItemComplete();
         successCount++;
-        progressCallback?.(current, total, 100, "已保存网页总结笔记");
+        progressCallback?.(current, total, 100, getString("web-summary-note-saved" as any));
       } catch (error: any) {
         currentTaskId = "";
         if (error instanceof WebSummaryCanceledError) {
           canceledCount++;
           outputWindow.stopCurrentItem(
-            "已停止当前条目的AI总结，未保存到笔记。",
+            getString("summary-canceled-unsaved" as any),
           );
           OutputWindowManager.recordItemCanceled();
           progressCallback?.(
             current,
             total,
             100,
-            "已停止当前条目的AI总结，继续处理下一条",
+            getString("summary-canceled-continue-next" as any),
           );
         } else {
           failedCount++;
@@ -662,7 +662,7 @@ export class WebSummaryWorkflow {
             current,
             total,
             100,
-            error?.message || "网页总结任务失败",
+            error?.message || getString("web-summary-error-generic" as any),
           );
         }
       }
@@ -682,7 +682,9 @@ export class WebSummaryWorkflow {
         total,
         total,
         100,
-        `已停止 (已完成 ${successCount} 个，失败 ${failedCount} 个，取消 ${canceledCount} 个，未处理 ${notProcessed} 个)`,
+        getString("summary-batch-stopped-detail" as any, {
+          args: { success: successCount, failed: failedCount, canceled: canceledCount, notProcessed },
+        }),
       );
     } else {
       outputWindow.disableStopButton(false);
@@ -692,8 +694,10 @@ export class WebSummaryWorkflow {
         total,
         100,
         failedCount === 0 && canceledCount === 0
-          ? "所有条目处理完成"
-          : `${successCount} 个成功，${failedCount} 个失败，${canceledCount} 个取消`,
+          ? getString("summary-batch-all-complete" as any)
+          : getString("summary-batch-mixed-result" as any, {
+              args: { success: successCount, failed: failedCount, canceled: canceledCount },
+            }),
       );
     }
 

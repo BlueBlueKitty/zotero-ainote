@@ -9,6 +9,7 @@ import {
 } from "./summaryTaskTypes";
 import { isActiveTask, isHistoryTask } from "./summaryTaskPartition";
 import { SummaryRunner } from "./summaryRunner";
+import { getString } from "../utils/locale";
 
 export interface EnqueueTarget {
   item: Zotero.Item;
@@ -116,7 +117,7 @@ export class SummaryTaskManager {
         title: itemTitle,
         status: "pending",
         progress: 0,
-        stage: "待总结",
+        stage: getString("summary-manager-status-pending" as any),
         content: "",
         createdAt: now(),
         updatedAt: now(),
@@ -172,7 +173,7 @@ export class SummaryTaskManager {
     const resetAt = now();
     task.status = "pending";
     task.progress = 0;
-    task.stage = "待总结";
+    task.stage = getString("summary-manager-status-pending" as any);
     task.content = "";
     task.error = undefined;
     task.updatedAt = resetAt;
@@ -217,8 +218,8 @@ export class SummaryTaskManager {
     this.tasks.forEach((task) => {
       if (task.status === "pending") {
         task.status = "cancelled";
-        task.stage = "已停止";
-        task.error = "已停止后续条目的AI总结";
+        task.stage = getString("summary-manager-status-cancelled" as any);
+        task.error = getString("summary-stop-next" as any);
         task.finishedAt = nowAt;
         task.updatedAt = nowAt;
       }
@@ -307,7 +308,7 @@ export class SummaryTaskManager {
     task.startedAt = now();
     task.updatedAt = now();
     task.progress = 5;
-    task.stage = "准备中";
+    task.stage = getString("summary-manager-stage-preparing" as any);
     this.runtimes.set(task.id, {});
     this.emit();
     await this.persist();
@@ -355,7 +356,7 @@ export class SummaryTaskManager {
       }
       task.status = "completed";
       task.progress = 100;
-      task.stage = "已完成";
+      task.stage = getString("summary-manager-status-completed" as any);
       task.noteID = result.noteID;
       task.webConversationId = result.webConversationId;
       task.webConversationUrl = result.webConversationUrl;
@@ -374,10 +375,10 @@ export class SummaryTaskManager {
       }
       if (SummaryRunner.isCanceledError(error)) {
         task.status = "cancelled";
-        task.stage = "已停止";
+        task.stage = getString("summary-manager-status-cancelled" as any);
       } else {
         task.status = "failed";
-        task.stage = "失败";
+        task.stage = getString("summary-manager-status-failed" as any);
       }
       task.error = error?.message || String(error);
       task.finishedAt = now();

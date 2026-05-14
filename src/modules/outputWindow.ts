@@ -1,5 +1,6 @@
 import { config } from "../../package.json";
 import { marked } from "marked";
+import { getString } from "../utils/locale";
 
 type OutputItemStatus = "processing" | "completed" | "failed" | "canceled";
 
@@ -111,7 +112,7 @@ export class OutputWindow {
 	                  paddingBottom: "10px",
 	                },
 	                properties: {
-	                  innerHTML: "AI 总结输出",
+	                  innerHTML: getString("summary-output-title" as any),
 	                },
 	              },
 	              {
@@ -188,7 +189,7 @@ export class OutputWindow {
                   marginRight: "12px",
                 },
                 properties: {
-                  innerHTML: "⏹ 停止当前条目的AI总结",
+                  innerHTML: getString("summary-stop-current" as any),
                 },
               },
               {
@@ -219,7 +220,7 @@ export class OutputWindow {
                   webkitAppearance: "none",
                 },
                 properties: {
-                  innerHTML: "🛑 停止后续条目的AI总结",
+                  innerHTML: getString("summary-stop-next" as any),
                 },
               },
             ],
@@ -227,7 +228,7 @@ export class OutputWindow {
         ],
       })
       .setDialogData(dialogData)
-      .open("AI 总结", {
+      .open(getString("summary-window-title" as any), {
         width: 850,
         height: 680,
         centerscreen: true,
@@ -255,7 +256,7 @@ export class OutputWindow {
           e.stopPropagation();
 
           try {
-            this.disableCurrentStopButton("✓ 已停止当前条目");
+            this.disableCurrentStopButton(getString("summary-current-stopped" as any));
             if (this.onStopCurrentCallback) {
               this.onStopCurrentCallback();
             }
@@ -286,7 +287,7 @@ export class OutputWindow {
             // 立即更新按钮状态为"已停止"
             if (this.stopButton) {
               this.stopButton.disabled = true;
-              this.stopButton.innerHTML = "✓ 已停止";
+              this.stopButton.innerHTML = getString("summary-stopped" as any);
               this.stopButton.style.setProperty("background-color", "#9e9e9e", "important");
               this.stopButton.style.setProperty("cursor", "not-allowed", "important");
               this.stopButton.style.setProperty("opacity", "0.8", "important");
@@ -531,7 +532,7 @@ export class OutputWindow {
               wordBreak: "break-word",
             },
             properties: {
-              innerHTML: `📄 AI 总结 - ${this.escapeHtml(itemTitle)}`,
+              innerHTML: this.formatI18n("summary-item-title", { title: this.escapeHtml(itemTitle) }),
             },
           },
           ...(modelLabel
@@ -547,7 +548,7 @@ export class OutputWindow {
                     wordBreak: "break-word",
                   },
                   properties: {
-                    innerHTML: `模型：${this.escapeHtml(modelLabel)}`,
+                    innerHTML: this.formatI18n("summary-model-label", { model: this.escapeHtml(modelLabel) }),
                   },
                 },
               ]
@@ -638,7 +639,7 @@ export class OutputWindow {
       return;
     }
     this.currentStatusContainer.innerHTML = message
-      ? `进度：${this.escapeHtml(message)}`
+      ? this.formatI18n("summary-status-progress", { message: this.escapeHtml(message) })
       : "";
   }
 
@@ -665,11 +666,18 @@ export class OutputWindow {
     const progressEl = doc.getElementById("ainote-progress");
     if (progressEl) {
       if (this.totalCount > 0) {
-        progressEl.innerHTML = `共 ${this.totalCount} 个条目，已处理 ${this.processedCount} 个`;
+        progressEl.innerHTML = getString("summary-progress-count" as any, { args: { total: this.totalCount, processed: this.processedCount } });
       } else {
         progressEl.innerHTML = "";
       }
     }
+  }
+
+  private formatI18n(key: string, args?: Record<string, unknown>): string {
+    if (args) {
+      return getString(key as any, { args });
+    }
+    return getString(key as any);
   }
 
   private scheduleRenderMath(): void {
@@ -716,7 +724,7 @@ export class OutputWindow {
               fontStyle: "italic",
             },
             properties: {
-              innerHTML: "✓ 已完成并保存到笔记",
+              innerHTML: getString("summary-saved-to-note" as any),
             },
           },
           parent
@@ -724,7 +732,7 @@ export class OutputWindow {
       }
     }
     this.incrementProgress();
-    this.disableCurrentStopButton("✓ 当前条目已完成");
+    this.disableCurrentStopButton(getString("summary-current-finished" as any));
     this.updateCurrentStatus("");
     this.currentItemWrapper = null;
     this.currentStatusContainer = null;
@@ -732,7 +740,7 @@ export class OutputWindow {
     this.scrollToBottom();
   }
 
-  public stopCurrentItem(message: string = "已停止当前条目的AI总结，未保存到笔记。"): void {
+  public stopCurrentItem(message: string = getString("summary-canceled-unsaved" as any)): void {
     if (this.currentItemContainer) {
       const parent = this.currentItemContainer.parentElement as HTMLElement | null;
       if (parent) {
@@ -755,7 +763,7 @@ export class OutputWindow {
       }
     }
     this.incrementProgress();
-    this.disableCurrentStopButton("✓ 当前条目已停止");
+    this.disableCurrentStopButton(getString("summary-current-stopped" as any));
     this.updateCurrentStatus("");
     this.currentItemWrapper = null;
     this.currentStatusContainer = null;
@@ -790,28 +798,28 @@ export class OutputWindow {
       backgroundColor = isDark ? "#3d3d2d" : "#fff9e6";
       borderColor = "#ff9800";
       icon = "⏹️";
-      title = "已取消";
-      message = `共 ${totalCount} 个条目，已取消 ${canceledCount} 个条目，未保存到笔记中。`;
+      title = getString("summary-all-canceled-title" as any);
+      message = getString("summary-all-canceled-message" as any, { args: { total: totalCount, canceled: canceledCount } });
     } else if (allSuccess) {
       backgroundColor = isDark ? "#2d4a2d" : "#e8f5e9";
       borderColor = "#59c0bc";
       icon = "🎉";
-      title = "处理完成！";
-      message = `成功处理 ${successCount} 个条目，内容已保存到笔记中。`;
+      title = getString("summary-all-success-title" as any);
+      message = getString("summary-all-success-message" as any, { args: { success: successCount } });
     } else if (allFailed) {
       backgroundColor = isDark ? "#4a2d2d" : "#ffebee";
       borderColor = "#f44336";
       icon = "❌";
-      title = "处理失败";
-      message = `所有 ${totalCount} 个条目均处理失败，请检查错误信息。`;
+      title = getString("summary-all-failed-title" as any);
+      message = getString("summary-all-failed-message" as any, { args: { total: totalCount } });
     } else {
       backgroundColor = isDark ? "#4a3d2d" : "#fff3e0";
       borderColor = "#ff9800";
       icon = "⚠️";
-      title = "部分完成";
+      title = getString("summary-partial-title" as any);
       message = canceledCount > 0
-        ? `成功处理 ${successCount} 个条目，${failedCount} 个条目失败，${canceledCount} 个条目已取消。`
-        : `成功处理 ${successCount} 个条目，${failedCount} 个条目失败。`;
+        ? getString("summary-partial-with-canceled-message" as any, { args: { success: successCount, failed: failedCount, canceled: canceledCount } })
+        : getString("summary-partial-message" as any, { args: { success: successCount, failed: failedCount } });
     }
 
     ztoolkit.UI.appendElement(
@@ -854,7 +862,7 @@ export class OutputWindow {
     );
 
     this.scrollToBottom();
-    this.disableCurrentStopButton("✓ 当前条目已结束");
+    this.disableCurrentStopButton(getString("summary-current-ended" as any));
   }
 
   /**
@@ -892,7 +900,7 @@ export class OutputWindow {
               marginBottom: "10px",
             },
             properties: {
-              innerHTML: "⏸️ AI 生成已停止",
+              innerHTML: getString("summary-stopped-title" as any),
             },
           },
           {
@@ -903,7 +911,7 @@ export class OutputWindow {
               marginBottom: "5px",
             },
             properties: {
-              innerHTML: `总共 ${total} 个条目：`,
+              innerHTML: getString("summary-stopped-total" as any, { args: { total } }),
             },
           },
           {
@@ -914,7 +922,7 @@ export class OutputWindow {
               marginBottom: "3px",
             },
             properties: {
-              innerHTML: `✓ 已成功生成：${successCount} 个`,
+              innerHTML: getString("summary-stopped-success" as any, { args: { success: successCount } }),
             },
           },
           {
@@ -925,7 +933,7 @@ export class OutputWindow {
               marginBottom: "3px",
             },
             properties: {
-              innerHTML: `✗ 生成失败：${failedCount} 个`,
+              innerHTML: getString("summary-stopped-failed" as any, { args: { failed: failedCount } }),
             },
           },
           ...(canceledCount > 0
@@ -938,7 +946,7 @@ export class OutputWindow {
                     marginBottom: "3px",
                   },
                   properties: {
-                    innerHTML: `⏹ 当前条目已取消：${canceledCount} 个`,
+                    innerHTML: getString("summary-stopped-canceled" as any, { args: { canceled: canceledCount } }),
                   },
                 },
               ]
@@ -950,7 +958,7 @@ export class OutputWindow {
               color: isDark ? "#90a4ae" : "#607d8b",
             },
             properties: {
-              innerHTML: `⊘ 未处理：${notProcessed} 个`,
+              innerHTML: getString("summary-stopped-unprocessed" as any, { args: { count: notProcessed } }),
             },
           },
         ],
@@ -1009,7 +1017,7 @@ export class OutputWindow {
               fontSize: "14px",
             },
             properties: {
-              innerHTML: `错误: ${this.escapeHtml(error)}`,
+              innerHTML: this.formatI18n("summary-error-prefix", { error: this.escapeHtml(error) }),
             },
           },
         ],
@@ -1079,15 +1087,15 @@ export class OutputWindow {
     if (this.stopButton && !this.stopButton.disabled) {
       // 只有按钮未被禁用时才更新（避免重复更新）
       this.stopButton.disabled = true;
-      this.stopButton.innerHTML = stopped ? "✓ 已停止" : "✓ 已完成";
+      this.stopButton.innerHTML = stopped ? getString("summary-stopped" as any) : getString("summary-finished" as any);
       this.stopButton.style.setProperty("background-color", "#9e9e9e", "important");
       this.stopButton.style.setProperty("cursor", "not-allowed", "important");
       this.stopButton.style.setProperty("opacity", "0.8", "important");
     }
-    this.disableCurrentStopButton(stopped ? "✓ 当前条目已停止" : "✓ 已完成");
+    this.disableCurrentStopButton(stopped ? getString("summary-current-stopped" as any) : getString("summary-finished" as any));
   }
 
-  public disableCurrentStopButton(label: string = "✓ 已完成"): void {
+  public disableCurrentStopButton(label: string = getString("summary-finished" as any)): void {
     if (this.stopCurrentButton) {
       this.stopCurrentButton.disabled = true;
       this.stopCurrentButton.innerHTML = label;
@@ -1102,7 +1110,7 @@ export class OutputWindow {
       return;
     }
     this.stopCurrentButton.disabled = false;
-    this.stopCurrentButton.innerHTML = "⏹ 停止当前条目的AI总结";
+    this.stopCurrentButton.innerHTML = getString("summary-stop-current" as any);
     this.stopCurrentButton.style.setProperty("cursor", "pointer", "important");
     this.stopCurrentButton.style.setProperty("opacity", "1", "important");
     this.stopCurrentButton.style.setProperty("color", "#1a1a1a", "important");

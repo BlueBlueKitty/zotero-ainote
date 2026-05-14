@@ -325,7 +325,7 @@ function initializeDefaultPrefs() {
   if (!profiles.length) {
     const profile = createProfile(
       "chatgpt_web",
-      "ChatGPT 网页版",
+      getString("prefs-provider-chatgpt-web" as any),
     );
     setPref("profiles" as any, JSON.stringify([profile]));
     setPref("activeProfileId" as any, profile.id);
@@ -333,7 +333,10 @@ function initializeDefaultPrefs() {
     setPref("activeProfileId" as any, profiles[0].id);
   }
   if (profiles.length && !profiles.some((p) => p.providerType === "chatgpt_web")) {
-    const nextProfiles = [...profiles, createProfile("chatgpt_web", "ChatGPT 网页版")];
+    const nextProfiles = [
+      ...profiles,
+      createProfile("chatgpt_web", getString("prefs-provider-chatgpt-web" as any)),
+    ];
     setPref("profiles" as any, JSON.stringify(nextProfiles));
   }
 
@@ -1522,7 +1525,7 @@ function renderModelRow(
     modelList.innerHTML = "";
     try {
       const latest = getProfiles().find((item) => item.id === profile.id);
-      if (!latest) throw new Error("Profile not found");
+      if (!latest) throw new Error(getString("error-profile-not-found" as any));
       const models = await AIService.listModels(latest);
       status.textContent = models.length
         ? getString("prefs-model-fetch-success", {
@@ -1547,7 +1550,7 @@ function renderModelRow(
     status.style.color = "var(--ainote-text-muted)";
     try {
       const latest = getProfiles().find((item) => item.id === profile.id);
-      if (!latest) throw new Error("Profile not found");
+      if (!latest) throw new Error(getString("error-profile-not-found" as any));
       const result = await AIService.testConnection(latest);
       status.textContent = result;
       status.style.color = "var(--ainote-success)";

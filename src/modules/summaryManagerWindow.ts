@@ -13,6 +13,7 @@ import { OutputWindow } from "./outputWindow";
 import { SummaryTaskManager } from "./summaryTaskManager";
 import { SummaryTask, SummaryTaskSnapshot } from "./summaryTaskTypes";
 import { WebSummaryWorkflow } from "./webSummaryWorkflow";
+import { getString } from "../utils/locale";
 
 const LIMIT_OPTIONS = [20, 50, 100, 200, 500, 0];
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -57,11 +58,11 @@ function normalizeVisualStatus(status: string): SummaryTask["status"] {
 
 function statusLabel(status: SummaryTask["status"]): string {
   const map: Record<string, string> = {
-    pending: "待总结",
-    running: "总结中",
-    completed: "已完成",
-    failed: "失败",
-    cancelled: "已停止",
+    pending: getString("summary-manager-status-pending" as any),
+    running: getString("summary-manager-status-running" as any),
+    completed: getString("summary-manager-status-completed" as any),
+    failed: getString("summary-manager-status-failed" as any),
+    cancelled: getString("summary-manager-status-cancelled" as any),
   };
   return map[status] || status;
 }
@@ -222,7 +223,7 @@ function setCustomSelectValue(
   const fallback =
     options.find((option) => option.value === value) || options[0];
   const finalValue = fallback?.value || value || "";
-  const finalLabel = fallback?.label || "未配置";
+  const finalLabel = fallback?.label || getString("summary-manager-unset" as any);
 
   (select as HTMLElement).dataset.value = finalValue;
   select.setAttribute("data-value", finalValue);
@@ -386,7 +387,9 @@ export class SummaryManagerWindow {
               {
                 tag: "div",
                 namespace: "html",
-                properties: { innerHTML: "<strong>条目总结管理窗口</strong>" },
+                properties: {
+                  innerHTML: `<strong>${getString("summary-manager-title" as any)}</strong>`,
+                },
               },
               {
                 tag: "div",
@@ -401,7 +404,7 @@ export class SummaryManagerWindow {
                   {
                     tag: "label",
                     namespace: "html",
-                    properties: { innerHTML: "大模型" },
+                    properties: { innerHTML: getString("summary-manager-model" as any) },
                   },
                   {
                     tag: "div",
@@ -415,7 +418,7 @@ export class SummaryManagerWindow {
                         properties: {
                           className: "ainote-select-trigger",
                           type: "button",
-                          innerHTML: "加载中...",
+                          innerHTML: getString("summary-manager-loading" as any),
                         },
                       },
                       {
@@ -431,7 +434,7 @@ export class SummaryManagerWindow {
                   {
                     tag: "label",
                     namespace: "html",
-                    properties: { innerHTML: "总结提示词模板" },
+                    properties: { innerHTML: getString("summary-manager-template" as any) },
                   },
                   {
                     tag: "div",
@@ -445,7 +448,7 @@ export class SummaryManagerWindow {
                         properties: {
                           className: "ainote-select-trigger",
                           type: "button",
-                          innerHTML: "加载中...",
+                          innerHTML: getString("summary-manager-loading" as any),
                         },
                       },
                       {
@@ -461,7 +464,7 @@ export class SummaryManagerWindow {
                   {
                     tag: "label",
                     namespace: "html",
-                    properties: { innerHTML: "历史保存上限" },
+                    properties: { innerHTML: getString("summary-manager-history-limit" as any) },
                   },
                   {
                     tag: "div",
@@ -475,7 +478,7 @@ export class SummaryManagerWindow {
                         properties: {
                           className: "ainote-select-trigger",
                           type: "button",
-                          innerHTML: "加载中...",
+                          innerHTML: getString("summary-manager-loading" as any),
                         },
                       },
                       {
@@ -492,7 +495,9 @@ export class SummaryManagerWindow {
                     tag: "button",
                     namespace: "html",
                     id: "ainote-clear-history",
-                    properties: { innerHTML: "🗑 清空历史任务" },
+                    properties: {
+                      innerHTML: getString("summary-manager-clear" as any),
+                    },
                   },
                 ],
               },
@@ -545,21 +550,27 @@ export class SummaryManagerWindow {
                         namespace: "html",
                         id: "ainote-stop-active",
                         styles: { whiteSpace: "nowrap" },
-                        properties: { innerHTML: "⏹ 停止活动任务" },
+                        properties: {
+                          innerHTML: getString("summary-manager-stop-active" as any),
+                        },
                       },
                       {
                         tag: "button",
                         namespace: "html",
                         id: "ainote-retry-active",
                         styles: { whiteSpace: "nowrap" },
-                        properties: { innerHTML: "🔁 重试活动任务" },
+                        properties: {
+                          innerHTML: getString("summary-manager-retry-active" as any),
+                        },
                       },
                       {
                         tag: "button",
                         namespace: "html",
                         id: "ainote-remove-active",
                         styles: { whiteSpace: "nowrap" },
-                        properties: { innerHTML: "🗑 移除活动任务" },
+                        properties: {
+                          innerHTML: getString("summary-manager-remove-active" as any),
+                        },
                       },
                     ],
                   },
@@ -583,7 +594,7 @@ export class SummaryManagerWindow {
         ],
       })
       .setDialogData(dialogData)
-      .open("条目总结管理窗口", {
+      .open(getString("summary-manager-title" as any), {
         width: 980,
         height: 680,
         centerscreen: true,
@@ -1316,7 +1327,7 @@ export class SummaryManagerWindow {
       limitSelect,
       LIMIT_OPTIONS.map((n) => ({
         value: String(n),
-        label: n === 0 ? "不限制" : String(n),
+        label: n === 0 ? getString("summary-manager-no-limit" as any) : String(n),
       })),
       String(SummaryHistoryStore.getLimit()),
       force,
@@ -1353,7 +1364,7 @@ export class SummaryManagerWindow {
     if (!activeTasks.length && !historyTasks.length) {
       const empty = createHtmlElement(doc, "div");
       empty.style.color = isDark ? "#9ca3af" : "#888";
-      empty.textContent = "暂无任务";
+      empty.textContent = getString("summary-manager-no-tasks" as any);
       listEl.appendChild(empty);
       return;
     }
@@ -1380,15 +1391,16 @@ export class SummaryManagerWindow {
         status.style.fontSize = "12px";
         status.style.color = statusColor(visualStatus, isDark);
         status.style.marginTop = "4px";
-        status.textContent = `${statusLabel(visualStatus)}${progress ? ` ${progress}` : ""}`;
-
-        const stage = createHtmlElement(doc, "div");
-        stage.style.fontSize = "12px";
-        stage.style.color = isDark ? "#a8b0b8" : "#888";
-        stage.style.marginTop = "4px";
-        const stageText = String(task.stage || "").trim();
-        const statusText = statusLabel(visualStatus);
-        stage.textContent = stageText === statusText ? "" : stageText;
+        status.style.display = "flex";
+        status.style.justifyContent = "space-between";
+        status.style.alignItems = "center";
+        status.style.gap = "8px";
+        const stageText = String(task.stage || "").trim() || statusLabel(visualStatus);
+        const stageLabel = createHtmlElement(doc, "span");
+        stageLabel.textContent = stageText;
+        const progressLabel = createHtmlElement(doc, "span");
+        progressLabel.textContent = progress || "";
+        status.append(stageLabel, progressLabel);
 
         const actions = createHtmlElement(doc, "div");
         actions.className = "ainote-row-actions";
@@ -1402,62 +1414,62 @@ export class SummaryManagerWindow {
         if (visualStatus === "pending") {
           buttonConfigs.push({
             action: "remove",
-            label: "🗑 移除任务",
+            label: getString("summary-manager-remove" as any),
             className: buttonClass("danger"),
-            title: "移除",
+            title: getString("summary-manager-remove-title" as any),
           });
         } else if (visualStatus === "running") {
           buttonConfigs.push(
             {
               action: "stop",
-              label: "⏹ 停止",
+              label: getString("summary-manager-stop" as any),
               className: buttonClass("default"),
-              title: "停止",
+              title: getString("summary-manager-stop-title" as any),
             },
             {
               action: "remove",
-              label: "🗑 移除任务",
+              label: getString("summary-manager-remove" as any),
               className: buttonClass("danger"),
-              title: "移除",
+              title: getString("summary-manager-remove-title" as any),
             },
           );
         } else if (visualStatus === "failed" || visualStatus === "cancelled") {
           buttonConfigs.push(
             {
               action: "retry",
-              label: "🔁 重试",
+              label: getString("summary-manager-retry" as any),
               className: buttonClass("primary"),
-              title: "重试",
+              title: getString("summary-manager-retry-title" as any),
             },
             {
               action: "remove",
-              label: "🗑 移除任务",
+              label: getString("summary-manager-remove" as any),
               className: buttonClass("danger"),
-              title: "移除",
+              title: getString("summary-manager-remove-title" as any),
             },
           );
         } else if (visualStatus === "completed") {
           if (task.kind === "web" && task.webConversationUrl) {
             buttonConfigs.push({
               action: "continue-chat",
-              label: "继续对话",
+              label: getString("summary-manager-continue-chat" as any),
               className: buttonClass("primary"),
-              title: "继续对话",
+              title: getString("summary-manager-continue-chat" as any),
             });
           }
           if (task.noteID) {
             buttonConfigs.push({
               action: "view-note",
-              label: "查看笔记",
+              label: getString("summary-manager-view-note" as any),
               className: buttonClass("default"),
-              title: "查看笔记",
+              title: getString("summary-manager-view-note" as any),
             });
           }
           buttonConfigs.push({
             action: "remove",
-            label: "🗑 移除任务",
+            label: getString("summary-manager-remove" as any),
             className: buttonClass("danger"),
-            title: "移除",
+            title: getString("summary-manager-remove-title" as any),
           });
         }
 
@@ -1471,11 +1483,7 @@ export class SummaryManagerWindow {
           actions.appendChild(button);
         });
 
-        if (stage.textContent) {
-          row.append(title, status, stage, actions);
-        } else {
-          row.append(title, status, actions);
-        }
+        row.append(title, status, actions);
         return row;
     };
 
@@ -1527,7 +1535,9 @@ export class SummaryManagerWindow {
       toggle.className = buttonClass("default");
       toggle.dataset.listAction = toggleAction;
       toggle.textContent = collapsed ? "▲" : "▼";
-      toggle.title = collapsed ? "展开" : "折叠";
+      toggle.title = collapsed
+        ? getString("summary-manager-expand" as any)
+        : getString("summary-manager-collapse" as any);
       right.appendChild(toggle);
 
       header.append(title, right);
@@ -1535,14 +1545,26 @@ export class SummaryManagerWindow {
     };
 
     const activeHeader = buildSectionHeader(
-      "活动任务",
+      getString("summary-manager-active-tasks" as any),
       activeTasks.length,
       this.activeCollapsed,
       "toggle-active",
       [
-        { action: "stop-active", label: "停止", className: buttonClass("default") },
-        { action: "retry-active", label: "重试", className: buttonClass("primary") },
-        { action: "remove-active", label: "清空", className: buttonClass("danger") },
+        {
+          action: "stop-active",
+          label: getString("summary-manager-stop-title" as any),
+          className: buttonClass("default"),
+        },
+        {
+          action: "retry-active",
+          label: getString("summary-manager-retry-title" as any),
+          className: buttonClass("primary"),
+        },
+        {
+          action: "remove-active",
+          label: getString("summary-manager-clear" as any),
+          className: buttonClass("danger"),
+        },
       ],
     );
     activeSection.appendChild(activeHeader);
@@ -1554,7 +1576,7 @@ export class SummaryManagerWindow {
         activeSection.classList.add("is-empty");
         const empty = createHtmlElement(doc, "div");
         empty.style.color = isDark ? "#9ca3af" : "#888";
-        empty.textContent = "暂无活动任务";
+        empty.textContent = getString("summary-manager-no-active" as any);
         body.appendChild(empty);
       } else {
         activeSection.classList.remove("is-empty");
@@ -1565,14 +1587,14 @@ export class SummaryManagerWindow {
     }
 
     const historyHeader = buildSectionHeader(
-      "历史任务",
+      getString("summary-manager-history-tasks" as any),
       historyTasks.length,
       this.historyCollapsed,
       "toggle-history",
       [
         {
           action: "clear-history",
-          label: "🗑 清空历史任务",
+          label: getString("summary-manager-clear" as any),
           className: buttonClass("danger"),
         },
       ],
@@ -1586,7 +1608,7 @@ export class SummaryManagerWindow {
         historySection.classList.add("is-empty");
         const empty = createHtmlElement(doc, "div");
         empty.style.color = isDark ? "#9ca3af" : "#888";
-        empty.textContent = "暂无历史任务";
+        empty.textContent = getString("summary-manager-no-history" as any);
         body.appendChild(empty);
       } else {
         historySection.classList.remove("is-empty");
@@ -1616,7 +1638,7 @@ export class SummaryManagerWindow {
     if (!task) {
       const empty = createHtmlElement(doc, "div");
       empty.style.color = isDark ? "#9ca3af" : "#888";
-      empty.textContent = "请选择左侧任务查看详情";
+      empty.textContent = getString("summary-manager-select-task" as any);
       detailEl.appendChild(empty);
       return;
     }
@@ -1658,19 +1680,19 @@ export class SummaryManagerWindow {
     if (visualStatus === "pending") {
       detailButtons.push({
         action: "remove",
-        label: "🗑 移除任务",
+        label: getString("summary-manager-remove" as any),
         className: buttonClass("danger"),
       });
     } else if (visualStatus === "running") {
       detailButtons.push(
         {
           action: "stop",
-          label: "⏹ 停止",
+          label: getString("summary-manager-stop" as any),
           className: buttonClass("default"),
         },
         {
           action: "remove",
-          label: "🗑 移除任务",
+          label: getString("summary-manager-remove" as any),
           className: buttonClass("danger"),
         },
       );
@@ -1678,12 +1700,12 @@ export class SummaryManagerWindow {
       detailButtons.push(
         {
           action: "retry",
-          label: "🔁 重试",
+          label: getString("summary-manager-retry" as any),
           className: buttonClass("primary"),
         },
         {
           action: "remove",
-          label: "🗑 移除任务",
+          label: getString("summary-manager-remove" as any),
           className: buttonClass("danger"),
         },
       );
@@ -1691,20 +1713,20 @@ export class SummaryManagerWindow {
       if (task.kind === "web" && task.webConversationUrl) {
         detailButtons.push({
           action: "continue-chat",
-          label: "继续对话",
+          label: getString("summary-manager-continue-chat" as any),
           className: buttonClass("primary"),
         });
       }
       if (task.noteID) {
         detailButtons.push({
           action: "view-note",
-          label: "查看笔记",
+          label: getString("summary-manager-view-note" as any),
           className: buttonClass("default"),
         });
       }
       detailButtons.push({
         action: "remove",
-        label: "🗑 移除任务",
+        label: getString("summary-manager-remove" as any),
         className: buttonClass("danger"),
       });
     }
@@ -1724,18 +1746,17 @@ export class SummaryManagerWindow {
       const line = createHtmlElement(doc, "div");
       line.style.fontSize = "12px";
       line.style.color = metaColor;
-      line.style.marginTop = label === "进度" ? "8px" : "4px";
+      line.style.marginTop =
+        label === getString("summary-manager-progress" as any) ? "8px" : "4px";
       line.textContent = `${label}：${value}`;
       detailEl.appendChild(line);
     };
 
     detailEl.append(header, actions);
-    appendMetaLine(
-      "进度",
-      typeof task.progress === "number" ? `${task.progress}%` : "-",
-    );
-    appendMetaLine("阶段", task.stage || "-");
-    appendMetaLine("模型", task.model || "-");
+    const stageText = String(task.stage || "").trim() || statusLabel(visualStatus);
+    const progressText = typeof task.progress === "number" ? `${task.progress}%` : "-";
+    appendMetaLine(getString("summary-manager-progress" as any), `${stageText}  ${progressText}`);
+    appendMetaLine(getString("summary-manager-model-meta" as any), task.model || "-");
 
     if (task.error) {
       const errorBox = createHtmlElement(doc, "div");
@@ -1744,7 +1765,9 @@ export class SummaryManagerWindow {
       errorBox.style.border = `1px solid ${isDark ? "#7f1d1d" : "#ffb3b3"}`;
       errorBox.style.background = isDark ? "#3f1f1f" : "#fff5f5";
       errorBox.style.color = isDark ? "#fecaca" : "#a40000";
-      errorBox.textContent = `错误：${task.error}`;
+      errorBox.textContent = getString("summary-manager-error" as any, {
+        args: { error: task.error },
+      });
       detailEl.appendChild(errorBox);
     } else if (visualStatus === "completed") {
       const successBox = createHtmlElement(doc, "div");
@@ -1753,7 +1776,7 @@ export class SummaryManagerWindow {
       successBox.style.border = `1px solid ${isDark ? "#14532d" : "#a7f3d0"}`;
       successBox.style.background = isDark ? "#0f2f1f" : "#f0fdf4";
       successBox.style.color = isDark ? "#bbf7d0" : "#166534";
-      successBox.textContent = "总结已完成";
+      successBox.textContent = getString("summary-manager-completed" as any);
       detailEl.appendChild(successBox);
     }
 
@@ -1766,7 +1789,7 @@ export class SummaryManagerWindow {
     } else {
       const empty = createHtmlElement(doc, "div");
       empty.style.color = isDark ? "#9ca3af" : "#888";
-      empty.textContent = "暂无总结内容";
+      empty.textContent = getString("summary-manager-no-content" as any);
       content.appendChild(empty);
     }
     detailEl.appendChild(content);

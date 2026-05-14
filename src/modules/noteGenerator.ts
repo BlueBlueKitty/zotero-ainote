@@ -4,6 +4,7 @@ import AIService, { AIRequestCanceledError, CancelSignal } from "./aiService";
 import { OutputWindow } from "./outputWindow";
 import { OutputWindowManager } from "./outputWindowManager";
 import { getPref } from "../utils/prefs";
+import { getString } from "../utils/locale";
 import { parseProfiles, ProviderType } from "./llmProfiles";
 import {
   buildSummaryHeading,
@@ -81,7 +82,7 @@ export class NoteGenerator {
         cancelListeners.add(callback);
         return () => cancelListeners.delete(callback);
       },
-      getReason: () => "已停止当前条目的AI总结",
+      getReason: () => getString("summary-canceled-unsaved" as any),
     };
     const cancelCurrentItem = () => {
       if (currentItemCanceled) return;
@@ -96,7 +97,7 @@ export class NoteGenerator {
     };
     const ensureNotCanceled = () => {
       if (currentItemCanceled) {
-        throw new AIRequestCanceledError("已停止当前条目的AI总结");
+        throw new AIRequestCanceledError(getString("summary-canceled-unsaved" as any));
       }
     };
 
@@ -163,14 +164,14 @@ export class NoteGenerator {
       }
 
       if (modeResolution.actual === "base64") {
-        progressCallback?.("正在读取 PDF 文件...", 10);
+        progressCallback?.(getString("progress-reading-pdf" as any), 10);
         requestContent = await PDFExtractor.extractBase64FromItem(
           item,
           preferredPdfAttachment,
         );
         contentMode = "pdf-base64";
       } else {
-        progressCallback?.("正在提取PDF文本...", 10);
+        progressCallback?.(getString("progress-extracting"), 10);
         const fullText = await PDFExtractor.extractTextFromItem(
           item,
           preferredPdfAttachment,
@@ -200,7 +201,7 @@ export class NoteGenerator {
 
       ensureNotCanceled();
 
-      progressCallback?.("正在生成AI总结...", 40);
+      progressCallback?.(getString("progress-generating"), 40);
 
       // 定义流式输出回调
       const onProgress = async (chunk: string) => {
@@ -239,7 +240,7 @@ export class NoteGenerator {
 
       ensureNotCanceled();
 
-      progressCallback?.("正在创建笔记...", 80);
+      progressCallback?.(getString("progress-creating"), 80);
 
       // 创建笔记并保存内容
       const noteContent = this.formatNoteContent(summaryHeading, modelLabel, fullContent);
@@ -251,14 +252,14 @@ export class NoteGenerator {
         OutputWindowManager.recordItemComplete();
       }
 
-      progressCallback?.("完成！", 100);
+      progressCallback?.(getString("progress-complete"), 100);
 
       return { note, content: fullContent };
     } catch (error: any) {
       if (error instanceof AIRequestCanceledError) {
         ztoolkit.log(`[AiNote] Current item canceled by user: "${itemTitle}"`);
         if (outputWindow) {
-          outputWindow.stopCurrentItem("已停止当前条目的AI总结，未保存到笔记。");
+          outputWindow.stopCurrentItem(getString("summary-canceled-unsaved" as any));
           OutputWindowManager.recordItemCanceled();
         }
         throw error;
@@ -398,7 +399,7 @@ export class NoteGenerator {
               current,
               total,
               100,
-              "已停止当前条目的AI总结，继续处理下一条",
+              getString("summary-canceled-continue-next" as any),
             );
           } else {
             failedCount++;
@@ -414,18 +415,44 @@ export class NoteGenerator {
         OutputWindowManager.recordStopped();
         outputWindow.disableStopButton(true); // 传入 true 表示是停止状态
         outputWindow.showStopped(successCount, failedCount, notProcessed, canceledCount);
-        progressCallback?.(total, total, 100, `已停止 (已完成 ${successCount} 个，失败 ${failedCount} 个，取消 ${canceledCount} 个，未处理 ${notProcessed} 个)`);
+        progressCallback?.(
+          total,
+          total,
+          100,
+          getString("summary-batch-stopped-detail" as any, {
+            args: {
+              success: successCount,
+              failed: failedCount,
+              canceled: canceledCount,
+              notProcessed,
+            },
+          }),
+        );
       } else {
         outputWindow.disableStopButton(false); // 传入 false 表示正常完成
         outputWindow.showComplete(successCount, total, canceledCount);
 
         // 通知进度回调完成
         if (failedCount === 0 && canceledCount === 0) {
-          progressCallback?.(total, total, 100, "所有条目处理完成");
+          progressCallback?.(total, total, 100, getString("summary-batch-all-complete" as any));
         } else if (successCount === 0) {
-          progressCallback?.(total, total, 100, canceledCount > 0 ? "所有条目均已取消或失败" : "所有条目处理失败");
+          progressCallback?.(
+            total,
+            total,
+            100,
+            canceledCount > 0
+              ? getString("summary-batch-all-canceled-or-failed" as any)
+              : getString("summary-batch-all-failed" as any),
+          );
         } else {
-          progressCallback?.(total, total, 100, `${successCount} 个成功，${failedCount} 个失败，${canceledCount} 个取消`);
+          progressCallback?.(
+            total,
+            total,
+            100,
+            getString("summary-batch-mixed-result" as any, {
+              args: { success: successCount, failed: failedCount, canceled: canceledCount },
+            }),
+          );
         }
       }
       
