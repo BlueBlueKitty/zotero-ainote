@@ -1,0 +1,9 @@
+{
+  "plugin": {
+    "latestVersion": "1.1.0"
+  },
+  "extension": {
+    "latestVersion": "0.1.0"
+  },
+  "extensionDownloadUrl": "https://raw.githubusercontent.com/BlueBlueKitty/zotero-ainote/main/dist/ainote-web-extension-v0.1.0-edge.zip"
+}

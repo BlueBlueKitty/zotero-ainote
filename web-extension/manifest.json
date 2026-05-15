@@ -9,7 +9,11 @@
     "48": "icons/favicon.png",
     "128": "icons/favicon.png"
   },
-  "permissions": ["storage", "tabs", "scripting"],
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting"
+  ],
   "host_permissions": [
     "http://127.0.0.1/*",
     "https://chatgpt.com/*",
@@ -30,8 +34,13 @@
   "options_page": "options.html",
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ]
