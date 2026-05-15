@@ -162,6 +162,14 @@ export class SummaryTaskManager {
       return null;
     }
 
+    const activeProfile = getActiveProfile();
+    if (!activeProfile || !activeProfile.enabled) {
+      throw new Error("请先在设置中创建并激活模型配置");
+    }
+    if (activeProfile.providerType !== "chatgpt_web" && !activeProfile.apiKey) {
+      throw new Error("请先配置有效的 API Key");
+    }
+
     if (task.status === "running") {
       const runtime = this.runtimes.get(task.id);
       runtime?.cancel?.();
@@ -180,6 +188,11 @@ export class SummaryTaskManager {
     task.startedAt = undefined;
     task.finishedAt = undefined;
     task.attempt = (task.attempt || 0) + 1;
+    task.kind = activeProfile.providerType === "chatgpt_web" ? "web" : "api";
+    task.model = activeProfile.model;
+    task.templateId =
+      String(getPref("activePromptTemplateId" as any) || "").trim() || undefined;
+    task.promptVersion = String(getPref("promptTemplatesVersion" as any) || "");
     this.stopRequested = false;
     this.selectedTaskId = task.id;
     this.emit();

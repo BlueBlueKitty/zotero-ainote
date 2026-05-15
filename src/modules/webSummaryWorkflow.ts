@@ -197,10 +197,17 @@ function formatCreateTaskError(error: any): string {
   return error?.message || String(error);
 }
 
-async function checkCompatibilityWarnings(): Promise<void> {
+async function checkCompatibilityWarnings(
+  phase: "preflight" | "runtime" = "preflight",
+): Promise<void> {
   try {
     const health = await WebSummaryBridgeClient.healthCheck();
-    const warnings = health.compatibilityWarnings || [];
+    const warnings = (health.compatibilityWarnings || []).filter((warning) => {
+      if (phase === "preflight" && warning.code === "TARGET_PAGE_UNAVAILABLE") {
+        return false;
+      }
+      return true;
+    });
     for (const warning of warnings) {
       ztoolkit.log("[AiNote][WebSummaryWorkflow][CompatibilityWarning]", warning);
     }
@@ -267,7 +274,7 @@ export class WebSummaryWorkflow {
     hooks?.onStage?.(getString("web-summary-stage-submitting" as any), 5);
     await sleep(4000);
 
-    await checkCompatibilityWarnings();
+    await checkCompatibilityWarnings("preflight");
     let task;
     try {
       task = (await WebSummaryBridgeClient.createTask(payload)).task;
@@ -306,6 +313,7 @@ export class WebSummaryWorkflow {
         latestTask.status === "claimed" &&
         Date.now() - sameStatusSince >= EXTENSION_CLAIM_STALL_TIMEOUT_MS
       ) {
+        await checkCompatibilityWarnings("runtime");
         throw new Error(
           "浏览器扩展已领取任务但尚未开始唤起网页。请确认扩展后台仍在运行；若持续出现，请重启 Chrome 和扩展后再试。",
         );
@@ -314,6 +322,7 @@ export class WebSummaryWorkflow {
         latestTask.status === "opening_chat" &&
         Date.now() - sameStatusSince >= EXTENSION_OPENING_CHAT_TIMEOUT_MS
       ) {
+        await checkCompatibilityWarnings("runtime");
         throw new Error(
           "浏览器扩展已开始打开 ChatGPT，但页面脚本长时间未就绪。请确认 ChatGPT 页面已正常加载；若持续出现，请重启 Chrome 和扩展后再试。",
         );
@@ -459,7 +468,7 @@ export class WebSummaryWorkflow {
         // 等待浏览器和扩展初始化（冷启动时 Chrome 需要时间启动，扩展 Service Worker 需要初始化轮询）
         await sleep(4000);
 
-        await checkCompatibilityWarnings();
+        await checkCompatibilityWarnings("preflight");
         let task;
         try {
           task = (await WebSummaryBridgeClient.createTask(payload)).task;
@@ -505,6 +514,7 @@ export class WebSummaryWorkflow {
             latestTask.status === "claimed" &&
             Date.now() - sameStatusSince >= EXTENSION_CLAIM_STALL_TIMEOUT_MS
           ) {
+            await checkCompatibilityWarnings("runtime");
             throw new Error(
               "浏览器扩展已领取任务但尚未开始唤起网页。请确认扩展后台仍在运行；若持续出现，请重启 Chrome 和扩展后再试。",
             );
@@ -513,6 +523,7 @@ export class WebSummaryWorkflow {
             latestTask.status === "opening_chat" &&
             Date.now() - sameStatusSince >= EXTENSION_OPENING_CHAT_TIMEOUT_MS
           ) {
+            await checkCompatibilityWarnings("runtime");
             throw new Error(
               "浏览器扩展已开始打开 ChatGPT，但页面脚本长时间未就绪。请确认 ChatGPT 页面已正常加载；若持续出现，请重启 Chrome 和扩展后再试。",
             );

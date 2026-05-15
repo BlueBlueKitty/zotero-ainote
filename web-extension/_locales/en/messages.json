@@ -34,5 +34,11 @@
   },
   "statusTestFailed": {
     "message": "Connection failed"
+  },
+  "statusTestSuccessBasic": {
+    "message": "Connection successful"
+  },
+  "statusTestAbnormal": {
+    "message": "Connection is available, but the following issues were detected:"
   }
 }

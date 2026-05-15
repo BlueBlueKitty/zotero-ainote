@@ -190,3 +190,5 @@ summary-batch-all-canceled-or-failed = 所有条目均已取消或失败
 summary-batch-mixed-result = { $success } 个成功，{ $failed } 个失败，{ $canceled } 个取消
 progress-reading-pdf = 正在读取 PDF 文件...
 summary-manager-stage-preparing = 准备中
+
+summary-manager-completed-at = 总结完成时间

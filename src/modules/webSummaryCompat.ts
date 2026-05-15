@@ -3,6 +3,7 @@ import {
   BridgeErrorCode,
   CompatibilityReport,
   CompatibilityWarning,
+  BridgeHealthCheckItem,
   ExtensionHandshakePayload,
   ExtensionRuntimeStatus,
   UpdateVersionInfo,
@@ -73,11 +74,17 @@ export class WebSummaryCompatibilityManager {
     requiredPermissions: string[];
     runtimeStatus: ExtensionRuntimeStatus;
     compatibilityWarnings?: CompatibilityWarning[];
+    checks?: BridgeHealthCheckItem[];
     updatedAt: string;
   } {
     const report = this.evaluate("summarize");
+    const checks = this.buildHealthChecks(report);
     return {
-      status: "ok",
+      status: checks.some((entry) => entry.status === "fail")
+        ? "fail"
+        : checks.some((entry) => entry.status === "warn")
+          ? "warn"
+          : "ok",
       pluginVersion,
       protocolVersion: WEB_SUMMARY_PROTOCOL_VERSION,
       taskContractVersion: WEB_SUMMARY_TASK_CONTRACT_VERSION,
@@ -85,6 +92,7 @@ export class WebSummaryCompatibilityManager {
       requiredPermissions: [...WEB_SUMMARY_REQUIRED_PERMISSIONS],
       runtimeStatus: this.getRuntimeStatus(),
       compatibilityWarnings: report.warnings,
+      checks,
       updatedAt: nowIso(),
     };
   }
@@ -286,5 +294,157 @@ export class WebSummaryCompatibilityManager {
       online: age >= 0 && age <= WEB_SUMMARY_EXTENSION_HEARTBEAT_TTL_MS,
       lastHeartbeatAt: this.handshakeState?.payload.heartbeatAt || receivedAt,
     };
+  }
+
+  private buildHealthChecks(report: CompatibilityReport): BridgeHealthCheckItem[] {
+    const details = report.details;
+    const hasBlockCode = (code: BridgeErrorCode) =>
+      report.blockingReasons.some((entry) => entry.code === code);
+    const hasWarnCode = (code: string) =>
+      report.warnings.some((entry) => entry.code === code);
+
+    const missingCapabilities = details.requiredCapabilities.filter(
+      (cap) => !details.extensionCapabilities.includes(cap),
+    );
+    const missingPermissions = details.requiredPermissions.filter(
+      (perm) =>
+        !details.extensionPermissions.some(
+          (entry) => entry.permission === perm && entry.granted,
+        ),
+    );
+
+    const environment = details.environment;
+    const targetPageReady =
+      !environment ||
+      !environment.targetReachable ||
+      (environment.chatgptTabReady && environment.contentScriptReady);
+
+    const pluginUpdateWarning = report.warnings.find(
+      (entry) => entry.code === "PLUGIN_UPDATE_RECOMMENDED",
+    );
+    const extensionUpdateWarning = report.warnings.find(
+      (entry) => entry.code === "EXTENSION_UPDATE_RECOMMENDED",
+    );
+
+    return [
+      {
+        key: "runtime_online",
+        scope: "basic",
+        title: "Extension Runtime Online",
+        status: details.runtimeStatus.online ? "pass" : "fail",
+        message: details.runtimeStatus.online
+          ? "扩展在线且心跳有效。"
+          : "扩展离线或心跳过期。",
+        details: {
+          online: details.runtimeStatus.online,
+          lastHeartbeatAt: details.runtimeStatus.lastHeartbeatAt || null,
+        },
+      },
+      {
+        key: "protocol_compatible",
+        scope: "basic",
+        title: "Protocol Version Compatibility",
+        status:
+          details.extensionProtocolVersion == null
+            ? "warn"
+            : hasBlockCode("PROTOCOL_MISMATCH") &&
+                details.protocolVersion !== details.extensionProtocolVersion
+              ? "fail"
+              : "pass",
+        message:
+          details.extensionProtocolVersion == null
+            ? "尚未收到扩展协议版本握手。"
+            : details.protocolVersion === details.extensionProtocolVersion
+              ? "协议版本兼容。"
+              : `协议版本不兼容：插件 ${details.protocolVersion} / 扩展 ${details.extensionProtocolVersion}。`,
+        details: {
+          pluginProtocolVersion: details.protocolVersion,
+          extensionProtocolVersion: details.extensionProtocolVersion || null,
+        },
+      },
+      {
+        key: "task_contract_compatible",
+        scope: "basic",
+        title: "Task Contract Compatibility",
+        status:
+          details.extensionTaskContractVersion == null
+            ? "warn"
+            : hasBlockCode("PROTOCOL_MISMATCH") &&
+                details.taskContractVersion !==
+                  details.extensionTaskContractVersion
+              ? "fail"
+              : "pass",
+        message:
+          details.extensionTaskContractVersion == null
+            ? "尚未收到扩展任务契约版本握手。"
+            : details.taskContractVersion === details.extensionTaskContractVersion
+              ? "任务契约版本兼容。"
+              : `任务契约版本不兼容：插件 ${details.taskContractVersion} / 扩展 ${details.extensionTaskContractVersion}。`,
+        details: {
+          pluginTaskContractVersion: details.taskContractVersion,
+          extensionTaskContractVersion:
+            details.extensionTaskContractVersion || null,
+        },
+      },
+      {
+        key: "required_capabilities",
+        scope: "basic",
+        title: "Required Capabilities",
+        status: missingCapabilities.length ? "fail" : "pass",
+        message: missingCapabilities.length
+          ? `缺少能力：${missingCapabilities.join(", ")}`
+          : "必要能力齐全。",
+        details: {
+          requiredCapabilities: details.requiredCapabilities,
+          extensionCapabilities: details.extensionCapabilities,
+          missingCapabilities,
+        },
+      },
+      {
+        key: "required_permissions",
+        scope: "basic",
+        title: "Required Permissions",
+        status: missingPermissions.length ? "fail" : "pass",
+        message: missingPermissions.length
+          ? `缺少权限：${missingPermissions.join(", ")}`
+          : "必要权限齐全。",
+        details: {
+          requiredPermissions: details.requiredPermissions,
+          extensionPermissions: details.extensionPermissions,
+          missingPermissions,
+        },
+      },
+      {
+        key: "target_page_environment",
+        scope: "runtime",
+        title: "Target Page Environment",
+        status: hasWarnCode("TARGET_PAGE_UNAVAILABLE") ? "warn" : "pass",
+        message: !environment
+          ? "尚未收到页面环境快照。"
+          : targetPageReady
+            ? "目标页面环境可用。"
+            : "目标页面环境不稳定（页面或内容脚本未就绪）。",
+        details: {
+          targetReachable: environment?.targetReachable ?? null,
+          chatgptTabReady: environment?.chatgptTabReady ?? null,
+          contentScriptReady: environment?.contentScriptReady ?? null,
+          warningMatched: hasWarnCode("TARGET_PAGE_UNAVAILABLE"),
+        },
+      },
+      {
+        key: "plugin_update",
+        scope: "runtime",
+        title: "Plugin Update",
+        status: pluginUpdateWarning ? "warn" : "pass",
+        message: pluginUpdateWarning?.message || "插件版本已是最新或未获取到更新信息。",
+      },
+      {
+        key: "extension_update",
+        scope: "runtime",
+        title: "Extension Update",
+        status: extensionUpdateWarning ? "warn" : "pass",
+        message: extensionUpdateWarning?.message || "扩展版本已是最新或未获取到更新信息。",
+      },
+    ];
   }
 }

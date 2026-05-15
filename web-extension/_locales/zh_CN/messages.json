@@ -34,5 +34,11 @@
   },
   "statusTestFailed": {
     "message": "连接失败"
+  },
+  "statusTestSuccessBasic": {
+    "message": "连接成功"
+  },
+  "statusTestAbnormal": {
+    "message": "连接可用，但检测到以下异常："
   }
 }

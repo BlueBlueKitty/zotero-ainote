@@ -141,7 +141,25 @@ export interface BridgeHealthResponse {
   requiredPermissions: string[];
   runtimeStatus: ExtensionRuntimeStatus;
   compatibilityWarnings?: CompatibilityWarning[];
+  checks?: BridgeHealthCheckItem[];
   updatedAt: string;
+}
+
+export interface BridgeHealthCheckItem {
+  key:
+    | "runtime_online"
+    | "protocol_compatible"
+    | "task_contract_compatible"
+    | "required_capabilities"
+    | "required_permissions"
+    | "target_page_environment"
+    | "plugin_update"
+    | "extension_update";
+  scope: "basic" | "runtime";
+  title: string;
+  status: "pass" | "warn" | "fail";
+  message: string;
+  details?: Record<string, unknown>;
 }
 
 export interface WebSummaryConversationMeta {

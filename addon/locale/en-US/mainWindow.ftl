@@ -190,3 +190,5 @@ summary-batch-all-canceled-or-failed = All items were canceled or failed
 summary-batch-mixed-result = { $success } succeeded, { $failed } failed, { $canceled } canceled
 progress-reading-pdf = Reading PDF file...
 summary-manager-stage-preparing = Preparing
+
+summary-manager-completed-at = Summary Completed At

@@ -41,7 +41,24 @@ async function onTest() {
   status.textContent = t("statusTesting");
   try {
     const result = await healthCheck();
-    status.textContent = `${t("statusTestSuccess")}: ${JSON.stringify(result)}`;
+    const checks = Array.isArray(result?.checks) ? result.checks : [];
+    const relevantChecks = checks.filter((entry) => entry?.scope === "basic");
+    const abnormalChecks = relevantChecks.filter(
+      (entry) => entry?.status === "warn" || entry?.status === "fail",
+    );
+
+    if (!checks.length || abnormalChecks.length === 0) {
+      status.textContent = t("statusTestSuccessBasic");
+      return;
+    }
+
+    const detailLines = abnormalChecks.map((entry) => {
+      const level = entry.status === "fail" ? "FAIL" : "WARN";
+      const title = entry.title || entry.key || "unknown";
+      const message = entry.message || "";
+      return `- [${level}] ${title}: ${message}`;
+    });
+    status.textContent = `${t("statusTestAbnormal")}\n${detailLines.join("\n")}`;
   } catch (error) {
     status.textContent = `${t("statusTestFailed")}: ${error instanceof Error ? error.message : String(error)}`;
   }

@@ -248,6 +248,7 @@ export type FluentMessageId =
   | 'summary-manager-clear-history'
   | 'summary-manager-collapse'
   | 'summary-manager-completed'
+  | 'summary-manager-completed-at'
   | 'summary-manager-continue-chat'
   | 'summary-manager-error'
   | 'summary-manager-expand'

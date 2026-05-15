@@ -34,5 +34,11 @@
   },
   "statusTestFailed": {
     "message": "連線失敗"
+  },
+  "statusTestSuccessBasic": {
+    "message": "連線成功"
+  },
+  "statusTestAbnormal": {
+    "message": "連線可用，但偵測到以下異常："
   }
 }

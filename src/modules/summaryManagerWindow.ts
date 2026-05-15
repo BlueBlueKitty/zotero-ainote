@@ -14,6 +14,7 @@ import { SummaryTaskManager } from "./summaryTaskManager";
 import { SummaryTask, SummaryTaskSnapshot } from "./summaryTaskTypes";
 import { WebSummaryWorkflow } from "./webSummaryWorkflow";
 import { getString } from "../utils/locale";
+import { showToast } from "../utils/window";
 
 const LIMIT_OPTIONS = [20, 50, 100, 200, 500, 0];
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -65,6 +66,17 @@ function statusLabel(status: SummaryTask["status"]): string {
     cancelled: getString("summary-manager-status-cancelled" as any),
   };
   return map[status] || status;
+}
+
+function formatTaskTimeToMinute(timestamp?: number): string {
+  if (!timestamp || !Number.isFinite(timestamp)) return "-";
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hour}:${minute}`;
 }
 
 function statusColor(
@@ -851,9 +863,32 @@ export class SummaryManagerWindow {
   private async openNoteForTask(taskId: string): Promise<void> {
     const task = this.manager.getTaskById(taskId);
     const noteID = task?.noteID;
-    if (!task || !noteID) return;
+    if (!task || !noteID) {
+      showToast(getString("selected-note-not-found" as any), "error");
+      return;
+    }
     const note = Zotero.Items.get(noteID);
-    if (!note) return;
+    const invalidNote =
+      !note ||
+      note.deleted ||
+      !note.isNote?.() ||
+      note.parentID !== task.itemID;
+    if (invalidNote) {
+      showToast(getString("selected-note-not-found" as any), "error");
+      ztoolkit.log(
+        "[AiNote][SummaryManagerWindow] Task note is missing or invalid",
+        {
+          taskId,
+          noteID,
+          exists: Boolean(note),
+          deleted: Boolean(note?.deleted),
+          isNote: Boolean(note?.isNote?.()),
+          parentID: note?.parentID,
+          expectedParentID: task.itemID,
+        },
+      );
+      return;
+    }
     const pane = Zotero.getActiveZoteroPane?.();
     if (pane?.selectItem) {
       try {
@@ -863,12 +898,9 @@ export class SummaryManagerWindow {
         ztoolkit.log("[AiNote][SummaryManagerWindow] Failed to select note in pane", error);
       }
     }
-    if (note.libraryID) {
-      const itemURI = Zotero.URI.getItemURI(note);
-      if (itemURI) {
-        Zotero.launchURL(itemURI);
-      }
-    }
+    // Avoid URI fallback because it can trigger deprecated URI-loading paths
+    // and may navigate to an unintended item when the target note is invalid.
+    showToast(getString("selected-note-not-found" as any), "error");
   }
 
   private bindCustomSelect(select: Element, onChange: () => void): void {
@@ -1356,18 +1388,89 @@ export class SummaryManagerWindow {
     if (!listEl) return;
 
     const isDark = this.isDarkTheme();
-    listEl.replaceChildren();
 
     const activeTasks = sortActiveTasks(snapshot.tasks.filter((task) => isActiveTask(task)));
     const historyTasks = sortHistoryTasks(snapshot.tasks.filter((task) => isHistoryTask(task)));
 
     if (!activeTasks.length && !historyTasks.length) {
+      listEl.replaceChildren();
       const empty = createHtmlElement(doc, "div");
       empty.style.color = isDark ? "#9ca3af" : "#888";
       empty.textContent = getString("summary-manager-no-tasks" as any);
       listEl.appendChild(empty);
       return;
     }
+
+    const getTaskButtonConfigs = (task: SummaryTask, visualStatus: SummaryTask["status"]) => {
+      const buttonConfigs: Array<{
+        action: "stop" | "retry" | "remove" | "view" | "continue-chat" | "view-note";
+        label: string;
+        className: string;
+        title: string;
+      }> = [];
+      if (visualStatus === "pending") {
+        buttonConfigs.push({
+          action: "remove",
+          label: getString("summary-manager-remove" as any),
+          className: buttonClass("danger"),
+          title: getString("summary-manager-remove-title" as any),
+        });
+      } else if (visualStatus === "running") {
+        buttonConfigs.push(
+          {
+            action: "stop",
+            label: getString("summary-manager-stop" as any),
+            className: buttonClass("default"),
+            title: getString("summary-manager-stop-title" as any),
+          },
+          {
+            action: "remove",
+            label: getString("summary-manager-remove" as any),
+            className: buttonClass("danger"),
+            title: getString("summary-manager-remove-title" as any),
+          },
+        );
+      } else if (visualStatus === "failed" || visualStatus === "cancelled") {
+        buttonConfigs.push(
+          {
+            action: "retry",
+            label: getString("summary-manager-retry" as any),
+            className: buttonClass("primary"),
+            title: getString("summary-manager-retry-title" as any),
+          },
+          {
+            action: "remove",
+            label: getString("summary-manager-remove" as any),
+            className: buttonClass("danger"),
+            title: getString("summary-manager-remove-title" as any),
+          },
+        );
+      } else if (visualStatus === "completed") {
+        if (task.kind === "web" && task.webConversationUrl) {
+          buttonConfigs.push({
+            action: "continue-chat",
+            label: getString("summary-manager-continue-chat" as any),
+            className: buttonClass("primary"),
+            title: getString("summary-manager-continue-chat" as any),
+          });
+        }
+        if (task.noteID) {
+          buttonConfigs.push({
+            action: "view-note",
+            label: getString("summary-manager-view-note" as any),
+            className: buttonClass("default"),
+            title: getString("summary-manager-view-note" as any),
+          });
+        }
+        buttonConfigs.push({
+          action: "remove",
+          label: getString("summary-manager-remove" as any),
+          className: buttonClass("danger"),
+          title: getString("summary-manager-remove-title" as any),
+        });
+      }
+      return buttonConfigs;
+    };
 
     const renderTaskRow = (task: SummaryTask) => {
         const selected = snapshot.selectedTaskId === task.id;
@@ -1396,84 +1499,21 @@ export class SummaryManagerWindow {
         status.style.alignItems = "center";
         status.style.gap = "8px";
         const stageText = String(task.stage || "").trim() || statusLabel(visualStatus);
+        const completedAtText =
+          visualStatus === "completed"
+            ? formatTaskTimeToMinute(task.finishedAt || task.updatedAt)
+            : "";
         const stageLabel = createHtmlElement(doc, "span");
-        stageLabel.textContent = stageText;
+        stageLabel.textContent = completedAtText
+          ? `${stageText} · ${completedAtText}`
+          : stageText;
         const progressLabel = createHtmlElement(doc, "span");
         progressLabel.textContent = progress || "";
         status.append(stageLabel, progressLabel);
 
         const actions = createHtmlElement(doc, "div");
         actions.className = "ainote-row-actions";
-
-        const buttonConfigs: Array<{
-          action: "stop" | "retry" | "remove" | "view" | "continue-chat" | "view-note";
-          label: string;
-          className: string;
-          title: string;
-        }> = [];
-        if (visualStatus === "pending") {
-          buttonConfigs.push({
-            action: "remove",
-            label: getString("summary-manager-remove" as any),
-            className: buttonClass("danger"),
-            title: getString("summary-manager-remove-title" as any),
-          });
-        } else if (visualStatus === "running") {
-          buttonConfigs.push(
-            {
-              action: "stop",
-              label: getString("summary-manager-stop" as any),
-              className: buttonClass("default"),
-              title: getString("summary-manager-stop-title" as any),
-            },
-            {
-              action: "remove",
-              label: getString("summary-manager-remove" as any),
-              className: buttonClass("danger"),
-              title: getString("summary-manager-remove-title" as any),
-            },
-          );
-        } else if (visualStatus === "failed" || visualStatus === "cancelled") {
-          buttonConfigs.push(
-            {
-              action: "retry",
-              label: getString("summary-manager-retry" as any),
-              className: buttonClass("primary"),
-              title: getString("summary-manager-retry-title" as any),
-            },
-            {
-              action: "remove",
-              label: getString("summary-manager-remove" as any),
-              className: buttonClass("danger"),
-              title: getString("summary-manager-remove-title" as any),
-            },
-          );
-        } else if (visualStatus === "completed") {
-          if (task.kind === "web" && task.webConversationUrl) {
-            buttonConfigs.push({
-              action: "continue-chat",
-              label: getString("summary-manager-continue-chat" as any),
-              className: buttonClass("primary"),
-              title: getString("summary-manager-continue-chat" as any),
-            });
-          }
-          if (task.noteID) {
-            buttonConfigs.push({
-              action: "view-note",
-              label: getString("summary-manager-view-note" as any),
-              className: buttonClass("default"),
-              title: getString("summary-manager-view-note" as any),
-            });
-          }
-          buttonConfigs.push({
-            action: "remove",
-            label: getString("summary-manager-remove" as any),
-            className: buttonClass("danger"),
-            title: getString("summary-manager-remove-title" as any),
-          });
-        }
-
-        buttonConfigs.forEach((buttonConfig) => {
+        getTaskButtonConfigs(task, visualStatus).forEach((buttonConfig) => {
           const button = createHtmlElement(doc, "button");
           button.className = buttonConfig.className;
           button.dataset.action = buttonConfig.action;
@@ -1487,10 +1527,74 @@ export class SummaryManagerWindow {
         return row;
     };
 
-    const activeSection = createHtmlElement(doc, "div");
-    activeSection.className = "ainote-section";
-    const historySection = createHtmlElement(doc, "div");
-    historySection.className = "ainote-section";
+    const getRowRenderKey = (task: SummaryTask, selected: boolean): string => {
+      const visualStatus = normalizeVisualStatus(task.status);
+      return [
+        selected ? "1" : "0",
+        visualStatus,
+        task.title || "",
+        String(task.progress ?? ""),
+        String(task.stage || ""),
+        String(task.noteID || ""),
+        String(task.webConversationUrl || ""),
+      ].join("|");
+    };
+
+    const upsertRows = (bodyEl: HTMLElement, tasks: SummaryTask[]) => {
+      const existing = new Map<string, HTMLElement>();
+      Array.from(bodyEl.querySelectorAll(".ainote-task-row")).forEach((node) => {
+        const row = node as HTMLElement;
+        const taskId = row.dataset.taskId;
+        if (taskId) existing.set(taskId, row);
+      });
+
+      const orderedRows: HTMLElement[] = [];
+      tasks.forEach((task) => {
+        const selected = snapshot.selectedTaskId === task.id;
+        const visualStatus = normalizeVisualStatus(task.status);
+        const renderKey = getRowRenderKey(task, selected);
+        const previous = existing.get(task.id);
+        if (previous && previous.dataset.renderKey === renderKey) {
+          // Theme switching does not change renderKey. Re-apply row appearance
+          // so reused DOM nodes can follow current dark/light colors.
+          applyTaskRowAppearance(previous, visualStatus, isDark, selected);
+          orderedRows.push(previous);
+          existing.delete(task.id);
+          return;
+        }
+        const row = renderTaskRow(task);
+        row.dataset.renderKey = renderKey;
+        orderedRows.push(row);
+        existing.delete(task.id);
+      });
+
+      existing.forEach((staleRow) => {
+        staleRow.remove();
+      });
+
+      if (!orderedRows.length) {
+        bodyEl.replaceChildren();
+      } else {
+        bodyEl.replaceChildren(...orderedRows);
+      }
+    };
+
+    let activeSection = listEl.querySelector(
+      '.ainote-section[data-section="active"]',
+    ) as HTMLElement | null;
+    let historySection = listEl.querySelector(
+      '.ainote-section[data-section="history"]',
+    ) as HTMLElement | null;
+    if (!activeSection || !historySection) {
+      listEl.replaceChildren();
+      activeSection = createHtmlElement(doc, "div");
+      activeSection.className = "ainote-section";
+      activeSection.dataset.section = "active";
+      historySection = createHtmlElement(doc, "div");
+      historySection.className = "ainote-section";
+      historySection.dataset.section = "history";
+      listEl.append(activeSection, historySection);
+    }
 
     const bothExpanded = !this.activeCollapsed && !this.historyCollapsed;
 
@@ -1567,23 +1671,37 @@ export class SummaryManagerWindow {
         },
       ],
     );
-    activeSection.appendChild(activeHeader);
+    const existingActiveHeader = activeSection.querySelector(
+      ".ainote-section-header",
+    ) as HTMLElement | null;
+    if (existingActiveHeader) {
+      existingActiveHeader.replaceWith(activeHeader);
+    } else {
+      activeSection.appendChild(activeHeader);
+    }
 
     if (!this.activeCollapsed) {
-      const body = createHtmlElement(doc, "div");
-      body.className = "ainote-section-body";
+      let body = activeSection.querySelector(
+        ".ainote-section-body",
+      ) as HTMLElement | null;
+      if (!body) {
+        body = createHtmlElement(doc, "div");
+        body.className = "ainote-section-body";
+        activeSection.appendChild(body);
+      }
       if (!activeTasks.length) {
         activeSection.classList.add("is-empty");
+        body.replaceChildren();
         const empty = createHtmlElement(doc, "div");
         empty.style.color = isDark ? "#9ca3af" : "#888";
         empty.textContent = getString("summary-manager-no-active" as any);
         body.appendChild(empty);
       } else {
         activeSection.classList.remove("is-empty");
-        activeTasks.forEach((task) => body.appendChild(renderTaskRow(task)));
+        upsertRows(body, activeTasks);
       }
-      activeSection.appendChild(body);
-
+    } else {
+      activeSection.querySelector(".ainote-section-body")?.remove();
     }
 
     const historyHeader = buildSectionHeader(
@@ -1599,25 +1717,38 @@ export class SummaryManagerWindow {
         },
       ],
     );
-    historySection.appendChild(historyHeader);
+    const existingHistoryHeader = historySection.querySelector(
+      ".ainote-section-header",
+    ) as HTMLElement | null;
+    if (existingHistoryHeader) {
+      existingHistoryHeader.replaceWith(historyHeader);
+    } else {
+      historySection.appendChild(historyHeader);
+    }
 
     if (!this.historyCollapsed) {
-      const body = createHtmlElement(doc, "div");
-      body.className = "ainote-section-body";
+      let body = historySection.querySelector(
+        ".ainote-section-body",
+      ) as HTMLElement | null;
+      if (!body) {
+        body = createHtmlElement(doc, "div");
+        body.className = "ainote-section-body";
+        historySection.appendChild(body);
+      }
       if (!historyTasks.length) {
         historySection.classList.add("is-empty");
+        body.replaceChildren();
         const empty = createHtmlElement(doc, "div");
         empty.style.color = isDark ? "#9ca3af" : "#888";
         empty.textContent = getString("summary-manager-no-history" as any);
         body.appendChild(empty);
       } else {
         historySection.classList.remove("is-empty");
-        historyTasks.forEach((task) => body.appendChild(renderTaskRow(task)));
+        upsertRows(body, historyTasks);
       }
-      historySection.appendChild(body);
+    } else {
+      historySection.querySelector(".ainote-section-body")?.remove();
     }
-
-    listEl.append(activeSection, historySection);
   }
 
   private renderDetail(snapshot: SummaryTaskSnapshot): void {
@@ -1757,6 +1888,12 @@ export class SummaryManagerWindow {
     const progressText = typeof task.progress === "number" ? `${task.progress}%` : "-";
     appendMetaLine(getString("summary-manager-progress" as any), `${stageText}  ${progressText}`);
     appendMetaLine(getString("summary-manager-model-meta" as any), task.model || "-");
+    if (visualStatus === "completed") {
+      appendMetaLine(
+        getString("summary-manager-completed-at" as any),
+        formatTaskTimeToMinute(task.finishedAt || task.updatedAt),
+      );
+    }
 
     if (task.error) {
       const errorBox = createHtmlElement(doc, "div");
