@@ -15,8 +15,10 @@ AiNote 是一款 Zotero 插件，用于在 Zotero 中调用大模型生成与处
 ## 功能亮点
 
 - **AI 智能总结 PDF**：一键生成学术论文的精炼笔记，支持多种 AI 服务。
+- **ChatGPT 网页版总结**：支持通过配套 Chrome 扩展连接 ChatGPT 网页版，自动发送提示词并回传总结内容。
 - **PDF 双处理模式**：支持 `base64 多模态模式` 和 `文本提取模式`，可按模型能力与速度需求选择。
 - **实时流式显示**：在弹出窗口中实时查看 AI 生成的内容，支持流式输出。
+- **条目总结窗口**：每个条目的总结过程与结果可在独立窗口中查看，便于追踪批量任务进度。
 - **批量处理**：可批量选择文献，统一生成笔记，每个条目内容清晰分隔。
 - **自动保存笔记**：流式输出完成后，内容自动保存到 Zotero 笔记中。
 - **提示词模板**：支持维护和切换常用提示词模板，便于不同总结任务复用。
@@ -29,11 +31,19 @@ AiNote 是一款 Zotero 插件，用于在 Zotero 中调用大模型生成与处
 - 在 Zotero 中选中一个或多个 PDF 文献。
 - 右键选择 `生成AI总结笔记`。
 - 在弹出的二级菜单中选择对应的提示词模板。
+- 如需通过 ChatGPT 网页版总结，可在插件设置中选择 `通过ChatGPT网页版总结`（需先安装并启用配套 Chrome 扩展）。
 - 插件会按照所选提示词模板的内容执行 AI 总结，并基于该模板名称自动命名生成的笔记。
 - 插件会弹出一个输出窗口，实时显示 AI 生成的内容。
+- 批量总结时可打开条目总结窗口，查看每个条目的处理状态、流式输出与完成情况。
 - 处理多个条目时，每个条目的内容会清晰标注并分隔显示。
 - 处理完成后，所有总结内容会自动保存到对应的 Zotero 笔记中。
 - 您可以随时关闭输出窗口。
+
+条目总结窗口示例（用于查看和管理任务进度与结果）：
+
+<div align="center">
+    <img src="./imgs/summary-window.png" alt="条目总结窗口示例" style="display:block; border-radius:12px; box-shadow: 0 8px 24px rgba(0,0,0,0.18);" />
+</div>
 
 ### 其他入口
 
@@ -51,6 +61,16 @@ AiNote 是一款 Zotero 插件，用于在 Zotero 中调用大模型生成与处
 1. 从 [GitHub 仓库](https://github.com/BlueBlueKitty/zotero-ainote/releases) 下载最新版本。
 2. 在 Zotero 中进入 `工具 > 插件`，安装 AiNote 插件。
 3. 如有需要，重启 Zotero。
+
+### 安装并启用 ChatGPT 网页版 Chrome 扩展
+1. 打开 Chrome，进入 `chrome://extensions/`。
+2. 在右上角开启 `开发者模式`。
+3. 点击 `加载已解压的扩展程序`。
+4. 下载[扩展 ZIP 文件](https://raw.githubusercontent.com/BlueBlueKitty/zotero-ainote/main/dist/ainote-web-extension-v0.1.0-edge.zip)，并解压到本地目录。
+5. 在 `加载已解压的扩展程序` 中选择刚解压后的目录，即可成功安装扩展。
+6. 打开扩展选项页，确认 `Bridge URL` 为 `http://127.0.0.1:23123`（默认即为此值）。点击“测试连接”，如果连接成功，便可使用ainote插件的ChatGPT网页总结功能了。
+
+**如果出现ChatGPT网页总结无法正常工作的情况，请及时更新zotero-ainote插件以及浏览器扩展。**
 
 ## 配置说明
 
@@ -73,6 +93,7 @@ AiNote 是一款 Zotero 插件，用于在 Zotero 中调用大模型生成与处
 - DeepSeek
 - OpenAI [Chat Completions 接口]
 - OpenAI [Responses 接口]
+- ChatGPT 网页版
 
 ## PDF 处理模式
 
