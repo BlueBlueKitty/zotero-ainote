@@ -63,8 +63,8 @@ AiNote 是一款 Zotero 插件，用于在 Zotero 中调用大模型生成与处
 3. 如有需要，重启 Zotero。
 
 ### 安装并启用 ChatGPT 网页版 Chrome 扩展
-1. 打开 Chrome，进入 `chrome://extensions/`。
-2. 在右上角开启 `开发者模式`。
+1. 打开系统默认浏览器，进入扩展管理界面。
+2. 开启 `开发者模式`。
 3. 点击 `加载已解压的扩展程序`。
 4. 下载[扩展 ZIP 文件](https://raw.githubusercontent.com/BlueBlueKitty/zotero-ainote/main/dist/ainote-web-extension-v0.1.0-edge.zip)，并解压到本地目录。
 5. 在 `加载已解压的扩展程序` 中选择刚解压后的目录，即可成功安装扩展。
