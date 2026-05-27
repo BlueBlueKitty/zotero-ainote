@@ -1,4 +1,3 @@
-import { getPref, setPref } from "../utils/prefs";
 import { SummaryTask, SummaryTaskStatus } from "./summaryTaskTypes";
 
 const HISTORY_FILE_NAME = "summary-history.json";
@@ -52,10 +51,7 @@ function canPrune(status: SummaryTaskStatus): boolean {
 }
 
 function getHistoryLimit(): number {
-  const raw = Number(getPref("maxSummaryHistoryRecords" as any));
-  if (!Number.isFinite(raw)) return DEFAULT_LIMIT;
-  if (raw < 0) return DEFAULT_LIMIT;
-  return raw;
+  return DEFAULT_LIMIT;
 }
 
 export class SummaryHistoryStore {
@@ -64,8 +60,7 @@ export class SummaryHistoryStore {
   }
 
   public static setLimit(limit: number): void {
-    const value = Number.isFinite(limit) && limit >= 0 ? Math.floor(limit) : DEFAULT_LIMIT;
-    setPref("maxSummaryHistoryRecords" as any, value as any);
+    void limit;
   }
 
   public static async load(): Promise<SummaryHistoryFile> {

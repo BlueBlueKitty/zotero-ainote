@@ -687,19 +687,21 @@ function getOwnerDocument(node: Node): Document {
 function replaceNodeRange(startNode: Node, endNode: Node, replacement: Node) {
   const parent = startNode.parentNode;
   if (!parent || parent !== endNode.parentNode) {
-    startNode.replaceWith(replacement);
+    if (parent) {
+      parent.replaceChild(replacement, startNode);
+    }
     return;
   }
 
   const insertionPoint = endNode.nextSibling;
   let current: Node | null = startNode;
   while (current) {
-    const next = current.nextSibling;
-    current.remove();
+    const nextNode: Node | null = current.nextSibling;
+    parent.removeChild(current);
     if (current === endNode) {
       break;
     }
-    current = next;
+    current = nextNode;
   }
   parent.insertBefore(replacement, insertionPoint);
 }

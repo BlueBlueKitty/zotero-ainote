@@ -4,25 +4,22 @@ import { ensurePromptTemplateState } from "../utils/prompts";
 import { parseProfiles } from "./llmProfiles";
 import {
   isActiveTask,
-  isHistoryTask,
   sortActiveTasks,
   sortHistoryTasks,
 } from "./summaryTaskPartition";
-import { SummaryHistoryStore } from "./summaryHistoryStore";
 import { OutputWindow } from "./outputWindow";
 import { SummaryTaskManager } from "./summaryTaskManager";
 import { SummaryTask, SummaryTaskSnapshot } from "./summaryTaskTypes";
 import { WebSummaryWorkflow } from "./webSummaryWorkflow";
 import { getString } from "../utils/locale";
 import { showToast } from "../utils/window";
+import { HistorySyncStore, HistoryRecord } from "./historySyncStore";
 
-const LIMIT_OPTIONS = [20, 50, 100, 200, 500, 0];
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const REQUIRED_ELEMENT_IDS = [
   "ainote-summary-manager",
   "ainote-profile-select",
   "ainote-template-select",
-  "ainote-history-limit",
   "ainote-task-list",
   "ainote-task-detail",
 ];
@@ -318,6 +315,11 @@ export class SummaryManagerWindow {
   private activeCollapsed = false;
   private historyCollapsed = false;
   private mathJaxInjected = false;
+  private historyRecords: HistoryRecord[] = [];
+  private historyLoaded = false;
+  private historyLoading = false;
+  private historySearch = "";
+  private historyContentRefreshing = new Set<string>();
 
   private async open(): Promise<void> {
     await this.manager.ensureLoaded();
@@ -351,6 +353,7 @@ export class SummaryManagerWindow {
         );
         this.initialized = false;
         this.controlsInitialized = false;
+        this.mathJaxInjected = false;
         this.initializePromise = null;
         this.isOpen = false;
       },
@@ -452,36 +455,6 @@ export class SummaryManagerWindow {
                     tag: "div",
                     namespace: "html",
                     id: "ainote-template-select",
-                    properties: { className: "ainote-custom-select" },
-                    children: [
-                      {
-                        tag: "button",
-                        namespace: "html",
-                        properties: {
-                          className: "ainote-select-trigger",
-                          type: "button",
-                          innerHTML: getString("summary-manager-loading" as any),
-                        },
-                      },
-                      {
-                        tag: "div",
-                        namespace: "html",
-                        properties: {
-                          className: "ainote-select-menu",
-                          hidden: true,
-                        },
-                      },
-                    ],
-                  },
-                  {
-                    tag: "label",
-                    namespace: "html",
-                    properties: { innerHTML: getString("summary-manager-history-limit" as any) },
-                  },
-                  {
-                    tag: "div",
-                    namespace: "html",
-                    id: "ainote-history-limit",
                     properties: { className: "ainote-custom-select" },
                     children: [
                       {
@@ -639,7 +612,6 @@ export class SummaryManagerWindow {
     this.bindEvents();
     this.ensureMathJax();
     this.populateTopSelectors(true);
-    this.populateHistoryLimit(true);
     this.installThemeListener();
     this.applyTheme();
 
@@ -649,6 +621,9 @@ export class SummaryManagerWindow {
     });
 
     this.initialized = true;
+    void this.refreshHistoryRecords(true).then(() => {
+      this.render(this.manager.getSnapshot());
+    });
     void this.stabilizeInitialRender();
   }
 
@@ -675,26 +650,12 @@ export class SummaryManagerWindow {
     const doc = this.dialog.window.document;
     doc.addEventListener("click", () => hideCustomSelectMenus(doc));
 
-    this.populateHistoryLimit(true);
-    const limitSelect = doc.getElementById(
-      "ainote-history-limit",
-    ) as Element | null;
-    if (limitSelect) {
-      const commitHistoryLimit = () => {
-        const value = parseInt(getCustomSelectValue(limitSelect), 10);
-        void this.manager.setHistoryLimit(Number.isFinite(value) ? value : 100);
-      };
-      this.bindCustomSelect(limitSelect, () => {
-        commitHistoryLimit();
-      });
-    }
-
     const clearBtn = doc.getElementById(
       "ainote-clear-history",
     ) as HTMLButtonElement | null;
     if (clearBtn) {
       bindButtonAction(clearBtn, () => {
-        void this.manager.clearHistory();
+        void this.clearHistoryRecords();
       });
     }
 
@@ -782,7 +743,7 @@ export class SummaryManagerWindow {
           this.manager.removeActiveTasks();
         }
         if (action === "clear-history") {
-          void this.manager.clearHistory();
+          void this.clearHistoryRecords();
         }
         return;
       }
@@ -797,7 +758,7 @@ export class SummaryManagerWindow {
         if (!taskId) return;
         if (action === "stop") this.manager.stopTask(taskId);
         if (action === "retry") this.manager.retryTask(taskId);
-        if (action === "remove") this.manager.removeTask(taskId);
+        if (action === "remove") void this.removeTaskEntry(taskId);
         if (action === "view") this.manager.setSelected(taskId);
         if (action === "continue-chat") {
           void this.openConversationForTask(taskId);
@@ -829,7 +790,7 @@ export class SummaryManagerWindow {
       if (!taskId) return;
       if (action === "stop") this.manager.stopTask(taskId);
       if (action === "retry") this.manager.retryTask(taskId);
-      if (action === "remove") this.manager.removeTask(taskId);
+      if (action === "remove") void this.removeTaskEntry(taskId);
       if (action === "view") this.manager.setSelected(taskId);
       if (action === "continue-chat") {
         void this.openConversationForTask(taskId);
@@ -838,10 +799,44 @@ export class SummaryManagerWindow {
         void this.openNoteForTask(taskId);
       }
     });
+
+    listEl?.addEventListener("input", (evt: Event) => {
+      const target = evt.target as HTMLInputElement;
+      if (!target || target.id !== "ainote-history-search") return;
+      this.historySearch = String(target.value || "");
+      this.render(this.manager.getSnapshot());
+    });
+  }
+
+  private async clearHistoryRecords(): Promise<void> {
+    try {
+      await HistorySyncStore.clearAll();
+      this.historyRecords = [];
+      this.historyLoaded = true;
+      this.render(this.manager.getSnapshot());
+    } catch (error) {
+      ztoolkit.log("[AiNote][SummaryManagerWindow] clear history records failed", error);
+    }
+  }
+
+  private async removeTaskEntry(taskId: string): Promise<void> {
+    const localTask = this.manager.getTaskById(taskId);
+    if (localTask) {
+      this.manager.removeTask(taskId);
+      return;
+    }
+    await HistorySyncStore.removeTask(taskId);
+    this.historyRecords = this.historyRecords.filter((record) => record.task.id !== taskId);
+    if (this.manager.getSnapshot().selectedTaskId === taskId) {
+      this.manager.setSelected(undefined);
+    }
+    this.render(this.manager.getSnapshot());
   }
 
   private async openConversationForTask(taskId: string): Promise<void> {
-    const task = this.manager.getTaskById(taskId);
+    const task =
+      this.manager.getTaskById(taskId) ||
+      this.getHistoryTasksForRender().find((entry) => entry.id === taskId);
     if (!task || task.kind !== "web" || task.status !== "completed") return;
     const item = Zotero.Items.get(task.itemID);
     if (!item) return;
@@ -861,7 +856,9 @@ export class SummaryManagerWindow {
   }
 
   private async openNoteForTask(taskId: string): Promise<void> {
-    const task = this.manager.getTaskById(taskId);
+    const task =
+      this.manager.getTaskById(taskId) ||
+      this.getHistoryTasksForRender().find((entry) => entry.id === taskId);
     const noteID = task?.noteID;
     if (!task || !noteID) {
       showToast(getString("selected-note-not-found" as any), "error");
@@ -934,11 +931,7 @@ export class SummaryManagerWindow {
         return;
       }
 
-      if (select.id === "ainote-history-limit") {
-        this.populateHistoryLimit(true);
-      } else {
-        this.populateTopSelectors(true);
-      }
+      this.populateTopSelectors(true);
       hideCustomSelectMenus(doc, select);
       menu.toggleAttribute("hidden");
     });
@@ -987,7 +980,6 @@ export class SummaryManagerWindow {
 
   private readonly handleWindowFocus = () => {
     this.populateTopSelectors(true);
-    this.populateHistoryLimit();
     this.render(this.manager.getSnapshot());
   };
 
@@ -1097,9 +1089,6 @@ export class SummaryManagerWindow {
         #ainote-summary-manager #ainote-profile-select,
         #ainote-summary-manager #ainote-template-select {
           width: 180px;
-        }
-        #ainote-summary-manager #ainote-history-limit {
-          width: 82px;
         }
         #ainote-summary-manager .ainote-select-trigger {
           width: 100%;
@@ -1346,28 +1335,29 @@ export class SummaryManagerWindow {
     this.controlsInitialized = true;
   }
 
-  private populateHistoryLimit(force = false): void {
-    const doc = this.dialog?.window?.document;
-    if (!doc) return;
-    const limitSelect = doc.getElementById(
-      "ainote-history-limit",
-    ) as Element | null;
-    if (!limitSelect) return;
+  private async refreshHistoryRecords(force = false): Promise<void> {
+    if (this.historyLoading) return;
+    if (this.historyLoaded && !force) return;
+    this.historyLoading = true;
+    try {
+      this.historyRecords = await HistorySyncStore.queryAll();
+      this.historyLoaded = true;
+    } catch (error) {
+      ztoolkit.log("[AiNote][SummaryManagerWindow] load history records failed", error);
+    } finally {
+      this.historyLoading = false;
+    }
+  }
 
-    populateCustomSelect(
-      doc,
-      limitSelect,
-      LIMIT_OPTIONS.map((n) => ({
-        value: String(n),
-        label: n === 0 ? getString("summary-manager-no-limit" as any) : String(n),
-      })),
-      String(SummaryHistoryStore.getLimit()),
-      force,
-    );
+  private getHistoryTasksForRender(): SummaryTask[] {
+    return this.historyRecords.map((record) => record.task);
   }
 
   private render(snapshot: SummaryTaskSnapshot): void {
     if (!this.dialog?.window) return;
+    if (!this.historyLoaded && !this.historyLoading) {
+      void this.refreshHistoryRecords().then(() => this.render(this.manager.getSnapshot()));
+    }
     this.applyTheme();
     const activeElement = this.dialog.window.document
       .activeElement as HTMLElement | null;
@@ -1376,7 +1366,6 @@ export class SummaryManagerWindow {
     );
     if (!selectorOpen) {
       this.populateTopSelectors(false);
-      this.populateHistoryLimit();
     }
     this.renderList(snapshot);
     this.renderDetail(snapshot);
@@ -1390,9 +1379,9 @@ export class SummaryManagerWindow {
     const isDark = this.isDarkTheme();
 
     const activeTasks = sortActiveTasks(snapshot.tasks.filter((task) => isActiveTask(task)));
-    const historyTasks = sortHistoryTasks(snapshot.tasks.filter((task) => isHistoryTask(task)));
+    const historyTasks = sortHistoryTasks(this.getHistoryTasksForRender());
 
-    if (!activeTasks.length && !historyTasks.length) {
+      if (!activeTasks.length && !historyTasks.length) {
       listEl.replaceChildren();
       const empty = createHtmlElement(doc, "div");
       empty.style.color = isDark ? "#9ca3af" : "#888";
@@ -1616,6 +1605,7 @@ export class SummaryManagerWindow {
       collapsed: boolean,
       toggleAction: "toggle-active" | "toggle-history",
       actions: Array<{ action: string; label: string; className: string }>,
+      extra?: HTMLElement | null,
     ) => {
       const header = createHtmlElement(doc, "div");
       header.className = "ainote-section-header";
@@ -1643,6 +1633,9 @@ export class SummaryManagerWindow {
         ? getString("summary-manager-expand" as any)
         : getString("summary-manager-collapse" as any);
       right.appendChild(toggle);
+      if (extra) {
+        right.appendChild(extra);
+      }
 
       header.append(title, right);
       return header;
@@ -1759,7 +1752,7 @@ export class SummaryManagerWindow {
     if (!detailEl) return;
     const task = snapshot.tasks.find(
       (entry) => entry.id === snapshot.selectedTaskId,
-    );
+    ) || this.getHistoryTasksForRender().find((entry) => entry.id === snapshot.selectedTaskId);
     const isDark = this.isDarkTheme();
     const visualStatus = task
       ? normalizeVisualStatus(task.status)
@@ -1774,7 +1767,11 @@ export class SummaryManagerWindow {
       return;
     }
 
-    const body = task.content || "";
+    if (!snapshot.tasks.some((entry) => entry.id === task.id)) {
+      void this.refreshHistoryTaskContentOnDemand(task.id);
+    }
+
+    const body = this.stripDuplicatedSummaryPreamble(task.content || "");
 
     const header = createHtmlElement(doc, "div");
     header.style.display = "flex";
@@ -1921,6 +1918,8 @@ export class SummaryManagerWindow {
     content.style.marginTop = "12px";
     content.style.borderTop = `1px solid ${isDark ? "#4b5563" : "#ddd"}`;
     content.style.paddingTop = "12px";
+    content.style.overflowWrap = "anywhere";
+    content.style.wordBreak = "break-word";
     if (body) {
       content.innerHTML = this.convertDetailMarkdownToHTML(body);
     } else {
@@ -1937,18 +1936,53 @@ export class SummaryManagerWindow {
     }
   }
 
+  private async refreshHistoryTaskContentOnDemand(taskId: string): Promise<void> {
+    if (this.historyContentRefreshing.has(taskId)) return;
+    this.historyContentRefreshing.add(taskId);
+    try {
+      const latest = await HistorySyncStore.resolveContent(taskId);
+      if (!latest) return;
+      const index = this.historyRecords.findIndex((record) => record.task.id === taskId);
+      if (index < 0) return;
+      const previous = this.historyRecords[index];
+      const changed =
+        (previous.task.content || "") !== (latest.task.content || "") ||
+        (previous.searchText || "") !== (latest.searchText || "");
+      if (!changed) return;
+      this.historyRecords[index] = latest;
+      if (this.manager.getSnapshot().selectedTaskId === taskId) {
+        this.render(this.manager.getSnapshot());
+      }
+    } catch {
+      // ignore on-demand refresh failures to keep detail panel responsive
+    } finally {
+      this.historyContentRefreshing.delete(taskId);
+    }
+  }
+
   private ensureMathJax(): void {
-    if (this.mathJaxInjected || !this.dialog?.window?.document) return;
-    this.mathJaxInjected = true;
+    if (!this.dialog?.window?.document) return;
     try {
       const doc = this.dialog.window.document;
       const win = this.dialog.window as any;
-      if (win.MathJax) return;
+      if (win.MathJax?.typesetPromise) {
+        return;
+      }
 
-      const configScript = doc.createElement("script");
-      configScript.type = "text/javascript";
-      configScript.text = `
-        window.MathJax = {
+      if (
+        this.mathJaxInjected &&
+        doc.getElementById("ainote-mathjax-script")
+      ) {
+        return;
+      }
+      this.mathJaxInjected = true;
+
+      if (!win.MathJax) {
+        const configScript = doc.createElement("script");
+        configScript.id = "ainote-mathjax-config";
+        configScript.type = "text/javascript";
+        configScript.text = `
+          window.MathJax = {
           tex: {
             // Do NOT enable single-$ delimiters here; they can accidentally
             // capture non-math text and produce giant broken SVG output.
@@ -1956,19 +1990,25 @@ export class SummaryManagerWindow {
             displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
             processEscapes: true
           },
-          svg: { fontCache: 'global' },
+          svg: {
+            fontCache: 'global'
+          },
           options: {
+            skipHtmlTags: { '[-]': ['pre'] },
+            enableMenu: false,
             enableAssistiveMml: false,
             renderActions: { assistiveMml: [] }
           }
         };
-      `;
-      doc.head.appendChild(configScript);
+        `;
+        doc.head.appendChild(configScript);
+      }
 
       const script = doc.createElement("script");
+      script.id = "ainote-mathjax-script";
       const candidates = [
+        `chrome://${config.addonRef}/content/lib/mathjax/es5/tex-chtml.js`,
         `chrome://${config.addonRef}/content/lib/mathjax/tex-svg.js`,
-        `chrome://${config.addonRef}/content/lib/mathjax/es5/tex-svg.js`,
       ];
       let idx = 0;
       script.src = candidates[idx];
@@ -1990,9 +2030,23 @@ export class SummaryManagerWindow {
     try {
       const win = this.dialog?.window as any;
       if (!win) return;
+      await this.waitForMathHostReady(element);
       let attempts = 0;
-      while (attempts < 10) {
+      while (attempts < 20) {
         if (win.MathJax?.typesetPromise) {
+          if (win.MathJax?.startup?.promise) {
+            await win.MathJax.startup.promise;
+          }
+          if (typeof win.MathJax.typesetClear === "function") {
+            win.MathJax.typesetClear([element]);
+          }
+          await win.MathJax.typesetPromise([element]);
+          // A short second pass helps avoid occasional NaNex/viewBox instability
+          // when the pane width is still settling right after mount.
+          await Zotero.Promise.delay(60);
+          if (typeof win.MathJax.typesetClear === "function") {
+            win.MathJax.typesetClear([element]);
+          }
           await win.MathJax.typesetPromise([element]);
           return;
         }
@@ -2004,9 +2058,71 @@ export class SummaryManagerWindow {
     }
   }
 
+  private async waitForMathHostReady(element: HTMLElement): Promise<void> {
+    let attempts = 0;
+    while (attempts < 20) {
+      const connected = element.isConnected;
+      const rect = element.getBoundingClientRect();
+      const style = this.dialog?.window?.getComputedStyle?.(element);
+      const visible = style ? style.display !== "none" && style.visibility !== "hidden" : true;
+      if (connected && visible && rect.width > 0) return;
+      attempts += 1;
+      await Zotero.Promise.delay(50);
+    }
+  }
+
   private convertDetailMarkdownToHTML(markdown: string): string {
     const normalized = this.normalizeInlineMathDelimiters(markdown);
-    return String(OutputWindow.convertMarkdownToHTMLCore(normalized));
+    const html = String(OutputWindow.convertMarkdownToHTMLCore(normalized));
+    return this.normalizeMathDelimitersInHTML(html);
+  }
+
+  private stripDuplicatedSummaryPreamble(content: string): string {
+    const raw = String(content || "");
+    if (!raw.trim()) return raw;
+
+    const lines = raw.replace(/\r\n?/g, "\n").split("\n");
+    let i = 0;
+    while (i < lines.length && !lines[i].trim()) i += 1;
+    if (i >= lines.length) return raw;
+
+    const normalizeMetaLine = (line: string): string =>
+      line
+        .replace(/<[^>]+>/g, "")
+        .replace(/\*\*/g, "")
+        .replace(/__/g, "")
+        .trim();
+    const isSummaryTitleLine = (line: string): boolean => {
+      const normalized = normalizeMetaLine(line).replace(/^#{1,6}\s*/, "");
+      return /^AI全文总结\s*-\s*/i.test(normalized);
+    };
+    const isModelLine = (line: string): boolean => {
+      const normalized = normalizeMetaLine(line);
+      return /^(模型|model)\s*[:：]\s*/i.test(normalized);
+    };
+    const isCompletedAtLine = (line: string): boolean => {
+      const normalized = normalizeMetaLine(line);
+      return /^(总结完成时间|完成时间|completed(?:\s+at|\s+time)?)\s*[:：]\s*/i.test(
+        normalized,
+      );
+    };
+
+    if (!isSummaryTitleLine(lines[i])) return raw;
+    i += 1;
+
+    // Remove adjacent blank/meta lines that duplicate header info already shown
+    // in the popup detail panel.
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim() || isModelLine(line) || isCompletedAtLine(line)) {
+        i += 1;
+        continue;
+      }
+      break;
+    }
+
+    const stripped = lines.slice(i).join("\n").replace(/^\s+/, "");
+    return stripped || raw;
   }
 
   private normalizeInlineMathDelimiters(markdown: string): string {
@@ -2017,5 +2133,58 @@ export class SummaryManagerWindow {
       /(^|[^\\$])\$([^\$\n]+?)\$(?!\$)/g,
       (_match, prefix: string, expr: string) => `${prefix}\\(${expr.trim()}\\)`,
     );
+  }
+
+  private normalizeMathDelimitersInHTML(html: string): string {
+    // Keep display/inlined math delimiters readable by MathJax even when
+    // markdown conversion escapes dollar symbols as entities.
+    let normalized = String(html || "")
+      .replace(/&#36;/g, "$")
+      .replace(/&dollar;/g, "$");
+
+    // Convert Zotero-style math pre blocks into standalone display containers
+    // so MathJax can reliably discover and typeset them.
+    normalized = normalized.replace(
+      /<pre\b[^>]*class=["'][^"']*\bmath\b[^"']*["'][^>]*>\s*([\s\S]*?)\s*<\/pre>/gi,
+      (_match, expr: string) => {
+        const raw = String(expr || "").trim();
+        const inner = this.stripOuterDisplayMathDelimiters(raw);
+        return `<div class="ainote-math-display">$$${inner}$$</div>`;
+      },
+    );
+
+    // Ensure display math appears as independent blocks for more stable parsing.
+    normalized = normalized.replace(
+      /<p>\s*\$\$([\s\S]*?)\$\$\s*<\/p>/g,
+      (_match, expr: string) => {
+        const inner = this.stripOuterDisplayMathDelimiters(String(expr || "").trim());
+        return `<div class="ainote-math-display">$$${inner}$$</div>`;
+      },
+    );
+
+    return normalized;
+  }
+
+  private stripOuterDisplayMathDelimiters(input: string): string {
+    let value = String(input || "").trim();
+
+    // Remove duplicated outer display delimiters like
+    // `$$$$ ... $$$$` / `$$...$$` / `\\[...\\]` before wrapping once.
+    while (
+      (value.startsWith("$$") && value.endsWith("$$") && value.length >= 4) ||
+      (value.startsWith("\\[") && value.endsWith("\\]") && value.length >= 4)
+    ) {
+      if (value.startsWith("$$") && value.endsWith("$$")) {
+        value = value.slice(2, -2).trim();
+        continue;
+      }
+      if (value.startsWith("\\[") && value.endsWith("\\]")) {
+        value = value.slice(2, -2).trim();
+        continue;
+      }
+      break;
+    }
+
+    return value;
   }
 }

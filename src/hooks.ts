@@ -132,7 +132,6 @@ function initializeDefaultPrefsOnStartup() {
     webSummaryChatGPTProjectUrl: "https://chatgpt.com",
     webSummaryChatGPTMode: "thinking",
     webSummaryEnableContinueChatMenu: true,
-    maxSummaryHistoryRecords: 100,
   };
 
   migrateToProfilesV3(

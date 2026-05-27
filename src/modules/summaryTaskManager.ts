@@ -10,6 +10,7 @@ import {
 import { isActiveTask, isHistoryTask } from "./summaryTaskPartition";
 import { SummaryRunner } from "./summaryRunner";
 import { getString } from "../utils/locale";
+import { HistorySyncStore } from "./historySyncStore";
 
 export interface EnqueueTarget {
   item: Zotero.Item;
@@ -54,10 +55,18 @@ export class SummaryTaskManager {
   public async ensureLoaded(): Promise<void> {
     if (this.loaded) return;
     const history = await SummaryHistoryStore.load();
-    this.tasks = history.tasks;
+    try {
+      await HistorySyncStore.importFromLegacyCompletedTasks(
+        history.tasks.filter((task) => task.status === "completed"),
+      );
+    } catch (error) {
+      ztoolkit.log("[AiNote][SummaryTaskManager] legacy history import failed", error);
+    }
+    this.tasks = history.tasks.filter((task) => task.status !== "completed");
     this.selectedTaskId = history.selectedTaskId || this.tasks.at(-1)?.id;
     this.loaded = true;
     this.emit();
+    await this.persist();
   }
 
   public subscribe(listener: Listener): () => void {
@@ -68,7 +77,7 @@ export class SummaryTaskManager {
 
   public getSnapshot(): SummaryTaskSnapshot {
     return {
-      tasks: [...this.tasks],
+      tasks: this.tasks.filter((task) => task.status !== "completed"),
       selectedTaskId: this.selectedTaskId,
     };
   }
@@ -298,13 +307,6 @@ export class SummaryTaskManager {
     await this.persist();
   }
 
-  public async setHistoryLimit(limit: number): Promise<void> {
-    SummaryHistoryStore.setLimit(limit);
-    this.tasks = SummaryHistoryStore.prune(this.tasks, SummaryHistoryStore.getLimit());
-    this.emit();
-    await this.persist();
-  }
-
   private async schedule(): Promise<void> {
     if (this.stopRequested) return;
     if (this.runningTaskId) return;
@@ -381,6 +383,17 @@ export class SummaryTaskManager {
       }
       task.finishedAt = now();
       task.updatedAt = now();
+      try {
+        await HistorySyncStore.recordCompleted(task);
+      } catch (error) {
+        ztoolkit.log("[AiNote][SummaryTaskManager] failed to sync completed history", error);
+      }
+      // Completed tasks are synced via notes/extra history and no longer kept
+      // in local active-task storage.
+      this.tasks = this.tasks.filter((entry) => entry.id !== task.id);
+      if (this.selectedTaskId === task.id) {
+        this.selectedTaskId = this.tasks.at(-1)?.id;
+      }
     } catch (error: any) {
       const current = this.getTaskById(task.id);
       if (!current || current.attempt !== attempt) {
