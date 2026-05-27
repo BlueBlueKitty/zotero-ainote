@@ -1,5 +1,6 @@
 import { getString } from "../utils/locale";
 import { runtimeT } from "../utils/runtimeLocale";
+import { normalizeMathInHtmlDom } from "./mathFormulaKernel";
 
 export type NoteFormatActionType =
   | "fix-math"
@@ -200,17 +201,9 @@ export function applyNoteFormatAction(
 export function fixMathInNoteHtml(noteHtml: string): NoteFormatResult {
   const doc = parseHtmlDocument(noteHtml);
   const body = getDocumentBody(doc);
-  const warnings: string[] = [];
-  const stats: MathFixStats = {
-    inlineFixed: 0,
-    blockFixed: 0,
-    riskySkipped: 0,
-    unsupportedWarnings: 0,
-  };
-
-  fixMathFenceCodeBlocks(body, stats);
-  fixStandaloneBlockFormulas(body, stats, warnings);
-  fixInlineMathInTextNodes(body, stats);
+  const normalized = normalizeMathInHtmlDom(body);
+  const warnings = normalized.warnings;
+  const stats: MathFixStats = { ...normalized.stats };
 
   const html = serializeDocumentBody(doc);
   const changed = html !== noteHtml;

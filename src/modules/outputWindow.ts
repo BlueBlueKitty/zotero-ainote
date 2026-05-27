@@ -1,6 +1,7 @@
 import { config } from "../../package.json";
 import { marked } from "marked";
 import { getString } from "../utils/locale";
+import { normalizeMathInMarkdown } from "./mathFormulaKernel";
 
 type OutputItemStatus = "processing" | "completed" | "failed" | "canceled";
 
@@ -1464,6 +1465,8 @@ export class OutputWindow {
    * @returns 转换后的 HTML（带样式，用于弹出窗口显示）
    */
   public static convertMarkdownToHTMLCore(markdown: string): string {
+    markdown = normalizeMathInMarkdown(markdown);
+
     // ===== 步骤 1: 保护公式，避免被 marked 误处理 =====
     const formulas: string[] = [];
     let html = markdown;
