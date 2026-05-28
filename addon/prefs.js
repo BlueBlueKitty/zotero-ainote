@@ -8,3 +8,5 @@ pref("__prefsPrefix__.promptTemplates", "[]");
 pref("__prefsPrefix__.activePromptTemplateId", "");
 pref("__prefsPrefix__.promptTemplatesVersion", 0);
 pref("__prefsPrefix__.truncateLength", "10");
+pref("__prefsPrefix__.summaryListSplitRatio", "0.3");
+pref("__prefsPrefix__.summaryListSplitRatioV2", "0.3");

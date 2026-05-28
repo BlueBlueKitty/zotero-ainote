@@ -320,6 +320,14 @@ export class SummaryManagerWindow {
   private historyLoading = false;
   private historySearch = "";
   private historyContentRefreshing = new Set<string>();
+  private readonly splitRatioPrefKey = "summaryListSplitRatioV2" as any;
+  private readonly legacySplitRatioPrefKey = "summaryListSplitRatio" as any;
+  private readonly splitRatioPrefFullKey = `${config.prefsPrefix}.summaryListSplitRatioV2`;
+  private listSplitRatio = 0.3;
+  private splitterBound = false;
+  private splitterDragging = false;
+  private readonly minSplitRatio = 0.2;
+  private readonly maxSplitRatio = 0.8;
 
   private async open(): Promise<void> {
     await this.manager.ensureLoaded();
@@ -355,6 +363,9 @@ export class SummaryManagerWindow {
         this.controlsInitialized = false;
         this.mathJaxInjected = false;
         this.initializePromise = null;
+        this.splitterBound = false;
+        this.splitterDragging = false;
+        this.saveListSplitRatio();
         this.isOpen = false;
       },
     };
@@ -611,6 +622,7 @@ export class SummaryManagerWindow {
 
     this.bindEvents();
     this.ensureMathJax();
+    this.loadListSplitRatio();
     this.populateTopSelectors(true);
     this.installThemeListener();
     this.applyTheme();
@@ -643,6 +655,111 @@ export class SummaryManagerWindow {
       "[AiNote][SummaryManagerWindow] Window content was not ready before initialization timed out",
     );
     return false;
+  }
+
+  private loadListSplitRatio(): void {
+    let stored: unknown;
+    let source = "Zotero.Prefs.get";
+    try {
+      stored = Zotero.Prefs.get(this.splitRatioPrefFullKey, true);
+    } catch {
+      source = "getPref fallback";
+      stored = getPref(this.splitRatioPrefKey);
+    }
+    let raw = Number(String(stored || ""));
+    if (!Number.isFinite(raw) || raw <= 0) {
+      const legacy = Number(String(getPref(this.legacySplitRatioPrefKey) || ""));
+      if (Number.isFinite(legacy) && legacy > 0) {
+        raw = legacy;
+        source = "legacy pref";
+      }
+    }
+    if (Number.isFinite(raw)) {
+      this.listSplitRatio = Math.max(
+        this.minSplitRatio,
+        Math.min(this.maxSplitRatio, raw),
+      );
+      return;
+    }
+    this.listSplitRatio = 0.3;
+  }
+
+  private saveListSplitRatio(): void {
+    const value = String(this.listSplitRatio);
+    try {
+      Zotero.Prefs.set(this.splitRatioPrefFullKey, value, true);
+      const verify = String(
+        Zotero.Prefs.get(this.splitRatioPrefFullKey, true) || "",
+      );
+      if (verify === value) return;
+    } catch {
+      // fallback below
+    }
+    setPref(this.splitRatioPrefKey, value as any);
+  }
+
+  private ensureSectionSplitter(
+    listEl: HTMLElement,
+    activeSection: HTMLElement,
+    historySection: HTMLElement,
+    enabled: boolean,
+  ): void {
+    const doc = this.dialog?.window?.document;
+    const win = this.dialog?.window;
+    if (!doc || !win) return;
+
+    let splitter = listEl.querySelector(
+      ".ainote-section-splitter",
+    ) as HTMLDivElement | null;
+    if (!splitter) {
+      splitter = createHtmlElement(doc, "div");
+      splitter.className = "ainote-section-splitter";
+      splitter.dataset.role = "section-splitter";
+      splitter.setAttribute("role", "separator");
+      splitter.setAttribute("aria-orientation", "horizontal");
+      splitter.tabIndex = -1;
+      activeSection.after(splitter);
+    } else if (splitter.previousElementSibling !== activeSection) {
+      activeSection.after(splitter);
+    }
+
+    splitter.style.display = enabled ? "block" : "none";
+    if (!enabled) return;
+
+    if (this.splitterBound) return;
+    this.splitterBound = true;
+
+    const onMouseMove = (evt: MouseEvent) => {
+      if (!this.splitterDragging) return;
+      const rect = listEl.getBoundingClientRect();
+      if (rect.height <= 0) return;
+      const ratio = (evt.clientY - rect.top) / rect.height;
+      this.listSplitRatio = Math.max(
+        this.minSplitRatio,
+        Math.min(this.maxSplitRatio, ratio),
+      );
+      activeSection.style.flex = `${this.listSplitRatio} 1 0`;
+      historySection.style.flex = `${1 - this.listSplitRatio} 1 0`;
+      this.saveListSplitRatio();
+    };
+
+    const endDrag = () => {
+      if (!this.splitterDragging) return;
+      this.splitterDragging = false;
+      doc.body.style.cursor = "";
+      this.saveListSplitRatio();
+    };
+
+    splitter.addEventListener("mousedown", (evt: MouseEvent) => {
+      evt.preventDefault();
+      this.splitterDragging = true;
+      doc.body.style.cursor = "row-resize";
+    });
+    doc.addEventListener("mousemove", onMouseMove);
+    doc.addEventListener("mouseup", endDrag);
+    win.addEventListener("mousemove", onMouseMove);
+    win.addEventListener("mouseup", endDrag);
+    win.addEventListener("blur", endDrag);
   }
 
   private bindEvents(): void {
@@ -1221,6 +1338,17 @@ export class SummaryManagerWindow {
           min-height: 0;
           overflow: hidden;
         }
+        #ainote-summary-manager .ainote-section-splitter {
+          height: 8px;
+          margin: 2px 0;
+          border-radius: 999px;
+          background: ${isDark ? "#4b5563" : "#d1d5db"};
+          cursor: row-resize;
+          flex: 0 0 auto;
+        }
+        #ainote-summary-manager .ainote-section-splitter:hover {
+          background: ${isDark ? "#6b7280" : "#9ca3af"};
+        }
         #ainote-summary-manager .ainote-section-header {
           display: flex;
           justify-content: space-between;
@@ -1248,8 +1376,8 @@ export class SummaryManagerWindow {
           padding: 8px;
         }
         #ainote-summary-manager .ainote-section.is-empty .ainote-section-body {
-          flex: 0 0 auto;
-          min-height: 56px;
+          flex: 1;
+          min-height: 0;
         }
         #ainote-summary-manager .ainote-section-footer {
           padding: 8px;
@@ -1590,13 +1718,15 @@ export class SummaryManagerWindow {
     if (this.activeCollapsed) {
       activeSection.style.flex = "0 0 auto";
       historySection.style.flex = "1 1 auto";
+      this.ensureSectionSplitter(listEl, activeSection, historySection, false);
     } else if (this.historyCollapsed) {
       activeSection.style.flex = "1 1 auto";
       historySection.style.flex = "0 0 auto";
+      this.ensureSectionSplitter(listEl, activeSection, historySection, false);
     } else if (bothExpanded) {
-      // When both are expanded, always split 50/50 even if one section is empty.
-      activeSection.style.flex = "1 1 0";
-      historySection.style.flex = "1 1 0";
+      activeSection.style.flex = `${this.listSplitRatio} 1 0`;
+      historySection.style.flex = `${1 - this.listSplitRatio} 1 0`;
+      this.ensureSectionSplitter(listEl, activeSection, historySection, true);
     }
 
     const buildSectionHeader = (

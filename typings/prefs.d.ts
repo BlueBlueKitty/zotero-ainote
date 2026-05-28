@@ -16,6 +16,8 @@ declare namespace _ZoteroTypes {
       "activePromptTemplateId": string;
       "promptTemplatesVersion": number;
       "truncateLength": string;
+      "summaryListSplitRatio": string;
+      "summaryListSplitRatioV2": string;
     };
   }
 }
