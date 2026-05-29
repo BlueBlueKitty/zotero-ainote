@@ -71,7 +71,7 @@ note-section-rollback-error = 章節操作失敗，已嘗試回滾原始內容
 note-section-number-duplicate-warning = 目前操作可能造成標題編號重複，請檢查後續標題編號。
 note-section-empty-note = 筆記內容為空，未執行修改
 note-section-heading-not-found = 未能定位目前標題，請重試。
-note-section-delete-confirm = 確定要刪除目前章節嗎？此操作不可撤銷。
+note-section-delete-confirm = 確定要刪除目前章節嗎？
 
 ## 錯誤 / 雜項
 note-format-unknown-action = 未知的筆記格式化操作: { $action }

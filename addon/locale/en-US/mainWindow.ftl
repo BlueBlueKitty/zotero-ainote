@@ -71,7 +71,7 @@ note-section-rollback-error = Section operation failed, attempted to rollback or
 note-section-number-duplicate-warning = This operation may cause duplicate heading numbers. Please check subsequent headings.
 note-section-empty-note = Note content is empty, no modification made
 note-section-heading-not-found = Could not locate current heading, please retry.
-note-section-delete-confirm = Are you sure you want to delete the current section? This action cannot be undone.
+note-section-delete-confirm = Are you sure you want to delete the current section?
 
 ## Error / misc
 note-format-unknown-action = Unknown note format action: { $action }
