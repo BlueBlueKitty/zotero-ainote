@@ -83,6 +83,21 @@ function extractYearFromDate(value: string): string {
   return match?.[1] || "-";
 }
 
+function formatSummaryManagerItemTitle(item: Zotero.Item): string {
+  const firstCreator = String(item.getField("firstCreator") || "").trim() || "Unknown";
+  const year = extractYearFromDate(String(item.getField("date") || ""));
+  const title = String(item.getField("title") || "").trim() || "Untitled";
+  return `${firstCreator} - ${year} - ${title}`;
+}
+
+function getSummaryManagerTaskTitle(task: SummaryTask): string {
+  const item = task.itemID ? Zotero.Items.get(task.itemID) : null;
+  if (item) {
+    return formatSummaryManagerItemTitle(item);
+  }
+  return String(task.title || "").trim() || "Untitled";
+}
+
 function statusColor(
   status: SummaryTask["status"],
   isDark: boolean,
@@ -1770,8 +1785,9 @@ export class SummaryManagerWindow {
 
         const title = createHtmlElement(doc, "div");
         title.className = "ainote-task-title";
-        title.textContent = task.title;
-        title.title = task.title;
+        const taskTitle = getSummaryManagerTaskTitle(task);
+        title.textContent = taskTitle;
+        title.title = taskTitle;
 
         const status = createHtmlElement(doc, "div");
         status.style.fontSize = "12px";
@@ -1815,7 +1831,7 @@ export class SummaryManagerWindow {
       return [
         selected ? "1" : "0",
         visualStatus,
-        task.title || "",
+        getSummaryManagerTaskTitle(task),
         String(task.progress ?? ""),
         String(task.stage || ""),
         String(task.noteID || ""),
@@ -2077,7 +2093,7 @@ export class SummaryManagerWindow {
 
     const title = createHtmlElement(doc, "h3");
     title.style.margin = "0";
-    title.textContent = task.title;
+    title.textContent = getSummaryManagerTaskTitle(task);
 
     const status = createHtmlElement(doc, "div");
     status.style.fontSize = "12px";
@@ -2206,15 +2222,11 @@ export class SummaryManagerWindow {
 
     detailEl.append(header, actions);
     const item = task.itemID ? Zotero.Items.get(task.itemID) : null;
-    const firstCreator = String(item?.getField?.("firstCreator") || "").trim() || "-";
     const publication =
       String(item?.getField?.("publicationTitle") || "").trim() ||
       String(item?.getField?.("proceedingsTitle") || "").trim() ||
       String(item?.getField?.("bookTitle") || "").trim() ||
       "-";
-    const year = extractYearFromDate(String(item?.getField?.("date") || ""));
-    appendItemMetaLine(getString("summary-manager-meta-author" as any), firstCreator);
-    appendItemMetaLine(getString("summary-manager-meta-year" as any), year);
     appendItemMetaLine(
       getString("summary-manager-meta-journal" as any),
       publication,
