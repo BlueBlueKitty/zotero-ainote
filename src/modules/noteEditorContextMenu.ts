@@ -32,6 +32,9 @@ interface WindowMenuState {
   scanHandler: () => void;
 }
 
+const boundEditorRoots = new WeakSet<HTMLElement>();
+const boundEditorDocuments = new WeakSet<Document>();
+
 const MENU_ACTIONS: MenuActionDefinition[] = [
   {
     id: "section-upgrade-heading",
@@ -102,7 +105,6 @@ export function installNoteEditorContextMenuForWindow(win: Window) {
     observer,
     scanHandler,
   });
-
   scanAndBindEditors();
 }
 
@@ -125,11 +127,6 @@ function scanAndBindEditors() {
 }
 
 function bindEditorInstance(editorInstance: Zotero.EditorInstance) {
-  if ((editorInstance as any).__ainoteContextMenuBound) {
-    ensureNativePopupBound(editorInstance);
-    return;
-  }
-
   const editorWindow = editorInstance._iframeWindow;
   const editorDocument = editorWindow?.document;
   const editorRoot = getEditorRoot(editorInstance);
@@ -137,57 +134,69 @@ function bindEditorInstance(editorInstance: Zotero.EditorInstance) {
     return;
   }
 
-  (editorInstance as any).__ainoteContextMenuBound = true;
   ensureNativePopupBound(editorInstance);
 
-  editorRoot.addEventListener(
-    "contextmenu",
-    (event: MouseEvent) => {
-      const heading = findClosestHeading(event.target as Node | null);
-      if (!heading) {
-        clearEditorContextMenuEvent(editorInstance);
+  if (!boundEditorRoots.has(editorRoot)) {
+    boundEditorRoots.add(editorRoot);
+    editorRoot.addEventListener(
+      "contextmenu",
+      (event: MouseEvent) => {
+        const heading = findClosestHeading(event.target as Node | null);
+        if (!heading) {
+          clearEditorContextMenuEvent(editorInstance);
+          hideCustomContextMenu(editorDocument);
+          return;
+        }
+
+        recordEditorContextMenuEvent(editorInstance, event);
+        ensureNativePopupBound(editorInstance);
+        const popup = getNativePopupElement(editorInstance);
+        if (!popup) {
+          event.preventDefault();
+          openCustomContextMenu(editorInstance, event);
+        }
+      },
+      true,
+    );
+  }
+
+  if (!boundEditorDocuments.has(editorDocument)) {
+    boundEditorDocuments.add(editorDocument);
+    editorDocument.addEventListener(
+      "click",
+      () => {
         hideCustomContextMenu(editorDocument);
-        return;
-      }
+        clearEditorContextMenuEvent(editorInstance);
+      },
+      true,
+    );
 
-      recordEditorContextMenuEvent(editorInstance, event);
-      ensureNativePopupBound(editorInstance);
-      const popup = getNativePopupElement(editorInstance);
-      if (!popup) {
-        event.preventDefault();
-        openCustomContextMenu(editorInstance, event);
-      }
-    },
-    true,
-  );
-
-  editorDocument.addEventListener(
-    "click",
-    () => {
-      hideCustomContextMenu(editorDocument);
-      clearEditorContextMenuEvent(editorInstance);
-    },
-    true,
-  );
-
-  editorDocument.addEventListener(
-    "keydown",
-    () => {
-      hideCustomContextMenu(editorDocument);
-    },
-    true,
-  );
+    editorDocument.addEventListener(
+      "keydown",
+      () => {
+        hideCustomContextMenu(editorDocument);
+      },
+      true,
+    );
+  }
 }
 
 function ensureNativePopupBound(editorInstance: Zotero.EditorInstance) {
   const popup = getNativePopupElement(editorInstance);
-  if (!popup || (popup as any).__ainoteContextMenuBound) {
+  if (!popup) {
+    return;
+  }
+  (popup as any).__ainoteCurrentEditorInstance = editorInstance;
+  if ((popup as any).__ainoteContextMenuBound) {
     return;
   }
 
   (popup as any).__ainoteContextMenuBound = true;
   popup.addEventListener("popupshowing", () => {
-    ensureNativePopupMenuItems(editorInstance, popup);
+    const activeEditor =
+      ((popup as any).__ainoteCurrentEditorInstance as Zotero.EditorInstance | undefined) ||
+      editorInstance;
+    ensureNativePopupMenuItems(activeEditor, popup);
   });
   ensureNativePopupMenuItems(editorInstance, popup);
 }
@@ -205,6 +214,8 @@ function ensureNativePopupMenuItems(
   if (!separator) {
     separator = doc.createXULElement("menuseparator") as any;
     separator.id = MENU_SEPARATOR_ID;
+  }
+  if (separator.parentNode !== popup) {
     popup.appendChild(separator);
   }
 
@@ -218,6 +229,8 @@ function ensureNativePopupMenuItems(
     rootMenu.setAttribute("label", getString("note-section-menu"));
     rootMenu.setAttribute("class", "menu-iconic");
     rootMenu.setAttribute("image", MENU_ICON);
+  }
+  if (rootMenu.parentNode !== popup) {
     popup.appendChild(rootMenu);
   }
   rootMenu.hidden = !hasHeadingContext;
@@ -226,6 +239,8 @@ function ensureNativePopupMenuItems(
   if (!submenuPopup) {
     submenuPopup = doc.createXULElement("menupopup") as any;
     submenuPopup.id = ROOT_SUBMENU_POPUP_ID;
+  }
+  if (submenuPopup.parentNode !== rootMenu) {
     rootMenu.appendChild(submenuPopup);
   }
 
