@@ -320,14 +320,21 @@ export class SummaryManagerWindow {
   private historyLoading = false;
   private historySearch = "";
   private historyContentRefreshing = new Set<string>();
+  private readonly mainPaneSplitRatioPrefKey = "summaryMainPaneSplitRatioV1" as any;
+  private readonly mainPaneSplitRatioPrefFullKey = `${config.prefsPrefix}.summaryMainPaneSplitRatioV1`;
+  private mainPaneSplitRatio = 0.35;
+  private mainSplitterBound = false;
+  private mainSplitterDragging = false;
+  private readonly mainMinLeftWidthPx = 280;
+  private readonly mainMinRightWidthPx = 360;
   private readonly splitRatioPrefKey = "summaryListSplitRatioV2" as any;
   private readonly legacySplitRatioPrefKey = "summaryListSplitRatio" as any;
   private readonly splitRatioPrefFullKey = `${config.prefsPrefix}.summaryListSplitRatioV2`;
   private listSplitRatio = 0.3;
   private splitterBound = false;
   private splitterDragging = false;
-  private readonly minSplitRatio = 0.2;
-  private readonly maxSplitRatio = 0.8;
+  private readonly minSplitRatio = 0.3;
+  private readonly maxSplitRatio = 0.7;
 
   private async open(): Promise<void> {
     await this.manager.ensureLoaded();
@@ -363,8 +370,11 @@ export class SummaryManagerWindow {
         this.controlsInitialized = false;
         this.mathJaxInjected = false;
         this.initializePromise = null;
+        this.mainSplitterBound = false;
+        this.mainSplitterDragging = false;
         this.splitterBound = false;
         this.splitterDragging = false;
+        this.saveMainPaneSplitRatio();
         this.saveListSplitRatio();
         this.isOpen = false;
       },
@@ -508,11 +518,11 @@ export class SummaryManagerWindow {
                 tag: "div",
                 id: "ainote-task-list-pane",
                 styles: {
-                  width: "360px",
-                  borderRight: "1px solid #ddd",
+                  width: "35%",
                   display: "flex",
                   flexDirection: "column",
                   minHeight: "0",
+                  minWidth: "0",
                   overflow: "hidden",
                 },
                 children: [
@@ -574,6 +584,17 @@ export class SummaryManagerWindow {
               },
               {
                 tag: "div",
+                id: "ainote-main-splitter",
+                styles: {
+                  width: "8px",
+                  cursor: "col-resize",
+                  flex: "0 0 auto",
+                  userSelect: "none",
+                  touchAction: "none",
+                },
+              },
+              {
+                tag: "div",
                 id: "ainote-task-detail",
                 styles: {
                   flex: "1",
@@ -622,6 +643,7 @@ export class SummaryManagerWindow {
 
     this.bindEvents();
     this.ensureMathJax();
+    this.loadMainPaneSplitRatio();
     this.loadListSplitRatio();
     this.populateTopSelectors(true);
     this.installThemeListener();
@@ -682,6 +704,125 @@ export class SummaryManagerWindow {
       return;
     }
     this.listSplitRatio = 0.3;
+  }
+
+  private computeMainPaneClampedRatio(ratio: number): number {
+    const doc = this.dialog?.window?.document;
+    const mainEl = doc?.getElementById("ainote-main") as HTMLElement | null;
+    const splitterEl = doc?.getElementById("ainote-main-splitter") as HTMLElement | null;
+    const width = mainEl?.getBoundingClientRect().width || 0;
+    const splitterWidth = splitterEl?.getBoundingClientRect().width || 8;
+    if (width <= splitterWidth + 10) {
+      return Math.max(0.2, Math.min(0.8, ratio));
+    }
+    const usable = Math.max(1, width - splitterWidth);
+    const minRatio = this.mainMinLeftWidthPx / usable;
+    const maxRatio = 1 - this.mainMinRightWidthPx / usable;
+    if (minRatio > maxRatio) {
+      return Math.max(0.2, Math.min(0.8, ratio));
+    }
+    return Math.max(minRatio, Math.min(maxRatio, ratio));
+  }
+
+  private applyMainPaneSplitRatio(ratio?: number): void {
+    const doc = this.dialog?.window?.document;
+    if (!doc) return;
+    const listPane = doc.getElementById("ainote-task-list-pane") as HTMLElement | null;
+    const detailPane = doc.getElementById("ainote-task-detail") as HTMLElement | null;
+    const splitter = doc.getElementById("ainote-main-splitter") as HTMLElement | null;
+    if (!listPane || !detailPane || !splitter) return;
+
+    const nextRatio = this.computeMainPaneClampedRatio(
+      Number.isFinite(ratio as number) ? (ratio as number) : this.mainPaneSplitRatio,
+    );
+    this.mainPaneSplitRatio = nextRatio;
+    listPane.style.flex = `0 0 calc(${(nextRatio * 100).toFixed(4)}% - ${splitter.getBoundingClientRect().width || 8}px)`;
+    listPane.style.width = "";
+    detailPane.style.flex = "1 1 auto";
+    detailPane.style.minWidth = "0";
+  }
+
+  private loadMainPaneSplitRatio(): void {
+    let raw = Number(
+      String(Zotero.Prefs.get(this.mainPaneSplitRatioPrefFullKey, true) || ""),
+    );
+    if (!Number.isFinite(raw) || raw <= 0 || raw >= 1) {
+      raw = Number(String(getPref(this.mainPaneSplitRatioPrefKey) || ""));
+    }
+    if (!Number.isFinite(raw) || raw <= 0 || raw >= 1) {
+      raw = 0.35;
+    }
+    this.mainPaneSplitRatio = raw;
+    this.applyMainPaneSplitRatio(raw);
+  }
+
+  private saveMainPaneSplitRatio(): void {
+    const value = String(this.mainPaneSplitRatio);
+    try {
+      Zotero.Prefs.set(this.mainPaneSplitRatioPrefFullKey, value, true);
+      const verify = String(
+        Zotero.Prefs.get(this.mainPaneSplitRatioPrefFullKey, true) || "",
+      );
+      if (verify === value) return;
+    } catch {
+      // fallback below
+    }
+    setPref(this.mainPaneSplitRatioPrefKey, value as any);
+  }
+
+  private ensureMainPaneSplitter(): void {
+    const doc = this.dialog?.window?.document;
+    const win = this.dialog?.window;
+    if (!doc || !win) return;
+    const mainEl = doc.getElementById("ainote-main") as HTMLElement | null;
+    const splitter = doc.getElementById("ainote-main-splitter") as HTMLElement | null;
+    const listPane = doc.getElementById("ainote-task-list-pane") as HTMLElement | null;
+    if (!mainEl || !splitter || !listPane) return;
+
+    this.applyMainPaneSplitRatio();
+    if (this.mainSplitterBound) return;
+    this.mainSplitterBound = true;
+
+    let lastSaveTs = 0;
+    const maybeSave = (force = false) => {
+      const now = Date.now();
+      if (force || now - lastSaveTs >= 150) {
+        lastSaveTs = now;
+        this.saveMainPaneSplitRatio();
+      }
+    };
+
+    const onMouseMove = (evt: MouseEvent) => {
+      if (!this.mainSplitterDragging) return;
+      const rect = mainEl.getBoundingClientRect();
+      const splitterWidth = splitter.getBoundingClientRect().width || 8;
+      const usable = Math.max(1, rect.width - splitterWidth);
+      const rawRatio = (evt.clientX - rect.left) / usable;
+      this.applyMainPaneSplitRatio(rawRatio);
+      maybeSave(false);
+    };
+
+    const endDrag = () => {
+      if (!this.mainSplitterDragging) return;
+      this.mainSplitterDragging = false;
+      doc.body.style.cursor = "";
+      maybeSave(true);
+    };
+
+    splitter.addEventListener("mousedown", (evt: MouseEvent) => {
+      evt.preventDefault();
+      this.mainSplitterDragging = true;
+      doc.body.style.cursor = "col-resize";
+    });
+    doc.addEventListener("mousemove", onMouseMove);
+    doc.addEventListener("mouseup", endDrag);
+    win.addEventListener("mousemove", onMouseMove);
+    win.addEventListener("mouseup", endDrag);
+    win.addEventListener("blur", endDrag);
+    win.addEventListener("resize", () => {
+      this.applyMainPaneSplitRatio();
+      this.saveMainPaneSplitRatio();
+    });
   }
 
   private saveListSplitRatio(): void {
@@ -765,6 +906,7 @@ export class SummaryManagerWindow {
   private bindEvents(): void {
     if (!this.dialog?.window) return;
     const doc = this.dialog.window.document;
+    this.ensureMainPaneSplitter();
     doc.addEventListener("click", () => hideCustomSelectMenus(doc));
 
     const clearBtn = doc.getElementById(
@@ -1092,11 +1234,13 @@ export class SummaryManagerWindow {
 
   private readonly handleThemeChange = () => {
     this.applyTheme();
+    this.applyMainPaneSplitRatio();
     this.render(this.manager.getSnapshot());
   };
 
   private readonly handleWindowFocus = () => {
     this.populateTopSelectors(true);
+    this.applyMainPaneSplitRatio();
     this.render(this.manager.getSnapshot());
   };
 
@@ -1117,6 +1261,7 @@ export class SummaryManagerWindow {
     const listEl = doc.getElementById("ainote-task-list");
     const detailEl = doc.getElementById("ainote-task-detail");
     root?.getBoundingClientRect();
+    (doc.getElementById("ainote-main") as HTMLElement | null)?.getBoundingClientRect();
     listEl?.getBoundingClientRect();
     detailEl?.getBoundingClientRect();
   }
@@ -1177,7 +1322,18 @@ export class SummaryManagerWindow {
           min-height: 0;
         }
         #ainote-task-list, #ainote-task-detail { background: ${isDark ? "#2b2b2b" : "#ffffff"}; }
-        #ainote-task-list-pane { min-height: 0; overflow: hidden; }
+        #ainote-task-list-pane { min-height: 0; min-width: 0; overflow: hidden; border-right: 1px solid ${isDark ? "#4b5563" : "#d1d5db"}; }
+        #ainote-main-splitter {
+          width: 8px;
+          cursor: col-resize;
+          flex: 0 0 auto;
+          background: ${isDark ? "#3f4652" : "#e5e7eb"};
+          border-left: 1px solid ${isDark ? "#4b5563" : "#d1d5db"};
+          border-right: 1px solid ${isDark ? "#4b5563" : "#d1d5db"};
+        }
+        #ainote-main-splitter:hover {
+          background: ${isDark ? "#5b6474" : "#cbd5e1"};
+        }
         #ainote-task-list {
           overflow: hidden !important;
           overflow-y: hidden !important;
@@ -1389,6 +1545,9 @@ export class SummaryManagerWindow {
           background: ${isDark ? "#23262d" : "#f8fafc"};
         }
         #ainote-summary-manager .ainote-task-title {
+          display: block;
+          min-width: 0;
+          max-width: 100%;
           font-size: 13px;
           font-weight: 600;
           line-height: 1.4;

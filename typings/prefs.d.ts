@@ -18,6 +18,7 @@ declare namespace _ZoteroTypes {
       "truncateLength": string;
       "summaryListSplitRatio": string;
       "summaryListSplitRatioV2": string;
+      "summaryMainPaneSplitRatioV1": string;
     };
   }
 }

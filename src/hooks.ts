@@ -133,6 +133,7 @@ function initializeDefaultPrefsOnStartup() {
     webSummaryChatGPTMode: "thinking",
     webSummaryEnableContinueChatMenu: true,
     summaryListSplitRatioV2: "0.3",
+    summaryMainPaneSplitRatioV1: "0.35",
   };
 
   migrateToProfilesV3(
