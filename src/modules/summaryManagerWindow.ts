@@ -120,7 +120,7 @@ function rowBackgroundColor(
   selected: boolean,
 ): string {
   void status;
-  if (selected) return isDark ? "#2f3440" : "#eef1f5";
+  if (selected) return isDark ? "#334155" : "#dbeafe";
   return isDark ? "#2a2f39" : "#ffffff";
 }
 
@@ -166,15 +166,16 @@ function applyTaskRowAppearance(
   selected: boolean,
 ): void {
   const background = rowBackgroundColor(status, isDark, selected);
+  const accent = rowAccentColor(status, isDark, selected);
   row.style.setProperty(
     "border",
     `2px solid ${rowBorderColor(status, isDark, selected)}`,
     "important",
   );
-  row.style.setProperty("border-left-width", "6px", "important");
+  row.style.setProperty("border-left-width", selected ? "10px" : "6px", "important");
   row.style.setProperty(
     "border-left-color",
-    rowAccentColor(status, isDark, selected),
+    accent,
     "important",
   );
   row.style.borderRadius = "8px";
@@ -183,6 +184,15 @@ function applyTaskRowAppearance(
   row.style.cursor = "pointer";
   row.style.setProperty("background", background, "important");
   row.style.setProperty("background-color", background, "important");
+  row.style.setProperty(
+    "box-shadow",
+    selected
+      ? isDark
+        ? `0 0 0 3px ${accent}66, 0 14px 28px rgba(0, 0, 0, 0.42)`
+        : `0 0 0 2px ${accent}33, 0 8px 20px rgba(29, 78, 216, 0.12)`
+      : "none",
+    "important",
+  );
 }
 
 function buttonClass(variant: "default" | "danger" | "primary" = "default") {
@@ -1572,10 +1582,15 @@ export class SummaryManagerWindow {
           max-width: 100%;
           font-size: 13px;
           font-weight: 600;
+          color: ${isDark ? "#f3f4f6" : "#111827"};
           line-height: 1.4;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
+        }
+        #ainote-summary-manager .ainote-task-row.is-selected .ainote-task-title {
+          font-weight: 700;
+          color: ${isDark ? "#ffffff" : "#0f172a"};
         }
         #ainote-task-detail mjx-container,
         #ainote-task-detail .MathJax {
