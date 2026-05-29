@@ -76,6 +76,13 @@ function formatTaskTimeToMinute(timestamp?: number): string {
   return `${year}-${month}-${day} ${hour}:${minute}`;
 }
 
+function extractYearFromDate(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "-";
+  const match = raw.match(/(1[5-9]\d{2}|20\d{2}|21\d{2})/);
+  return match?.[1] || "-";
+}
+
 function statusColor(
   status: SummaryTask["status"],
   isDark: boolean,
@@ -2159,6 +2166,34 @@ export class SummaryManagerWindow {
     });
 
     const metaColor = isDark ? "#cbd5e1" : "#666";
+    const appendItemMetaLine = (label: string, value: string, ellipsis = false) => {
+      const line = createHtmlElement(doc, "div");
+      line.style.fontSize = "12px";
+      line.style.color = metaColor;
+      line.style.marginTop = "4px";
+      line.style.display = "flex";
+      line.style.alignItems = "center";
+      line.style.gap = "4px";
+
+      const labelEl = createHtmlElement(doc, "span");
+      labelEl.style.flex = "0 0 auto";
+      labelEl.textContent = `${label}：`;
+
+      const valueEl = createHtmlElement(doc, "span");
+      valueEl.style.flex = "1";
+      valueEl.style.minWidth = "0";
+      valueEl.textContent = value || "-";
+      valueEl.title = value || "-";
+      if (ellipsis) {
+        valueEl.style.display = "inline-block";
+        valueEl.style.overflow = "hidden";
+        valueEl.style.whiteSpace = "nowrap";
+        valueEl.style.textOverflow = "ellipsis";
+      }
+
+      line.append(labelEl, valueEl);
+      detailEl.appendChild(line);
+    };
     const appendMetaLine = (label: string, value: string) => {
       const line = createHtmlElement(doc, "div");
       line.style.fontSize = "12px";
@@ -2170,6 +2205,22 @@ export class SummaryManagerWindow {
     };
 
     detailEl.append(header, actions);
+    const item = task.itemID ? Zotero.Items.get(task.itemID) : null;
+    const firstCreator = String(item?.getField?.("firstCreator") || "").trim() || "-";
+    const publication =
+      String(item?.getField?.("publicationTitle") || "").trim() ||
+      String(item?.getField?.("proceedingsTitle") || "").trim() ||
+      String(item?.getField?.("bookTitle") || "").trim() ||
+      "-";
+    const year = extractYearFromDate(String(item?.getField?.("date") || ""));
+    appendItemMetaLine(getString("summary-manager-meta-author" as any), firstCreator);
+    appendItemMetaLine(getString("summary-manager-meta-year" as any), year);
+    appendItemMetaLine(
+      getString("summary-manager-meta-journal" as any),
+      publication,
+      true,
+    );
+
     const stageText = String(task.stage || "").trim() || statusLabel(visualStatus);
     const progressText = typeof task.progress === "number" ? `${task.progress}%` : "-";
     appendMetaLine(getString("summary-manager-progress" as any), `${stageText}  ${progressText}`);
