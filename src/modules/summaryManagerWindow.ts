@@ -98,6 +98,59 @@ function getSummaryManagerTaskTitle(task: SummaryTask): string {
   return String(task.title || "").trim() || "Untitled";
 }
 
+function inferTemplateNameFromTaskTitle(taskTitle: string): string {
+  const raw = String(taskTitle || "").trim();
+  if (!raw) return "";
+  const splitIndex = raw.indexOf(" - ");
+  if (splitIndex <= 0) return "";
+  const left = raw.slice(0, splitIndex).trim();
+  const right = raw.slice(splitIndex + 3).trim();
+  if (!left || !right) return "";
+  return left;
+}
+
+function inferTemplateNameFromContent(content: string): string {
+  const raw = String(content || "").trim();
+  if (!raw) return "";
+  const plain = raw.replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ");
+  const firstLine = plain.split(/\r?\n/).find((line) => String(line || "").trim());
+  if (!firstLine) return "";
+  const normalized = firstLine.replace(/^#{1,6}\s+/, "").trim();
+  if (!normalized) return "";
+  const splitIndex = normalized.indexOf(" - ");
+  if (splitIndex <= 0) return "";
+  const left = normalized.slice(0, splitIndex).trim();
+  const right = normalized.slice(splitIndex + 3).trim();
+  if (!left || !right) return "";
+  if (/^h[1-6]$/i.test(left)) return "";
+  return left;
+}
+
+function getCurrentPromptTemplateNames(): string[] {
+  const state = ensurePromptTemplateState(
+    getPref("promptTemplates" as any),
+    getPref("activePromptTemplateId" as any),
+    getPref("promptTemplatesVersion" as any),
+  );
+  return state.templates
+    .map((template) => String(template.name || "").trim())
+    .filter(Boolean);
+}
+
+function getPromptTemplateNameById(templateId?: string): string {
+  const wantedId = String(templateId || "").trim();
+  if (!wantedId) return "";
+  const state = ensurePromptTemplateState(
+    getPref("promptTemplates" as any),
+    getPref("activePromptTemplateId" as any),
+    getPref("promptTemplatesVersion" as any),
+  );
+  return (
+    state.templates.find((template) => String(template.id || "").trim() === wantedId)
+      ?.name || ""
+  ).trim();
+}
+
 function statusColor(
   status: SummaryTask["status"],
   isDark: boolean,
@@ -350,6 +403,7 @@ export class SummaryManagerWindow {
   private historyRecords: HistoryRecord[] = [];
   private historyLoaded = false;
   private historyLoading = false;
+  private lastActiveTaskIds = new Set<string>();
   private historySearch = "";
   private historyContentRefreshing = new Set<string>();
   private readonly mainPaneSplitRatioPrefKey = "summaryMainPaneSplitRatioV1" as any;
@@ -402,6 +456,7 @@ export class SummaryManagerWindow {
         this.controlsInitialized = false;
         this.mathJaxInjected = false;
         this.initializePromise = null;
+        this.lastActiveTaskIds.clear();
         this.mainSplitterBound = false;
         this.mainSplitterDragging = false;
         this.splitterBound = false;
@@ -683,8 +738,21 @@ export class SummaryManagerWindow {
 
     this.unsubscribe?.();
     this.unsubscribe = this.manager.subscribe((snapshot) => {
+      const nextActiveTaskIds = new Set(snapshot.tasks.map((task) => task.id));
+      const removedActiveTaskIds = Array.from(this.lastActiveTaskIds).filter(
+        (taskId) => !nextActiveTaskIds.has(taskId),
+      );
+      this.lastActiveTaskIds = nextActiveTaskIds;
       this.render(snapshot);
+      if (removedActiveTaskIds.length > 0) {
+        void this.refreshHistoryRecords(true).then(() => {
+          this.render(this.manager.getSnapshot());
+        });
+      }
     });
+    this.lastActiveTaskIds = new Set(
+      this.manager.getSnapshot().tasks.map((task) => task.id),
+    );
 
     this.initialized = true;
     void this.refreshHistoryRecords(true).then(() => {
@@ -1704,6 +1772,14 @@ export class SummaryManagerWindow {
 
     const activeTasks = sortActiveTasks(snapshot.tasks.filter((task) => isActiveTask(task)));
     const historyTasks = sortHistoryTasks(this.getHistoryTasksForRender());
+    const templateState = ensurePromptTemplateState(
+      getPref("promptTemplates" as any),
+      getPref("activePromptTemplateId" as any),
+      getPref("promptTemplatesVersion" as any),
+    );
+    const templateNameById = new Map(
+      templateState.templates.map((tpl) => [String(tpl.id || "").trim(), String(tpl.name || "").trim()]),
+    );
 
       if (!activeTasks.length && !historyTasks.length) {
       listEl.replaceChildren();
@@ -1817,10 +1893,17 @@ export class SummaryManagerWindow {
           visualStatus === "completed"
             ? formatTaskTimeToMinute(task.finishedAt || task.updatedAt)
             : "";
+        const templateName =
+          templateNameById.get(String(task.templateId || "").trim()) ||
+          inferTemplateNameFromTaskTitle(task.title) ||
+          inferTemplateNameFromContent(task.content);
+        const stageWithTemplate = templateName
+          ? `${templateName} - ${stageText}`
+          : stageText;
         const stageLabel = createHtmlElement(doc, "span");
         stageLabel.textContent = completedAtText
-          ? `${stageText} · ${completedAtText}`
-          : stageText;
+          ? `${stageWithTemplate} · ${completedAtText}`
+          : stageWithTemplate;
         const progressLabel = createHtmlElement(doc, "span");
         progressLabel.textContent = progress || "";
         status.append(stageLabel, progressLabel);
@@ -2098,7 +2181,7 @@ export class SummaryManagerWindow {
       void this.refreshHistoryTaskContentOnDemand(task.id);
     }
 
-    const body = this.stripDuplicatedSummaryPreamble(task.content || "");
+    const body = this.stripDuplicatedSummaryPreamble(task.content || "", task);
 
     const header = createHtmlElement(doc, "div");
     header.style.display = "flex";
@@ -2444,7 +2527,10 @@ export class SummaryManagerWindow {
     return this.normalizeMathDelimitersInHTML(html);
   }
 
-  private stripDuplicatedSummaryPreamble(content: string): string {
+  private stripDuplicatedSummaryPreamble(
+    content: string,
+    task?: SummaryTask,
+  ): string {
     const raw = String(content || "");
     if (!raw.trim()) return raw;
 
@@ -2459,9 +2545,22 @@ export class SummaryManagerWindow {
         .replace(/\*\*/g, "")
         .replace(/__/g, "")
         .trim();
+    const knownTemplateNames = Array.from(
+      new Set(
+        [
+          getPromptTemplateNameById(task?.templateId),
+          inferTemplateNameFromTaskTitle(String(task?.title || "")),
+          ...getCurrentPromptTemplateNames(),
+        ]
+          .map((name) => String(name || "").trim())
+          .filter(Boolean),
+      ),
+    );
     const isSummaryTitleLine = (line: string): boolean => {
       const normalized = normalizeMetaLine(line).replace(/^#{1,6}\s*/, "");
-      return /^AI全文总结\s*-\s*/i.test(normalized);
+      return knownTemplateNames.some((templateName) =>
+        normalized.startsWith(`${templateName} - `),
+      );
     };
     const isModelLine = (line: string): boolean => {
       const normalized = normalizeMetaLine(line);

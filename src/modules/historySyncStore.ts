@@ -13,6 +13,7 @@ export interface AiNoteHistoryEntry {
   completedAt: number;
   kind?: "api" | "web";
   model?: string;
+  templateId?: string;
   titleSnapshot: string;
   noteId?: number;
   noteKey?: string;
@@ -62,6 +63,7 @@ function readEntriesFromExtra(item: Zotero.Item): AiNoteHistoryEntry[] {
         completedAt: Number(entry.completedAt) || 0,
         kind: trimText(entry.kind) === "web" ? "web" : "api",
         model: trimText(entry.model) || undefined,
+        templateId: trimText(entry.templateId) || undefined,
         titleSnapshot: trimText(entry.titleSnapshot) || "Untitled",
         noteId: Number.isFinite(Number(entry.noteId)) ? Number(entry.noteId) : undefined,
         noteKey: trimText(entry.noteKey) || undefined,
@@ -114,6 +116,7 @@ export class HistorySyncStore {
       completedAt: task.finishedAt || task.updatedAt || Date.now(),
       kind: task.kind,
       model: task.model,
+      templateId: String(task.templateId || "").trim() || undefined,
       titleSnapshot: task.title || "Untitled",
       noteId: note.id,
       noteKey: note.key,
@@ -249,6 +252,7 @@ export class HistorySyncStore {
             updatedAt: entry.completedAt,
             finishedAt: entry.completedAt,
             model: entry.model,
+            templateId: entry.templateId,
             noteID: entry.noteId,
             webConversationId:
               entry.webConversationId || fallbackLink?.conversationId,
@@ -286,6 +290,7 @@ export class HistorySyncStore {
         updatedAt: entry.completedAt,
         finishedAt: entry.completedAt,
         model: entry.model,
+        templateId: entry.templateId,
         noteID: note.id,
         webConversationId: entry.webConversationId || fallbackLink?.conversationId,
         webConversationUrl: entry.webConversationUrl || fallbackLink?.conversationUrl,
