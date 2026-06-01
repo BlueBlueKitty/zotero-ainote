@@ -122,6 +122,31 @@ function getChatGPTMode(): WebSummaryChatGPTMode {
     : "thinking";
 }
 
+function resolvePdfUploadFileName(
+  attachment: Zotero.Item,
+  pdfPath: string,
+): string {
+  const attachmentFileName = String((attachment as any).attachmentFilename || "").trim();
+  if (attachmentFileName) {
+    return attachmentFileName.toLowerCase().endsWith(".pdf")
+      ? attachmentFileName
+      : `${attachmentFileName}.pdf`;
+  }
+
+  const pathFileName = String(PathUtils.filename(pdfPath) || "").trim();
+  if (pathFileName) {
+    return pathFileName.toLowerCase().endsWith(".pdf")
+      ? pathFileName
+      : `${pathFileName}.pdf`;
+  }
+
+  const title = String(attachment.getField("title") || "").trim();
+  if (!title) {
+    return "paper.pdf";
+  }
+  return title.toLowerCase().endsWith(".pdf") ? title : `${title}.pdf`;
+}
+
 export function getWebSummaryModelLabel(
   mode: WebSummaryChatGPTMode,
 ): string {
@@ -260,7 +285,7 @@ export class WebSummaryWorkflow {
       libraryId: target.item.libraryID,
       title: String(target.item.getField("title") || ""),
       pdfPath,
-      pdfFileName: String(attachment.getField("title") || "paper.pdf"),
+      pdfFileName: resolvePdfUploadFileName(attachment, pdfPath),
       prompt: promptTemplate.content,
       platform: "chatgpt",
       actionType: "summarize",
@@ -440,7 +465,7 @@ export class WebSummaryWorkflow {
         libraryId: target.item.libraryID,
         title: String(target.item.getField("title") || ""),
         pdfPath,
-        pdfFileName: String(attachment.getField("title") || "paper.pdf"),
+        pdfFileName: resolvePdfUploadFileName(attachment, pdfPath),
         prompt: promptTemplate.content,
         platform: "chatgpt",
         actionType: "summarize",
