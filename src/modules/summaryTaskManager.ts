@@ -392,7 +392,7 @@ export class SummaryTaskManager {
       // in local active-task storage.
       this.tasks = this.tasks.filter((entry) => entry.id !== task.id);
       if (this.selectedTaskId === task.id) {
-        this.selectedTaskId = this.tasks.at(-1)?.id;
+        this.selectedTaskId = task.id;
       }
     } catch (error: any) {
       const current = this.getTaskById(task.id);

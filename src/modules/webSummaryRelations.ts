@@ -12,6 +12,51 @@ const EXTRA_BLOCK_START = "[AiNoteWebSummaryLinks]";
 const EXTRA_BLOCK_END = "[/AiNoteWebSummaryLinks]";
 
 export class WebSummaryRelationStore {
+  private static compareLinkFreshness(
+    a: WebSummaryItemChatLink,
+    b: WebSummaryItemChatLink,
+  ): number {
+    const aHasUrl = !!String(a.conversationUrl || "").trim();
+    const bHasUrl = !!String(b.conversationUrl || "").trim();
+    if (aHasUrl !== bHasUrl) {
+      return aHasUrl ? -1 : 1;
+    }
+    const aLast = String(a.lastUsedAt || "");
+    const bLast = String(b.lastUsedAt || "");
+    if (aLast !== bLast) {
+      return bLast.localeCompare(aLast);
+    }
+    const aCreated = String(a.createdAt || "");
+    const bCreated = String(b.createdAt || "");
+    if (aCreated !== bCreated) {
+      return bCreated.localeCompare(aCreated);
+    }
+    return 0;
+  }
+
+  private static normalizeLinks(
+    links: WebSummaryItemChatLink[],
+  ): WebSummaryItemChatLink[] {
+    const grouped = new Map<string, WebSummaryItemChatLink[]>();
+    for (const entry of links) {
+      if (!entry?.platform) {
+        continue;
+      }
+      const list = grouped.get(entry.platform) || [];
+      list.push(entry);
+      grouped.set(entry.platform, list);
+    }
+
+    const normalized: WebSummaryItemChatLink[] = [];
+    for (const list of grouped.values()) {
+      const best = list.slice().sort((a, b) => this.compareLinkFreshness(a, b))[0];
+      if (best) {
+        normalized.push(best);
+      }
+    }
+    return normalized;
+  }
+
   private static hasLegacyRelations(item: Zotero.Item): boolean {
     const values = item.getRelationsByPredicate(WEB_AI_RELATION_PREDICATE);
     return values.some((value) => String(value).startsWith(WEB_AI_RELATION_PREFIX));
@@ -84,9 +129,9 @@ export class WebSummaryRelationStore {
   public static getLinks(item: Zotero.Item): WebSummaryItemChatLink[] {
     const extraLinks = this.readLinksFromExtra(item);
     if (extraLinks.length) {
-      return extraLinks;
+      return this.normalizeLinks(extraLinks);
     }
-    return this.readLinksFromLegacyRelations(item);
+    return this.normalizeLinks(this.readLinksFromLegacyRelations(item));
   }
 
   public static getLatestLink(
@@ -97,11 +142,7 @@ export class WebSummaryRelationStore {
     if (!links.length) {
       return null;
     }
-    return links.sort((a, b) =>
-      String(b.lastUsedAt || b.createdAt || "").localeCompare(
-        String(a.lastUsedAt || a.createdAt || ""),
-      ),
-    )[0];
+    return links.sort((a, b) => this.compareLinkFreshness(a, b))[0];
   }
 
   public static hasPlatformLink(
@@ -115,10 +156,10 @@ export class WebSummaryRelationStore {
     item: Zotero.Item,
     link: WebSummaryItemChatLink,
   ): Promise<void> {
-    const existing = this.getLinks(item).filter(
+    const existing = this.normalizeLinks(this.getLinks(item)).filter(
       (entry) => entry.platform !== link.platform,
     );
-    const next = [...existing, link];
+    const next = this.normalizeLinks([...existing, link]);
     this.writeLinksToExtra(item, next);
     this.removeLegacyRelations(item);
     await item.saveTx();
@@ -155,21 +196,8 @@ export class WebSummaryRelationStore {
         }
         const extraLinks = this.readLinksFromExtra(item);
         const legacyLinks = this.readLinksFromLegacyRelations(item);
-        const mergedByPlatform = new Map<string, WebSummaryItemChatLink>();
-        for (const entry of [...extraLinks, ...legacyLinks]) {
-          if (!entry?.platform) continue;
-          const existing = mergedByPlatform.get(entry.platform);
-          if (!existing) {
-            mergedByPlatform.set(entry.platform, entry);
-            continue;
-          }
-          const existingAt = String(existing.lastUsedAt || existing.createdAt || "");
-          const nextAt = String(entry.lastUsedAt || entry.createdAt || "");
-          if (nextAt >= existingAt) {
-            mergedByPlatform.set(entry.platform, entry);
-          }
-        }
-        this.writeLinksToExtra(item, Array.from(mergedByPlatform.values()));
+        const normalized = this.normalizeLinks([...extraLinks, ...legacyLinks]);
+        this.writeLinksToExtra(item, normalized);
         this.removeLegacyRelations(item);
         await item.saveTx();
         migrated += 1;
