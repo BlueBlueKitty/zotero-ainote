@@ -6,12 +6,6 @@
   }
   window.__ainoteContentLoaded = true;
 
-  const DEBUG = true;
-  function debugLog(tag, msg, data) {
-    if (!DEBUG) return;
-    console.log(`[AiNote][Debug][${tag}] ${msg}`, data || "");
-  }
-
   const SELECTORS = {
     promptInput: [
       "#prompt-textarea",
@@ -125,6 +119,34 @@
       });
     });
   }
+
+  let lastPageReadyAtMs = 0;
+  function notifyPageReady(reason = "unknown") {
+    const now = Date.now();
+    if (now - lastPageReadyAtMs < 1500) {
+      return;
+    }
+    lastPageReadyAtMs = now;
+    void sendRuntimeMessage({
+      type: "ainote-page-ready",
+      payload: {
+        reason,
+        href: location.href,
+        title: document.title || "",
+        readyState: document.readyState,
+        visibilityState: document.visibilityState,
+      },
+    }).catch(() => {});
+  }
+
+  notifyPageReady("content-load");
+  window.addEventListener("focus", () => notifyPageReady("window-focus"));
+  window.addEventListener("pageshow", () => notifyPageReady("pageshow"));
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      notifyPageReady("visibility-visible");
+    }
+  });
 
   async function reportTaskStatus(taskId, payload) {
     await sendRuntimeMessage({
@@ -300,21 +322,165 @@
     return match?.[1] ? decodeURIComponent(match[1]) : "";
   }
 
-  async function ensureTaskActive(taskId) {
+  async function ensureTaskActive(taskId, taskRuntime = null) {
+    if (taskRuntime) {
+      await taskRuntime.throwIfCanceled();
+    }
     const task = await fetchTaskState(taskId);
     if (!task) {
       throw new TaskCanceledError("网页总结任务不存在，已停止");
     }
     if (task.status === "canceled" || task.cancelRequestedAt) {
-      const stopped = await tryStopGeneration();
-      if (!stopped) {
-        await cleanupPendingComposerState();
+      if (taskRuntime) {
+        await taskRuntime.handleCancellation(
+          task.cancelReason || task.errorMessage || "已停止当前条目的AI总结",
+        );
+      } else {
+        const stopped = await tryStopGeneration();
+        if (!stopped) {
+          await cleanupPendingComposerState();
+        }
       }
       throw new TaskCanceledError(
         task.cancelReason || task.errorMessage || "已停止当前条目的AI总结",
       );
     }
     return task;
+  }
+
+  function createTaskStatusReporter(taskId) {
+    let lastPayloadKey = "";
+    let inFlightPayloadKey = "";
+    let inFlightPromise = null;
+    return async function sendStatus(payload) {
+      const nextKey = JSON.stringify(payload);
+      if (nextKey === lastPayloadKey) {
+        return;
+      }
+      if (nextKey === inFlightPayloadKey && inFlightPromise) {
+        return inFlightPromise;
+      }
+      inFlightPayloadKey = nextKey;
+      inFlightPromise = reportTaskStatus(taskId, payload)
+        .then(() => {
+          lastPayloadKey = nextKey;
+        })
+        .finally(() => {
+          if (inFlightPayloadKey === nextKey) {
+            inFlightPayloadKey = "";
+            inFlightPromise = null;
+          }
+        });
+      return inFlightPromise;
+    };
+  }
+
+  function createTaskRuntime(taskId) {
+    let disposed = false;
+    let port = null;
+    let reconnectTimer = null;
+    let cancelReason = "";
+    let cancellationPromise = null;
+    const cancelListeners = new Set();
+
+    const notifyCancel = (reason) => {
+      cancelReason = reason || "已停止当前条目的AI总结";
+      for (const listener of Array.from(cancelListeners)) {
+        try {
+          listener(cancelReason);
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    const connectPort = () => {
+      if (disposed) return;
+      try {
+        port = chrome.runtime.connect({ name: "ainote-task" });
+      } catch {
+        scheduleReconnect();
+        return;
+      }
+      port.onMessage.addListener((message) => {
+        if (
+          message?.type === "task-cancel-requested" &&
+          message.taskId === taskId
+        ) {
+          notifyCancel(message.reason);
+        }
+      });
+      port.onDisconnect.addListener(() => {
+        port = null;
+        if (!disposed) {
+          scheduleReconnect();
+        }
+      });
+      port.postMessage({
+        type: "task-bind",
+        taskId,
+      });
+    };
+
+    const scheduleReconnect = () => {
+      if (disposed || reconnectTimer) {
+        return;
+      }
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectPort();
+      }, 1000);
+    };
+
+    connectPort();
+
+    return {
+      onCancel(listener) {
+        cancelListeners.add(listener);
+        if (cancelReason) {
+          listener(cancelReason);
+        }
+        return () => {
+          cancelListeners.delete(listener);
+        };
+      },
+      async handleCancellation(reason) {
+        if (cancellationPromise) {
+          return cancellationPromise;
+        }
+        notifyCancel(reason);
+        cancellationPromise = (async () => {
+          const stopped = await tryStopGeneration();
+          if (!stopped) {
+            await cleanupPendingComposerState();
+          }
+        })();
+        return cancellationPromise;
+      },
+      async throwIfCanceled() {
+        if (!cancelReason) {
+          return;
+        }
+        await this.handleCancellation(cancelReason);
+        throw new TaskCanceledError(cancelReason);
+      },
+      dispose() {
+        disposed = true;
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        if (port) {
+          try {
+            port.disconnect();
+          } catch {
+            // ignore
+          }
+          port = null;
+        }
+        cancelListeners.clear();
+      },
+    };
   }
 
   async function tryStopGeneration() {
@@ -477,18 +643,14 @@
     ).catch(() => null);
 
     if (!pickerButton) {
-      debugLog("ModeSwitch", `未找到模型选择器按钮，跳过切换到 ${normalizedMode}`);
       return false;
     }
 
     const currentText = normalizeText(pickerButton.textContent || "");
     const alreadyOn = desiredLabels.some((l) => currentText.includes(l));
     if (alreadyOn) {
-      debugLog("ModeSwitch", `已是 ${normalizedMode} 模式，无需切换`);
       return true;
     }
-
-    debugLog("ModeSwitch", `尝试切换到 ${normalizedMode}，当前按钮文本: "${currentText}"`);
 
     const findOpenMenu = () => {
       return document.querySelector(
@@ -610,7 +772,6 @@
     }
 
     if (!switchedOk) {
-      debugLog("ModeSwitch", `切换失败，按钮文本为 "${refreshedText}"`);
       const finalButton = findPickerButton() || pickerButton;
       if (finalButton instanceof HTMLElement) {
         dispatchPointerMouseClick(finalButton);
@@ -621,7 +782,6 @@
       return false;
     }
 
-    debugLog("ModeSwitch", `切换成功 -> ${normalizedMode}`);
     return true;
   }
 
@@ -686,21 +846,27 @@
     );
   }
 
-  async function waitForAttachmentReady(fileName, taskId) {
+  async function waitForAttachmentReady(fileName, taskRuntime) {
     return new Promise((resolve, reject) => {
       let observer = null;
-      let taskTimer = null;
       let mainTimeout = null;
       let debounceTimer = null;
       let settled = false;
+      const cancelOff = taskRuntime.onCancel((reason) => {
+        if (settled) return;
+        cleanup();
+        void taskRuntime
+          .handleCancellation(reason)
+          .finally(() => reject(new TaskCanceledError(reason)));
+      });
 
       const cleanup = () => {
         if (settled) return;
         settled = true;
         if (observer) observer.disconnect();
-        if (taskTimer) clearInterval(taskTimer);
         if (mainTimeout) clearTimeout(mainTimeout);
         if (debounceTimer) clearTimeout(debounceTimer);
+        cancelOff();
       };
 
       const finish = () => { cleanup(); resolve(); };
@@ -710,17 +876,6 @@
         () => fail("等待 PDF 上传并解析完成超时"),
         3 * 60 * 1000,
       );
-
-      debugLog("PDFUpload", `开始等待上传: ${fileName}`);
-
-      const checkTask = () => {
-        ensureTaskActive(taskId).catch((e) => {
-          cleanup();
-          reject(e);
-        });
-      };
-      checkTask();
-      taskTimer = setInterval(checkTask, 3000);
 
       const checkAttachment = () => {
         if (settled) return;
@@ -816,21 +971,27 @@
     }
   }
 
-  async function waitForUserSend(taskId) {
-    await reportTaskStatus(taskId, { status: "awaiting_user_send" });
+  async function waitForUserSend(taskRuntime, sendTaskStatus) {
+    await sendTaskStatus({ status: "awaiting_user_send" });
 
     return new Promise((resolve, reject) => {
       let observer = null;
-      let taskTimer = null;
       let mainTimeout = null;
       let settled = false;
+      const cancelOff = taskRuntime.onCancel((reason) => {
+        if (settled) return;
+        cleanup();
+        void taskRuntime
+          .handleCancellation(reason)
+          .finally(() => reject(new TaskCanceledError(reason)));
+      });
 
       const cleanup = () => {
         if (settled) return;
         settled = true;
         if (observer) observer.disconnect();
-        if (taskTimer) clearInterval(taskTimer);
         if (mainTimeout) clearTimeout(mainTimeout);
+        cancelOff();
       };
 
       const finish = () => { cleanup(); resolve(); };
@@ -840,15 +1001,6 @@
         () => fail("等待用户发送超时"),
         10 * 60 * 1000,
       );
-
-      const checkTask = () => {
-        ensureTaskActive(taskId).catch((e) => {
-          cleanup();
-          reject(e);
-        });
-      };
-      checkTask();
-      taskTimer = setInterval(checkTask, 3000);
 
       const check = () => {
         if (settled) return;
@@ -868,27 +1020,33 @@
     });
   }
 
-  async function waitForResponseComplete(taskId) {
-    await reportTaskStatus(taskId, {
+  async function waitForResponseComplete(taskRuntime, sendTaskStatus) {
+    await sendTaskStatus({
       status: "running",
       ...getConversationMeta(),
     });
 
     return new Promise((resolve, reject) => {
       let observer = null;
-      let taskTimer = null;
       let mainTimeout = null;
       let debounceTimer = null;
       let settled = false;
       const startedAt = Date.now();
+      const cancelOff = taskRuntime.onCancel((reason) => {
+        if (settled) return;
+        cleanup();
+        void taskRuntime
+          .handleCancellation(reason)
+          .finally(() => reject(new TaskCanceledError(reason)));
+      });
 
       const cleanup = () => {
         if (settled) return;
         settled = true;
         if (observer) observer.disconnect();
-        if (taskTimer) clearInterval(taskTimer);
         if (mainTimeout) clearTimeout(mainTimeout);
         if (debounceTimer) clearTimeout(debounceTimer);
+        cancelOff();
       };
 
       const finish = () => { cleanup(); resolve(); };
@@ -898,15 +1056,6 @@
         () => fail("等待 ChatGPT 响应完成超时"),
         10 * 60 * 1000,
       );
-
-      const checkTask = () => {
-        ensureTaskActive(taskId).catch((e) => {
-          cleanup();
-          reject(e);
-        });
-      };
-      checkTask();
-      taskTimer = setInterval(checkTask, 3000);
 
       let responseHasStarted = false;
 
@@ -1158,7 +1307,6 @@
     const token = await getAccessToken();
     const deviceId = getOaiDeviceId();
     if (!token || !deviceId) {
-      debugLog("ResultFetch", `API 跳过: token=${!!token}, deviceId=${!!deviceId}`);
       return null;
     }
     const headers = {
@@ -1186,14 +1334,8 @@
         .reverse()
         .find((msg) => msg.role === "assistant");
       const content = lastAssistant?.content || "";
-      if (content) {
-        debugLog("ResultFetch", `API 获取成功: ${content.length} 字符`);
-      } else {
-        debugLog("ResultFetch", "API 返回空内容");
-      }
       return content;
     } catch (error) {
-      debugLog("ResultFetch", `API 获取失败: ${error}`);
       console.warn(
         "[AiNote] Failed to fetch conversation detail for markdown extraction",
         error,
@@ -1293,27 +1435,26 @@
       if (markdownContainer instanceof HTMLElement) {
         const result = domToMarkdown(markdownContainer);
         if (result) {
-          debugLog("ResultFetch", `DOM 获取成功: ${result.length} 字符`);
           return result;
         }
       }
     }
-
-    debugLog("ResultFetch", "DOM 获取失败: 未找到 assistant 消息");
     return "";
   }
 
   async function runSummarizeTask(message) {
     const task = message.task;
+    const taskRuntime = createTaskRuntime(task.taskId);
+    const sendTaskStatus = createTaskStatusReporter(task.taskId);
     try {
-      await ensureTaskActive(task.taskId);
+      await ensureTaskActive(task.taskId, taskRuntime);
 
       await waitFor(
         () => queryFirst(SELECTORS.promptInput),
         30000, 250, "prompt input",
       );
 
-      await reportTaskStatus(task.taskId, {
+      await sendTaskStatus({
         status: "creating_conversation",
         ...getConversationMeta(),
       });
@@ -1323,14 +1464,14 @@
           message.chatgptMode || task.chatgptMode || "thinking",
         );
         if (!modeSwitched) {
-          await reportTaskStatus(task.taskId, {
+          await sendTaskStatus({
             status: "creating_conversation",
             modeSwitchFailed: true,
             modeSwitchError: "未找到或未成功切换 ChatGPT 模型入口",
             ...getConversationMeta(),
           });
         } else {
-          await reportTaskStatus(task.taskId, {
+          await sendTaskStatus({
             status: "creating_conversation",
             modeSwitchOk: true,
             debugMessage: "模型切换成功",
@@ -1342,7 +1483,7 @@
           "[AiNote] ChatGPT mode switch failed, continue with current mode",
           error,
         );
-        await reportTaskStatus(task.taskId, {
+        await sendTaskStatus({
           status: "creating_conversation",
           modeSwitchFailed: true,
           modeSwitchError:
@@ -1351,50 +1492,48 @@
         });
       }
 
-      await reportTaskStatus(task.taskId, {
+      await sendTaskStatus({
         status: "downloading_pdf",
         ...getConversationMeta(),
       });
       const pdfBuffer = await fetchTaskPdf(task.taskId);
-      await ensureTaskActive(task.taskId);
+      await ensureTaskActive(task.taskId, taskRuntime);
       const pdfFile = new File(
         [pdfBuffer],
         task.pdfFileName || "paper.pdf",
         { type: "application/pdf" },
       );
-      debugLog("PdfUpload", `开始上传 PDF: ${pdfFile.name}, ${pdfBuffer.byteLength} bytes`);
       await attachFile(pdfFile);
-      await waitForAttachmentReady(pdfFile.name, task.taskId);
-      await reportTaskStatus(task.taskId, {
+      await waitForAttachmentReady(pdfFile.name, taskRuntime);
+      await sendTaskStatus({
         status: "downloading_pdf",
         pdfUploadReady: true,
         debugMessage: `PDF 上传完成: ${pdfFile.name}`,
         ...getConversationMeta(),
       });
-      debugLog("PdfUpload", `PDF 上传完成: ${pdfFile.name}`);
-
-      await ensureTaskActive(task.taskId);
+      await ensureTaskActive(task.taskId, taskRuntime);
       await fillPrompt(task.prompt || "");
+      await ensureTaskActive(task.taskId, taskRuntime);
 
       if (message.autoSend) {
         await clickSendButton();
         const metaAfterSend = await waitForConversationMetaReady();
-        await reportTaskStatus(task.taskId, {
+        await sendTaskStatus({
           status: "running",
           debugMessage: "已点击发送，等待模型完成",
           ...metaAfterSend,
         });
       } else {
-        await waitForUserSend(task.taskId);
+        await waitForUserSend(taskRuntime, sendTaskStatus);
         const metaAfterSend = await waitForConversationMetaReady();
-        await reportTaskStatus(task.taskId, {
+        await sendTaskStatus({
           status: "running",
           debugMessage: "用户已发送，等待模型完成",
           ...metaAfterSend,
         });
       }
 
-      await waitForResponseComplete(task.taskId);
+      await waitForResponseComplete(taskRuntime, sendTaskStatus);
 
       let resultMarkdown = "";
       let resultFetchSource = "none";
@@ -1412,13 +1551,9 @@
           resultFetchSource = "DOM";
           break;
         }
-        await ensureTaskActive(task.taskId);
+        await ensureTaskActive(task.taskId, taskRuntime);
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
-      debugLog(
-        "ResultFetch",
-        `最终来源: ${resultFetchSource}, 长度: ${resultMarkdown.length} 字符`,
-      );
       if (!resultMarkdown) {
         throw new Error(
           "未能获取最后一条 assistant 回复（会话 API 与页面提取均失败）",
@@ -1435,73 +1570,76 @@
         await reportTaskCanceled(task.taskId, error.message);
       }
       throw error;
+    } finally {
+      taskRuntime.dispose();
     }
   }
 
   async function openConversationTask(message) {
+    const taskRuntime = createTaskRuntime(message.task.taskId);
+    const sendTaskStatus = createTaskStatusReporter(message.task.taskId);
     const targetUrl = message.task.existingConversationUrl;
-    if (!targetUrl) {
-      throw new Error("缺少已保存的会话 URL");
-    }
-    await waitFor(
-      () => queryFirst(SELECTORS.promptInput),
-      30000, 250, "prompt input",
-    );
-    const meta = getConversationMeta();
-    if (
-      message.task.existingConversationId &&
-      meta.conversationId &&
-      meta.conversationId !== message.task.existingConversationId &&
-      !message.recoverRunningTask
-    ) {
-      throw new Error("当前页面不是预期的历史会话");
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-
-    await reportTaskStatus(message.task.taskId, {
-      status: "running",
-      ...meta,
-    });
-
-    let resultMarkdown = "";
-    let resultFetchSource = "none";
-
     try {
-      const apiResult = await fetchLatestAssistantMarkdownFromConversation();
-      if (apiResult) {
-        resultMarkdown = apiResult;
-        resultFetchSource = "API";
-        debugLog("DebugFetch", `API 获取成功: ${apiResult.length} 字符`);
+      if (!targetUrl) {
+        throw new Error("缺少已保存的会话 URL");
       }
-    } catch (e) {
-      debugLog("DebugFetch", `API 获取失败: ${e}`);
-    }
-
-    if (!resultMarkdown) {
-      const domResult = extractLatestAssistantMarkdownFromDom();
-      if (domResult) {
-        resultMarkdown = domResult;
-        resultFetchSource = "DOM";
-        debugLog("DebugFetch", `DOM 获取成功: ${domResult.length} 字符`);
-      } else {
-        debugLog("DebugFetch", "DOM 获取失败");
+      await ensureTaskActive(message.task.taskId, taskRuntime);
+      await waitFor(
+        () => queryFirst(SELECTORS.promptInput),
+        30000, 250, "prompt input",
+      );
+      const meta = getConversationMeta();
+      if (
+        message.task.existingConversationId &&
+        meta.conversationId &&
+        meta.conversationId !== message.task.existingConversationId &&
+        !message.recoverRunningTask
+      ) {
+        throw new Error("当前页面不是预期的历史会话");
       }
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      await sendTaskStatus({
+        status: "running",
+        ...meta,
+      });
+
+      let resultMarkdown = "";
+      let resultFetchSource = "none";
+
+      try {
+        const apiResult = await fetchLatestAssistantMarkdownFromConversation();
+        if (apiResult) {
+          resultMarkdown = apiResult;
+          resultFetchSource = "API";
+        }
+      } catch (_e) {}
+
+      if (!resultMarkdown) {
+        const domResult = extractLatestAssistantMarkdownFromDom();
+        if (domResult) {
+          resultMarkdown = domResult;
+          resultFetchSource = "DOM";
+        }
+      }
+
+      const debugHeader =
+        `[Debug 信息]\n` +
+        `获取方式: ${resultFetchSource}\n` +
+        `会话 ID: ${meta.conversationId || "无"}\n` +
+        `内容长度: ${resultMarkdown.length} 字符\n` +
+        `获取时间: ${new Date().toISOString()}\n\n`;
+
+      return {
+        resultMarkdown: resultMarkdown ? debugHeader + resultMarkdown : "",
+        resultSource: resultFetchSource === "API" ? "api" : resultFetchSource === "DOM" ? "dom" : undefined,
+        resultDebugInfo: `debug-refetch; fetch-source=${resultFetchSource}; length=${resultMarkdown.length}`,
+        ...meta,
+      };
+    } finally {
+      taskRuntime.dispose();
     }
-
-    const debugHeader =
-      `[Debug 信息]\n` +
-      `获取方式: ${resultFetchSource}\n` +
-      `会话 ID: ${meta.conversationId || "无"}\n` +
-      `内容长度: ${resultMarkdown.length} 字符\n` +
-      `获取时间: ${new Date().toISOString()}\n\n`;
-
-    return {
-      resultMarkdown: resultMarkdown ? debugHeader + resultMarkdown : "",
-      resultSource: resultFetchSource === "API" ? "api" : resultFetchSource === "DOM" ? "dom" : undefined,
-      resultDebugInfo: `debug-refetch; fetch-source=${resultFetchSource}; length=${resultMarkdown.length}`,
-      ...meta,
-    };
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

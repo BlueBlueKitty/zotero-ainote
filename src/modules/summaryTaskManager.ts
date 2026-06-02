@@ -11,6 +11,7 @@ import { isActiveTask, isHistoryTask } from "./summaryTaskPartition";
 import { SummaryRunner } from "./summaryRunner";
 import { getString } from "../utils/locale";
 import { HistorySyncStore } from "./historySyncStore";
+import { WebSummaryBridgeClient } from "./webSummaryBridgeClient";
 
 export interface EnqueueTarget {
   item: Zotero.Item;
@@ -34,13 +35,49 @@ function getActiveProfile() {
   return profiles.find((profile) => profile.id === activeId) || profiles[0] || null;
 }
 
+async function removeLinkedWebTask(task?: SummaryTask): Promise<void> {
+  if (!task?.webTaskId) {
+    return;
+  }
+  try {
+    await WebSummaryBridgeClient.cancelTask(
+      task.webTaskId,
+      "已从活动任务列表移除",
+    ).catch(() => {});
+    if (task.status !== "running") {
+      await WebSummaryBridgeClient.removeTask(task.webTaskId);
+    }
+  } catch (error) {
+    ztoolkit.log("[AiNote][SummaryTaskManager] failed to remove linked web task", {
+      taskId: task.id,
+      webTaskId: task.webTaskId,
+      error,
+    });
+  }
+}
+
 export class SummaryTaskManager {
   private static _instance: SummaryTaskManager | null = null;
 
+  private static getSharedInstance(): SummaryTaskManager | null {
+    return (((addon.data as any).__ainoteSummaryTaskManagerInstance as SummaryTaskManager | undefined) ||
+      null);
+  }
+
+  private static setSharedInstance(instance: SummaryTaskManager): void {
+    (addon.data as any).__ainoteSummaryTaskManagerInstance = instance;
+  }
+
   public static getInstance(): SummaryTaskManager {
+    const shared = this.getSharedInstance();
+    if (shared) {
+      this._instance = shared;
+      return shared;
+    }
     if (!this._instance) {
       this._instance = new SummaryTaskManager();
     }
+    this.setSharedInstance(this._instance);
     return this._instance;
   }
 
@@ -51,6 +88,7 @@ export class SummaryTaskManager {
   private runningTaskId: string | undefined;
   private loaded = false;
   private stopRequested = false;
+  private persistQueue: Promise<void> = Promise.resolve();
 
   public async ensureLoaded(): Promise<void> {
     if (this.loaded) return;
@@ -187,6 +225,8 @@ export class SummaryTaskManager {
       }
     }
 
+    void removeLinkedWebTask(task);
+
     const resetAt = now();
     task.status = "pending";
     task.progress = 0;
@@ -202,6 +242,7 @@ export class SummaryTaskManager {
     task.templateId =
       String(getPref("activePromptTemplateId" as any) || "").trim() || undefined;
     task.promptVersion = String(getPref("promptTemplatesVersion" as any) || "");
+    task.webTaskId = undefined;
     this.stopRequested = false;
     this.selectedTaskId = task.id;
     this.emit();
@@ -218,6 +259,8 @@ export class SummaryTaskManager {
       const runtime = this.runtimes.get(task.id);
       runtime?.cancel?.();
     }
+
+    void removeLinkedWebTask(task);
 
     this.tasks = this.tasks.filter((entry) => entry.id !== taskId);
     if (this.selectedTaskId === taskId) {
@@ -363,6 +406,16 @@ export class SummaryTaskManager {
           const runtime = this.runtimes.get(task.id);
           if (runtime) runtime.cancel = cancelFn;
         },
+        onWebTaskCreated: (webTaskId) => {
+          const current = this.getTaskById(task.id);
+          if (!current || current.attempt !== attempt) {
+            return;
+          }
+          current.webTaskId = webTaskId;
+          current.updatedAt = now();
+          this.emit();
+          void this.persist();
+        },
       });
 
       const current = this.getTaskById(task.id);
@@ -373,6 +426,7 @@ export class SummaryTaskManager {
       task.progress = 100;
       task.stage = getString("summary-manager-status-completed" as any);
       task.noteID = result.noteID;
+      task.webTaskId = undefined;
       task.webConversationId = result.webConversationId;
       task.webConversationUrl = result.webConversationUrl;
       task.webConversationTitle = result.webConversationTitle;
@@ -432,6 +486,13 @@ export class SummaryTaskManager {
   }
 
   private async persist(): Promise<void> {
-    await SummaryHistoryStore.save(this.tasks, this.selectedTaskId);
+    const tasksSnapshot = this.tasks.map((task) => ({ ...task }));
+    const selectedTaskIdSnapshot = this.selectedTaskId;
+    this.persistQueue = this.persistQueue
+      .catch(() => {})
+      .then(() =>
+        SummaryHistoryStore.save(tasksSnapshot, selectedTaskIdSnapshot),
+      );
+    await this.persistQueue;
   }
 }

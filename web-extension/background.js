@@ -10,7 +10,6 @@ import {
   reportTaskResult,
   reportTaskStatus,
 } from "./bridge-client.js";
-import { getSettings } from "./storage.js";
 import {
   WEB_SUMMARY_CAPABILITIES,
   WEB_SUMMARY_PROTOCOL_VERSION,
@@ -29,13 +28,21 @@ let runningTaskTabId = 0;
 const pendingTaskResolvers = new Map();
 let workerLoopRunning = false;
 let workerLoopStopToken = 0;
-const SHORT_POLL_WAIT_MS = 0;
-const IDLE_POLL_DELAYS_MS = [300, 800, 1500, 3000, 5000];
+const TASK_CLAIM_WAIT_MS = 30000;
+const CLAIM_FAILURE_BACKOFF_MS = 1500;
+const CANCEL_WATCH_INTERVAL_MS = 800;
 const CHATGPT_TAB_READY_TIMEOUT_MS = 60000;
 const CONTENT_SCRIPT_READY_TIMEOUT_MS = 20000;
-const HANDSHAKE_INTERVAL_MS = 15000;
+const HANDSHAKE_INTERVAL_MS = 45000;
+const CLAIM_WAKE_ALARM_NAME = "ainote-claim-wake";
+const CLAIM_WAKE_ALARM_PERIOD_MINUTES = 0.5;
 let lastHandshakeAtMs = 0;
-let idlePollStreak = 0;
+let lastBridgeTrafficAtMs = 0;
+let activeClaimPromise = null;
+let activeCancelWatcherToken = 0;
+let bootstrapPromise = null;
+const taskPorts = new Map();
+const cancelPendingTasks = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -143,13 +150,22 @@ async function buildPermissionSnapshot() {
   });
 }
 
+function markBridgeActivity() {
+  lastBridgeTrafficAtMs = Date.now();
+}
+
 async function sendCompatibilityHeartbeat(reason, force = false) {
   const now = Date.now();
-  if (!force && now - lastHandshakeAtMs < HANDSHAKE_INTERVAL_MS) {
+  if (
+    !force &&
+    now - lastHandshakeAtMs < HANDSHAKE_INTERVAL_MS &&
+    now - lastBridgeTrafficAtMs < HANDSHAKE_INTERVAL_MS
+  ) {
     return;
   }
   try {
     await healthCheck();
+    markBridgeActivity();
     const permissions = await buildPermissionSnapshot();
     const environment = await detectEnvironmentSnapshot();
     await reportHandshake({
@@ -161,12 +177,157 @@ async function sendCompatibilityHeartbeat(reason, force = false) {
       environment,
       heartbeatAt: new Date().toISOString(),
     });
+    markBridgeActivity();
     lastHandshakeAtMs = now;
   } catch (error) {
     console.warn(
       `[AiNote][WebExtension] heartbeat failed (${reason})`,
       error instanceof Error ? error.message : String(error),
     );
+  }
+}
+
+async function ensureBackgroundActive(reason = "unknown") {
+  if (!bootstrapPromise) {
+    bootstrapPromise = (async () => {
+      try {
+        await schedulePolling(reason);
+      } finally {
+        bootstrapPromise = null;
+      }
+    })();
+  }
+  return bootstrapPromise;
+}
+
+function scheduleWakeAlarm() {
+  try {
+    chrome.alarms.create(CLAIM_WAKE_ALARM_NAME, {
+      periodInMinutes: CLAIM_WAKE_ALARM_PERIOD_MINUTES,
+    });
+  } catch (error) {
+    console.warn(
+      "[AiNote][WebExtension] Failed to schedule wake alarm",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+function clearTaskPort(taskId, port = null) {
+  const current = taskPorts.get(taskId);
+  if (!current) {
+    return;
+  }
+  if (port && current.port !== port) {
+    return;
+  }
+  taskPorts.delete(taskId);
+}
+
+function pushTaskCancelToContent(taskId, payload) {
+  const binding = taskPorts.get(taskId);
+  if (binding?.port) {
+    try {
+      binding.port.postMessage({
+        type: "task-cancel-requested",
+        taskId,
+        reason: payload?.reason || "已停止当前条目的AI总结",
+      });
+      cancelPendingTasks.delete(taskId);
+      return true;
+    } catch (error) {
+      console.warn("[AiNote][WebExtension] Failed to push cancel to content", {
+        taskId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  cancelPendingTasks.set(taskId, {
+    reason: payload?.reason || "已停止当前条目的AI总结",
+    taskId,
+  });
+  return false;
+}
+
+async function getLatestTaskState(taskId) {
+  try {
+    const task = await getTask(taskId);
+    markBridgeActivity();
+    return task;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    if (message.includes("Task not found") || message.includes("TASK_NOT_FOUND")) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function shortCircuitCanceledTask(task) {
+  const latestTask = await getLatestTaskState(task.taskId);
+  if (!latestTask) {
+    return true;
+  }
+  if (latestTask.status === "canceled") {
+    return true;
+  }
+  if (!latestTask.cancelRequestedAt) {
+    return false;
+  }
+  try {
+    await reportTaskStatus(task.taskId, {
+      status: "canceled",
+      errorCode: latestTask.errorCode || "INTERNAL_ERROR",
+      errorMessage:
+        latestTask.cancelReason ||
+        latestTask.errorMessage ||
+        "已停止当前条目的AI总结",
+      conversationId: latestTask.conversationMeta?.conversationId,
+      conversationUrl: latestTask.conversationMeta?.conversationUrl,
+      conversationTitle: latestTask.conversationMeta?.conversationTitle,
+      folderName: latestTask.conversationMeta?.folderName,
+      folderResolved: latestTask.conversationMeta?.folderResolved,
+    });
+    markBridgeActivity();
+  } catch (error) {
+    console.warn(
+      "[AiNote][WebExtension] Failed to finalize canceled task before launch",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  return true;
+}
+
+async function watchRunningTaskCancellation(taskId) {
+  const watcherToken = ++activeCancelWatcherToken;
+  while (
+    watcherToken === activeCancelWatcherToken &&
+    runningTaskId === taskId
+  ) {
+    try {
+      const task = await getLatestTaskState(taskId);
+      if (!task) {
+        break;
+      }
+      if (task.status === "canceled" || task.cancelRequestedAt) {
+        pushTaskCancelToContent(taskId, {
+          reason:
+            task.cancelReason ||
+            task.errorMessage ||
+            "已停止当前条目的AI总结",
+        });
+        break;
+      }
+      if (["succeeded", "failed"].includes(task.status)) {
+        break;
+      }
+    } catch (error) {
+      console.warn(
+        "[AiNote][WebExtension] cancel watcher failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    await sleep(CANCEL_WATCH_INTERVAL_MS);
   }
 }
 
@@ -266,7 +427,6 @@ async function waitForStableContentScript(
 }
 
 async function ensureContentScript(tabId) {
-  console.log("[AiNote][WebExtension] ensureContentScript start", { tabId });
   // 快速验证：标签页应该已在 ensureChatGPTTab 中就绪，5s 内未就绪视为异常
   try {
     await waitForChatGPTTabReady(tabId, 5000);
@@ -279,10 +439,8 @@ async function ensureContentScript(tabId) {
   // 给 manifest 的 document_idle 注入足够时间（冷启动页面加载慢，延长到 10s）
   try {
     await waitForStableContentScript(tabId, 10000);
-    console.log("[AiNote][WebExtension] Content script already ready");
     return;
   } catch {
-    console.log("[AiNote][WebExtension] Content script not ready, will inject programmatically");
   }
 
   // 冷启动时扩展刚初始化，tab 的渲染进程可能尚未就绪，延长注入重试窗口到 30s
@@ -292,7 +450,6 @@ async function ensureContentScript(tabId) {
   let injectAttempt = 0;
   while (Date.now() - startedAt < COLD_START_INJECT_TIMEOUT) {
     injectAttempt += 1;
-    console.log("[AiNote][WebExtension] Injecting content script, attempt", injectAttempt);
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
@@ -305,14 +462,12 @@ async function ensureContentScript(tabId) {
     }
     try {
       await waitForContentScriptReady(tabId, 3000);
-      console.log("[AiNote][WebExtension] Content script ready after injection");
       return;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
     }
     await safeSleep(1000);
   }
-  console.error("[AiNote][WebExtension] ensureContentScript failed after", injectAttempt, "attempts");
   throw lastError || new Error("Content script 注入后仍未就绪");
 }
 
@@ -448,6 +603,9 @@ function settleContentTask(taskId, error) {
 }
 
 async function runSummarizeTask(task) {
+  if (await shortCircuitCanceledTask(task)) {
+    return;
+  }
   // task 在 claim 时已自动设为 opening_chat 状态，无需再重复上报
   // 此处仅更新 debugMessage 以便调试
   const targetUrl = task.projectUrl || CHATGPT_URL;
@@ -479,6 +637,9 @@ async function runSummarizeTask(task) {
 }
 
 async function runOpenConversationTask(task) {
+  if (await shortCircuitCanceledTask(task)) {
+    return;
+  }
   await sendCompatibilityHeartbeat("before-open-conversation-task", true);
   await withTimeout(
     reportTaskStatus(task.taskId, {
@@ -514,14 +675,35 @@ async function runOpenConversationTask(task) {
   await completion;
 }
 
-async function processNextTask() {
+async function claimNextTaskWithLongPoll(waitMs = TASK_CLAIM_WAIT_MS) {
+  if (activeClaimPromise) {
+    return activeClaimPromise;
+  }
+  activeClaimPromise = claimNextTask(waitMs)
+    .then((result) => {
+      markBridgeActivity();
+      return result;
+    })
+    .finally(() => {
+      activeClaimPromise = null;
+    });
+  return activeClaimPromise;
+}
+
+async function processNextTask(stopToken) {
   if (runningTaskId) {
     return "busy";
   }
 
   await sendCompatibilityHeartbeat("poll-loop");
 
-  const data = await claimNextTask(SHORT_POLL_WAIT_MS);
+  const data = await claimNextTaskWithLongPoll(TASK_CLAIM_WAIT_MS);
+  if (stopToken !== workerLoopStopToken) {
+    return "stale";
+  }
+  if (runningTaskId) {
+    return "busy";
+  }
   const task = data?.task;
   if (!task) {
     return "idle";
@@ -529,6 +711,7 @@ async function processNextTask() {
 
   runningTaskId = task.taskId;
   runningTaskTabId = 0;
+  void watchRunningTaskCancellation(task.taskId);
   try {
     if (task.actionType === "open_conversation") {
       await runOpenConversationTask(task);
@@ -553,6 +736,9 @@ async function processNextTask() {
       );
     }
   } finally {
+    activeCancelWatcherToken += 1;
+    clearTaskPort(task.taskId);
+    cancelPendingTasks.delete(task.taskId);
     runningTaskId = "";
     runningTaskTabId = 0;
   }
@@ -635,28 +821,21 @@ async function runWorkerLoop(stopToken) {
         break;
       }
       try {
-        const result = await processNextTask();
+        const result = await processNextTask(stopToken);
         if (result === "task") {
-          idlePollStreak = 0;
           continue;
         }
-        if (result === "busy") {
+        if (result === "busy" || result === "stale") {
           await sleep(200);
           continue;
         }
-        idlePollStreak = Math.min(idlePollStreak + 1, IDLE_POLL_DELAYS_MS.length - 1);
-        await sleep(IDLE_POLL_DELAYS_MS[idlePollStreak]);
+        continue;
       } catch (error) {
-        const delayIndex = Math.min(
-          idlePollStreak + 1,
-          IDLE_POLL_DELAYS_MS.length - 1,
-        );
-        idlePollStreak = delayIndex;
         console.warn(
           "[AiNote][WebExtension] Worker loop iteration failed",
           error instanceof Error ? error.message : String(error),
         );
-        await sleep(IDLE_POLL_DELAYS_MS[delayIndex]);
+        await sleep(CLAIM_FAILURE_BACKOFF_MS);
       }
     }
   } finally {
@@ -668,45 +847,110 @@ async function runWorkerLoop(stopToken) {
   }
 }
 
-async function schedulePolling() {
+async function schedulePolling(reason = "manual") {
   if (pollingTimer) {
     clearInterval(pollingTimer);
     pollingTimer = null;
   }
   workerLoopStopToken += 1;
-  idlePollStreak = 0;
+  scheduleWakeAlarm();
   await sendCompatibilityHeartbeat("schedule-polling", true);
   void runWorkerLoop(workerLoopStopToken);
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  void schedulePolling();
+  void ensureBackgroundActive("onInstalled");
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void schedulePolling();
+  void ensureBackgroundActive("onStartup");
 });
 
 chrome.storage.onChanged.addListener(() => {
-  void schedulePolling();
+  void ensureBackgroundActive("storage.onChanged");
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name !== CLAIM_WAKE_ALARM_NAME) {
+    return;
+  }
+  void ensureBackgroundActive("alarm");
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   void handleRunningTaskTabClosed(tabId);
 });
 
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "ainote-task") {
+    return;
+  }
+  let boundTaskId = "";
+  port.onMessage.addListener((message) => {
+    if (message?.type !== "task-bind" || !message.taskId) {
+      return;
+    }
+    boundTaskId = message.taskId;
+    taskPorts.set(boundTaskId, {
+      port,
+      tabId: message.tabId || 0,
+    });
+    const pendingCancel = cancelPendingTasks.get(boundTaskId);
+    if (pendingCancel) {
+      pushTaskCancelToContent(boundTaskId, pendingCancel);
+    }
+  });
+  port.onDisconnect.addListener(() => {
+    if (boundTaskId) {
+      clearTaskPort(boundTaskId, port);
+    }
+  });
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "ainote-force-heartbeat") {
+    void ensureBackgroundActive("force-heartbeat")
+      .then(async () => {
+        await sendCompatibilityHeartbeat("force-heartbeat", true);
+        sendResponse({ ok: true });
+      })
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    return true;
+  }
+  if (message?.type === "ainote-page-ready") {
+    void sendCompatibilityHeartbeat("content-page-ready")
+      .then(async () => {
+        markBridgeActivity();
+        sendResponse({ ok: true });
+      })
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    return true;
+  }
   if (message?.type === "ainote-task-status" && message.taskId) {
     void reportTaskStatus(message.taskId, message.payload)
-      .then(() => sendResponse({ ok: true }))
+      .then(() => {
+        markBridgeActivity();
+        sendResponse({ ok: true });
+      })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
   if (message?.type === "ainote-fetch-task-pdf" && message.taskId) {
     void fetchTaskPdf(message.taskId)
-      .then((pdfBuffer) =>
-        sendResponse({ ok: true, pdfBase64: arrayBufferToBase64(pdfBuffer) }),
-      )
+      .then((pdfBuffer) => {
+        markBridgeActivity();
+        sendResponse({ ok: true, pdfBase64: arrayBufferToBase64(pdfBuffer) });
+      })
       .catch((error) =>
         sendResponse({
           ok: false,
@@ -717,7 +961,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "ainote-get-task" && message.taskId) {
     void getTask(message.taskId)
-      .then((task) => sendResponse({ ok: true, task }))
+      .then((task) => {
+        markBridgeActivity();
+        sendResponse({ ok: true, task });
+      })
       .catch((error) =>
         sendResponse({
           ok: false,
@@ -729,6 +976,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "ainote-task-result" && message.taskId) {
     void reportTaskResult(message.taskId, message.payload)
       .then(() => {
+        markBridgeActivity();
         settleContentTask(message.taskId);
         sendResponse({ ok: true });
       })
@@ -753,6 +1001,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       folderResolved: message.payload?.folderResolved,
     })
       .then(() => {
+        markBridgeActivity();
         settleContentTask(message.taskId);
         sendResponse({ ok: true });
       })
@@ -765,6 +1014,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "ainote-task-failure" && message.taskId) {
     void reportTaskFailure(message.taskId, message.payload)
       .then(() => {
+        markBridgeActivity();
         settleContentTask(
           message.taskId,
           new Error(
@@ -785,4 +1035,4 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-void schedulePolling();
+void ensureBackgroundActive("module-load");

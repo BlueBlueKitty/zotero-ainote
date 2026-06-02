@@ -14,6 +14,7 @@ export interface SummaryRunnerHooks {
   onStage: (stage: string, progress?: number) => void;
   onChunk: (chunk: string) => void;
   onCancelReady: (cancelFn: () => void) => void;
+  onWebTaskCreated?: (taskId: string) => void;
 }
 
 export interface SummaryRunnerResult {
@@ -122,6 +123,7 @@ export class SummaryRunner {
       onStage: hooks.onStage,
       onContent: (content) => hooks.onChunk(content),
       onCancelReady: hooks.onCancelReady,
+      onTaskCreated: (bridgeTask) => hooks.onWebTaskCreated?.(bridgeTask.taskId),
     });
 
     return {

@@ -77,6 +77,7 @@ export interface CompatibilityBlockReason {
 export interface ExtensionRuntimeStatus {
   online: boolean;
   lastHeartbeatAt?: string;
+  lastActivityAt?: string;
 }
 
 export interface ExtensionEnvironmentStatus {
@@ -233,6 +234,11 @@ export interface CreateTaskResponse {
 
 export interface CancelTaskResponse {
   task: WebSummaryTask;
+}
+
+export interface RemoveTaskResponse {
+  removed: boolean;
+  task?: WebSummaryTask;
 }
 
 export interface ClaimNextTaskResponse {

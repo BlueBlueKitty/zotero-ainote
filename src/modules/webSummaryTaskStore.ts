@@ -92,9 +92,14 @@ function applyConversationMeta(
   }
 }
 
+type TaskListener = (task: WebSummaryTask) => void;
+type GlobalTaskListener = (task: WebSummaryTask) => void;
+
 export class WebSummaryTaskStore {
   private readonly tasks = new Map<string, WebSummaryTask>();
   private readonly nextTaskWaiters = new Set<() => void>();
+  private readonly taskListeners = new Map<string, Set<TaskListener>>();
+  private readonly globalListeners = new Set<GlobalTaskListener>();
 
   public createTask(request: CreateTaskRequest): WebSummaryTask {
     const now = new Date().toISOString();
@@ -127,12 +132,33 @@ export class WebSummaryTaskStore {
     };
     this.tasks.set(task.taskId, task);
     this.notifyTaskAvailable();
-    return cloneTask(task);
+    return this.emitTaskChanged(task);
   }
 
   public getTask(taskId: string): WebSummaryTask | null {
     const task = this.tasks.get(taskId);
     return task ? cloneTask(task) : null;
+  }
+
+  public subscribeTask(taskId: string, listener: TaskListener): () => void {
+    const listeners = this.taskListeners.get(taskId) || new Set<TaskListener>();
+    listeners.add(listener);
+    this.taskListeners.set(taskId, listeners);
+    return () => {
+      const current = this.taskListeners.get(taskId);
+      if (!current) return;
+      current.delete(listener);
+      if (current.size === 0) {
+        this.taskListeners.delete(taskId);
+      }
+    };
+  }
+
+  public subscribeAll(listener: GlobalTaskListener): () => void {
+    this.globalListeners.add(listener);
+    return () => {
+      this.globalListeners.delete(listener);
+    };
   }
 
   public claimNextTask(): WebSummaryTask | null {
@@ -146,7 +172,7 @@ export class WebSummaryTaskStore {
     // 将状态从 claimed 推进到 opening_chat，消除冷启动时 HTTP 可能失败的时间窗口
     task.status = "opening_chat";
     task.updatedAt = new Date().toISOString();
-    return cloneTask(task);
+    return this.emitTaskChanged(task);
   }
 
   public async claimNextTaskOrWait(waitMs: number): Promise<WebSummaryTask | null> {
@@ -182,13 +208,38 @@ export class WebSummaryTaskStore {
     task.cancelReason = reason || "已停止当前条目的AI总结";
     task.updatedAt = now;
 
-    if (task.status === "queued" || task.status === "claimed") {
+    if (
+      task.status === "queued" ||
+      task.status === "claimed" ||
+      task.status === "opening_chat"
+    ) {
       task.status = "canceled";
       task.errorCode = "INTERNAL_ERROR";
       task.errorMessage = task.cancelReason;
     }
 
-    return cloneTask(task);
+    return this.emitTaskChanged(task);
+  }
+
+  public removeTask(taskId: string): WebSummaryTask | null {
+    const task = this.tasks.get(taskId);
+    if (!task) {
+      return null;
+    }
+    const removedTask = cloneTask(task);
+    if (!["succeeded", "failed", "canceled"].includes(removedTask.status)) {
+      const removedAt = new Date().toISOString();
+      removedTask.status = "canceled";
+      removedTask.updatedAt = removedAt;
+      removedTask.cancelRequestedAt = removedTask.cancelRequestedAt || removedAt;
+      removedTask.cancelReason =
+        removedTask.cancelReason || "网页总结任务已从活动列表移除";
+      removedTask.errorCode = removedTask.errorCode || "INTERNAL_ERROR";
+      removedTask.errorMessage =
+        removedTask.errorMessage || removedTask.cancelReason;
+    }
+    this.tasks.delete(taskId);
+    return this.emitTaskChanged(removedTask);
   }
 
   public updateStatus(
@@ -230,7 +281,7 @@ export class WebSummaryTaskStore {
     if (typeof request.debugMessage === "string") {
       task.debugMessage = request.debugMessage;
     }
-    return cloneTask(task);
+    return this.emitTaskChanged(task);
   }
 
   public completeTask(
@@ -255,7 +306,7 @@ export class WebSummaryTaskStore {
       createdAt: task.conversationMeta?.createdAt || task.createdAt,
       lastUsedAt: task.updatedAt,
     });
-    return cloneTask(task);
+    return this.emitTaskChanged(task);
   }
 
   public failTask(
@@ -278,7 +329,7 @@ export class WebSummaryTaskStore {
       folderResolved: request.folderResolved,
       lastUsedAt: task.updatedAt,
     });
-    return cloneTask(task);
+    return this.emitTaskChanged(task);
   }
 
   private mustGetTask(taskId: string): WebSummaryTask {
@@ -319,5 +370,25 @@ export class WebSummaryTaskStore {
         // ignore
       }
     }
+  }
+
+  private emitTaskChanged(task: WebSummaryTask): WebSummaryTask {
+    const snapshot = cloneTask(task);
+    const taskListeners = Array.from(this.taskListeners.get(task.taskId) || []);
+    for (const listener of taskListeners) {
+      try {
+        listener(snapshot);
+      } catch {
+        // ignore listener failures
+      }
+    }
+    for (const listener of this.globalListeners) {
+      try {
+        listener(snapshot);
+      } catch {
+        // ignore listener failures
+      }
+    }
+    return snapshot;
   }
 }

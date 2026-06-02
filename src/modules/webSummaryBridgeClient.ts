@@ -3,6 +3,7 @@ import {
   CancelTaskResponse,
   CreateTaskRequest,
   CreateTaskResponse,
+  RemoveTaskResponse,
   WebSummaryTask,
 } from "./webSummaryTypes";
 
@@ -26,5 +27,22 @@ export class WebSummaryBridgeClient {
     reason?: string,
   ): Promise<CancelTaskResponse> {
     return addon.data.webSummaryBridge!.cancelTask(taskId, reason);
+  }
+
+  public static async removeTask(taskId: string): Promise<RemoveTaskResponse> {
+    return addon.data.webSummaryBridge!.removeTask(taskId);
+  }
+
+  public static subscribeTask(
+    taskId: string,
+    listener: (task: WebSummaryTask) => void,
+  ): () => void {
+    return addon.data.webSummaryBridge!.getTaskStore().subscribeTask(taskId, listener);
+  }
+
+  public static subscribeAll(
+    listener: (task: WebSummaryTask) => void,
+  ): () => void {
+    return addon.data.webSummaryBridge!.getTaskStore().subscribeAll(listener);
   }
 }

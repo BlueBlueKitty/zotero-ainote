@@ -12,7 +12,7 @@ import { SummaryTaskManager } from "./summaryTaskManager";
 import { SummaryTask, SummaryTaskSnapshot } from "./summaryTaskTypes";
 import { WebSummaryWorkflow } from "./webSummaryWorkflow";
 import { getString } from "../utils/locale";
-import { showToast } from "../utils/window";
+import { isWindowAlive, showToast } from "../utils/window";
 import { HistorySyncStore, HistoryRecord } from "./historySyncStore";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -36,6 +36,56 @@ const HTML_DIALOG_TAGS = new Set([
   "title",
 ]);
 type SelectOption = { value: string; label: string };
+
+export function normalizeDetailHeadingLevels(html: string): string {
+  const raw = String(html || "");
+  if (!raw.trim() || typeof DOMParser === "undefined") {
+    return raw;
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<div>${raw}</div>`, "text/html");
+  const body = doc.body;
+  const container = body?.firstElementChild as HTMLElement | null;
+  if (!container) {
+    return raw;
+  }
+
+  const headings = Array.from(
+    container.querySelectorAll("h1, h2, h3, h4, h5, h6"),
+  ) as HTMLElement[];
+  if (!headings.length) {
+    return raw;
+  }
+
+  const firstHeading = headings[0];
+  const firstLevel = parseInt(firstHeading.tagName.slice(1), 10);
+  if (!Number.isFinite(firstLevel) || firstLevel <= 1) {
+    return String(container.innerHTML);
+  }
+
+  const shift = firstLevel - 1;
+  for (const heading of headings) {
+    const currentLevel = parseInt(heading.tagName.slice(1), 10);
+    if (!Number.isFinite(currentLevel)) {
+      continue;
+    }
+    const nextLevel = Math.max(1, currentLevel - shift);
+    if (nextLevel === currentLevel) {
+      continue;
+    }
+    const replacement = doc.createElement(`h${nextLevel}`);
+    for (const attr of Array.from(heading.attributes)) {
+      replacement.setAttribute(attr.name, attr.value);
+    }
+    while (heading.firstChild) {
+      replacement.appendChild(heading.firstChild);
+    }
+    heading.replaceWith(replacement);
+  }
+
+  return String(container.innerHTML);
+}
 
 function normalizeVisualStatus(status: string): SummaryTask["status"] {
   if (status === "succeeded") return "completed";
@@ -381,10 +431,20 @@ function createHtmlDialog(): any {
 export class SummaryManagerWindow {
   private static instance: SummaryManagerWindow | null = null;
 
+  private static getSharedState(): {
+    instance?: SummaryManagerWindow;
+    window?: Window;
+  } {
+    const data = ((addon.data as any).__ainoteSummaryManagerState ||= {});
+    return data;
+  }
+
   public static async open(): Promise<void> {
-    if (!this.instance) {
-      this.instance = new SummaryManagerWindow();
+    const shared = this.getSharedState();
+    if (!shared.instance) {
+      shared.instance = this.instance || new SummaryManagerWindow();
     }
+    this.instance = shared.instance;
     await this.instance.open();
   }
 
@@ -397,6 +457,7 @@ export class SummaryManagerWindow {
   private themeMediaQuery: MediaQueryList | null = null;
   private themeObserver: MutationObserver | null = null;
   private initializePromise: Promise<void> | null = null;
+  private openPromise: Promise<void> | null = null;
   private activeCollapsed = false;
   private historyCollapsed = false;
   private mathJaxInjected = false;
@@ -422,11 +483,44 @@ export class SummaryManagerWindow {
   private readonly minSplitRatio = 0.3;
   private readonly maxSplitRatio = 0.7;
 
+  private getLiveDialogWindow(): Window | undefined {
+    const shared = SummaryManagerWindow.getSharedState();
+    const dialogWindow = this.dialog?.window as Window | undefined;
+    if (isWindowAlive(dialogWindow)) {
+      shared.window = dialogWindow;
+      return dialogWindow;
+    }
+    if (isWindowAlive(shared.window)) {
+      return shared.window;
+    }
+    if (shared.window) {
+      shared.window = undefined;
+    }
+    return undefined;
+  }
+
   private async open(): Promise<void> {
+    if (this.openPromise) {
+      return this.openPromise;
+    }
+
+    this.openPromise = this.openInternal();
+    try {
+      await this.openPromise;
+    } finally {
+      this.openPromise = null;
+    }
+  }
+
+  private async openInternal(): Promise<void> {
     await this.manager.ensureLoaded();
 
-    if (this.isOpen && this.dialog?.window && !this.dialog.window.closed) {
-      this.dialog.window.focus();
+    const existingWindow = this.getLiveDialogWindow();
+    if (existingWindow) {
+      this.isOpen = true;
+      this.dialog = this.dialog || {};
+      this.dialog.window = existingWindow;
+      existingWindow.focus();
       return;
     }
 
@@ -435,6 +529,8 @@ export class SummaryManagerWindow {
         void this.initializeWindow();
       },
       unloadCallback: () => {
+        const shared = SummaryManagerWindow.getSharedState();
+        const currentWindow = this.dialog?.window as Window | undefined;
         this.unsubscribe?.();
         this.unsubscribe = null;
         this.themeMediaQuery?.removeEventListener(
@@ -456,6 +552,7 @@ export class SummaryManagerWindow {
         this.controlsInitialized = false;
         this.mathJaxInjected = false;
         this.initializePromise = null;
+        this.openPromise = null;
         this.lastActiveTaskIds.clear();
         this.mainSplitterBound = false;
         this.mainSplitterDragging = false;
@@ -464,6 +561,9 @@ export class SummaryManagerWindow {
         this.saveMainPaneSplitRatio();
         this.saveListSplitRatio();
         this.isOpen = false;
+        if (shared.window === currentWindow) {
+          shared.window = undefined;
+        }
       },
     };
 
@@ -706,6 +806,7 @@ export class SummaryManagerWindow {
         noDialogMode: true,
       });
 
+    SummaryManagerWindow.getSharedState().window = this.dialog?.window;
     this.isOpen = true;
     await Zotero.Promise.delay(80);
     await this.initializeWindow();
@@ -2524,7 +2625,9 @@ export class SummaryManagerWindow {
   private convertDetailMarkdownToHTML(markdown: string): string {
     const normalized = this.normalizeInlineMathDelimiters(markdown);
     const html = String(OutputWindow.convertMarkdownToHTMLCore(normalized));
-    return this.normalizeMathDelimitersInHTML(html);
+    return normalizeDetailHeadingLevels(
+      this.normalizeMathDelimitersInHTML(html),
+    );
   }
 
   private stripDuplicatedSummaryPreamble(

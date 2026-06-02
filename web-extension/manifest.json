@@ -10,6 +10,7 @@
     "128": "icons/favicon.png"
   },
   "permissions": [
+    "alarms",
     "storage",
     "tabs",
     "scripting"

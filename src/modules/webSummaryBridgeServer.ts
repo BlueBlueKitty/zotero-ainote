@@ -12,6 +12,7 @@ import {
   ReportTaskFailureRequest,
   ReportTaskResultRequest,
   ReportTaskStatusRequest,
+  RemoveTaskResponse,
   WebSummaryTask,
 } from "./webSummaryTypes";
 import { WebSummaryCompatibilityManager } from "./webSummaryCompat";
@@ -21,6 +22,8 @@ const LOG_PREFIX = "[AiNote][WebSummaryBridge]";
 const JSON_MIME = "application/json; charset=utf-8";
 const MAX_REQUEST_SIZE = 10 * 1024 * 1024;
 const READ_WAIT_LIMIT = 60;
+const OPEN_BLOCKING =
+  ((Components.interfaces.nsITransport as any)?.OPEN_BLOCKING as number) || 1;
 
 declare let ztoolkit: ZToolkit;
 
@@ -71,6 +74,16 @@ function jsonError(
 
 function normalizeErrorCode(value: unknown): BridgeErrorCode | "UNKNOWN_ERROR" {
   return typeof value === "string" ? (value as BridgeErrorCode) : "UNKNOWN_ERROR";
+}
+
+function isTaskNotFoundError(error: unknown): boolean {
+  const bridgeCode = String((error as any)?.bridgeCode || "");
+  const message = String((error as any)?.message || error || "");
+  return (
+    bridgeCode === "TASK_NOT_FOUND" ||
+    message.includes("Task not found") ||
+    message.includes("TASK_NOT_FOUND")
+  );
 }
 
 function buildCorsHeaders(): Record<string, string> {
@@ -223,6 +236,9 @@ export class WebSummaryBridgeServer {
   private isRunning = false;
   private readonly activeTransports = new Set<nsISocketTransport>();
 
+  constructor() {
+  }
+
   public getTaskStore(): WebSummaryTaskStore {
     return this.taskStore;
   }
@@ -242,7 +258,8 @@ export class WebSummaryBridgeServer {
         throw error;
       }
     }
-    return { task: this.taskStore.createTask(request) };
+    const task = this.taskStore.createTask(request);
+    return { task };
   }
 
   public getHealth(): BridgeHealthResponse {
@@ -255,6 +272,10 @@ export class WebSummaryBridgeServer {
 
   public reportHandshake(payload: ExtensionHandshakePayload): CompatibilityReport {
     return this.compatibilityManager.recordHandshake(payload);
+  }
+
+  public recordRuntimeActivity(source: string): void {
+    this.compatibilityManager.recordRuntimeActivity(source);
   }
 
   private buildCompatibilityErrorMessage(report: CompatibilityReport): string {
@@ -288,6 +309,14 @@ export class WebSummaryBridgeServer {
     };
   }
 
+  public removeTask(taskId: string): RemoveTaskResponse {
+    const task = this.taskStore.removeTask(taskId);
+    return {
+      removed: !!task,
+      task: task || undefined,
+    };
+  }
+
   public start(): void {
     if (this.isRunning) {
       return;
@@ -302,7 +331,6 @@ export class WebSummaryBridgeServer {
     this.serverSocket.init(port, true, -1);
     this.serverSocket.asyncListen(this.listener);
     this.isRunning = true;
-    ztoolkit.log(`${LOG_PREFIX} started`, { port, baseUrl: `http://127.0.0.1:${port}` });
   }
 
   public stop(): void {
@@ -443,6 +471,7 @@ export class WebSummaryBridgeServer {
     }
 
     if (request.pathname.startsWith("/api/tasks/") && request.method === "GET") {
+      this.recordRuntimeActivity("task-get");
       const taskId = extractTaskId(request.pathname, "");
       return buildJsonResponse(200, jsonEnvelope(this.getTask(taskId)));
     }
@@ -457,7 +486,16 @@ export class WebSummaryBridgeServer {
       return buildJsonResponse(200, jsonEnvelope(this.cancelTask(taskId, payload.reason)));
     }
 
+    if (
+      request.pathname.startsWith("/api/tasks/") &&
+      request.method === "DELETE"
+    ) {
+      const taskId = extractTaskId(request.pathname, "");
+      return buildJsonResponse(200, jsonEnvelope(this.removeTask(taskId)));
+    }
+
     if (request.pathname === "/api/ext/tasks/next" && request.method === "GET") {
+      this.recordRuntimeActivity("claim-next");
       const waitMs = Math.max(
         0,
         Math.min(
@@ -465,8 +503,9 @@ export class WebSummaryBridgeServer {
           parseInt(String(request.query.waitMs || "0"), 10) || 0,
         ),
       );
+      const task = await this.taskStore.claimNextTaskOrWait(waitMs);
       const payload: ClaimNextTaskResponse = {
-        task: await this.taskStore.claimNextTaskOrWait(waitMs),
+        task,
       };
       return buildJsonResponse(200, jsonEnvelope(payload));
     }
@@ -476,12 +515,23 @@ export class WebSummaryBridgeServer {
       request.pathname.endsWith("/status") &&
       request.method === "POST"
     ) {
+      this.recordRuntimeActivity("task-status");
       const taskId = extractTaskId(request.pathname, "/status");
       const payload = parseJsonBody<ReportTaskStatusRequest>(request);
-      return buildJsonResponse(
-        200,
-        jsonEnvelope(this.taskStore.updateStatus(taskId, payload)),
-      );
+      try {
+        return buildJsonResponse(
+          200,
+          jsonEnvelope(this.taskStore.updateStatus(taskId, payload)),
+        );
+      } catch (error) {
+        if (isTaskNotFoundError(error)) {
+          return buildJsonResponse(
+            200,
+            jsonEnvelope({ removed: true, taskId }),
+          );
+        }
+        throw error;
+      }
     }
 
     if (
@@ -489,12 +539,23 @@ export class WebSummaryBridgeServer {
       request.pathname.endsWith("/result") &&
       request.method === "POST"
     ) {
+      this.recordRuntimeActivity("task-result");
       const taskId = extractTaskId(request.pathname, "/result");
       const payload = parseJsonBody<ReportTaskResultRequest>(request);
-      return buildJsonResponse(
-        200,
-        jsonEnvelope(this.taskStore.completeTask(taskId, payload)),
-      );
+      try {
+        return buildJsonResponse(
+          200,
+          jsonEnvelope(this.taskStore.completeTask(taskId, payload)),
+        );
+      } catch (error) {
+        if (isTaskNotFoundError(error)) {
+          return buildJsonResponse(
+            200,
+            jsonEnvelope({ removed: true, taskId }),
+          );
+        }
+        throw error;
+      }
     }
 
     if (
@@ -502,12 +563,23 @@ export class WebSummaryBridgeServer {
       request.pathname.endsWith("/fail") &&
       request.method === "POST"
     ) {
+      this.recordRuntimeActivity("task-fail");
       const taskId = extractTaskId(request.pathname, "/fail");
       const payload = parseJsonBody<ReportTaskFailureRequest>(request);
-      return buildJsonResponse(
-        200,
-        jsonEnvelope(this.taskStore.failTask(taskId, payload)),
-      );
+      try {
+        return buildJsonResponse(
+          200,
+          jsonEnvelope(this.taskStore.failTask(taskId, payload)),
+        );
+      } catch (error) {
+        if (isTaskNotFoundError(error)) {
+          return buildJsonResponse(
+            200,
+            jsonEnvelope({ removed: true, taskId }),
+          );
+        }
+        throw error;
+      }
     }
 
     if (
@@ -515,6 +587,7 @@ export class WebSummaryBridgeServer {
       request.pathname.endsWith("/pdf") &&
       request.method === "GET"
     ) {
+      this.recordRuntimeActivity("task-pdf");
       const taskId = extractTaskId(request.pathname, "/pdf");
       const task = this.getTask(taskId);
       if (!task.pdfPath) {
@@ -540,7 +613,7 @@ export class WebSummaryBridgeServer {
       let output: nsIOutputStream | null = null;
       try {
         input = transport.openInputStream(0, 0, 0);
-        output = transport.openOutputStream(0, 0, 0);
+        output = transport.openOutputStream(OPEN_BLOCKING, 0, 0);
         const requestText = await this.readRequestText(input);
         if (!requestText.trim()) {
           return;

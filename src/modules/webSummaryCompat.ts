@@ -24,6 +24,11 @@ interface HandshakeState {
   receivedAt: string;
 }
 
+interface RuntimeActivityState {
+  source: string;
+  receivedAt: string;
+}
+
 interface UpdateCacheState {
   fetchedAtMs: number;
   remote?: WebSummaryVersionInfoFile;
@@ -63,6 +68,7 @@ function isCompatibleProtocol(localVersion: string, remoteVersion: string): bool
 
 export class WebSummaryCompatibilityManager {
   private handshakeState: HandshakeState | null = null;
+  private runtimeActivityState: RuntimeActivityState | null = null;
   private updateCache: UpdateCacheState | null = null;
 
   public buildHealth(): {
@@ -102,7 +108,15 @@ export class WebSummaryCompatibilityManager {
       payload,
       receivedAt: nowIso(),
     };
+    this.recordRuntimeActivity("handshake");
     return this.evaluate("summarize");
+  }
+
+  public recordRuntimeActivity(source: string): void {
+    this.runtimeActivityState = {
+      source,
+      receivedAt: nowIso(),
+    };
   }
 
   public evaluate(actionType: "summarize" | "open_conversation"): CompatibilityReport {
@@ -287,12 +301,20 @@ export class WebSummaryCompatibilityManager {
   }
 
   private getRuntimeStatus(): ExtensionRuntimeStatus {
-    const receivedAt = this.handshakeState?.receivedAt;
-    if (!receivedAt) return { online: false };
-    const age = Date.now() - new Date(receivedAt).getTime();
+    const heartbeatReceivedAt = this.handshakeState?.receivedAt || "";
+    const activityReceivedAt = this.runtimeActivityState?.receivedAt || "";
+    const latestSeenAt =
+      [heartbeatReceivedAt, activityReceivedAt]
+        .filter(Boolean)
+        .sort()
+        .at(-1) || "";
+    if (!latestSeenAt) return { online: false };
+    const age = Date.now() - new Date(latestSeenAt).getTime();
     return {
       online: age >= 0 && age <= WEB_SUMMARY_EXTENSION_HEARTBEAT_TTL_MS,
-      lastHeartbeatAt: this.handshakeState?.payload.heartbeatAt || receivedAt,
+      lastHeartbeatAt:
+        this.handshakeState?.payload.heartbeatAt || heartbeatReceivedAt || undefined,
+      lastActivityAt: activityReceivedAt || undefined,
     };
   }
 
@@ -338,6 +360,7 @@ export class WebSummaryCompatibilityManager {
         details: {
           online: details.runtimeStatus.online,
           lastHeartbeatAt: details.runtimeStatus.lastHeartbeatAt || null,
+          lastActivityAt: details.runtimeStatus.lastActivityAt || null,
         },
       },
       {

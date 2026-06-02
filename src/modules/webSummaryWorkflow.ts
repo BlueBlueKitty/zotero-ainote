@@ -8,7 +8,6 @@ import { WebSummaryBridgeClient } from "./webSummaryBridgeClient";
 import { buildConversationTitleFromItem } from "./webSummaryConversation";
 import { WebSummaryRelationStore } from "./webSummaryRelations";
 import {
-  ClaimNextTaskResponse,
   CreateTaskRequest,
   WebSummaryChatGPTMode,
   WebSummaryConversationMeta,
@@ -40,10 +39,11 @@ export interface WebSummarySingleRunHooks {
   onStage?: (stage: string, progress?: number) => void;
   onContent?: (content: string) => void;
   onCancelReady?: (cancelFn: () => void) => void;
+  onTaskCreated?: (task: WebSummaryTask) => void;
 }
 
 const WEB_SUMMARY_MODEL_LABEL = "ChatGPT Web";
-const EXTENSION_CLAIM_TIMEOUT_MS = 10000;
+const EXTENSION_CLAIM_TIMEOUT_MS = 45000;
 const EXTENSION_CLAIM_STALL_TIMEOUT_MS = 25000;
 const EXTENSION_OPENING_CHAT_TIMEOUT_MS = 65000;
 
@@ -52,6 +52,35 @@ class WebSummaryCanceledError extends Error {
     super(message);
     this.name = "WebSummaryCanceledError";
   }
+}
+
+function getWebSummaryCanceledMessage(): string {
+  return getString("summary-canceled-unsaved" as any);
+}
+
+export function throwIfWebSummaryCanceled(canceled: boolean): void {
+  if (!canceled) {
+    return;
+  }
+  throw new WebSummaryCanceledError(getWebSummaryCanceledMessage());
+}
+
+function toWebSummaryCanceledError(error?: unknown): WebSummaryCanceledError {
+  if (error instanceof WebSummaryCanceledError) {
+    return error;
+  }
+  const message = String((error as any)?.message || "").trim();
+  return new WebSummaryCanceledError(message || getWebSummaryCanceledMessage());
+}
+
+function isTaskNotFoundError(error: unknown): boolean {
+  const bridgeCode = String((error as any)?.bridgeCode || "");
+  const message = String((error as any)?.message || error || "");
+  return (
+    bridgeCode === "TASK_NOT_FOUND" ||
+    message.includes("Task not found") ||
+    message.includes("TASK_NOT_FOUND")
+  );
 }
 
 function sleep(ms: number): Promise<void> {
@@ -102,14 +131,6 @@ function toChatLink(
     createdAt: meta.createdAt || now,
     lastUsedAt: meta.lastUsedAt || now,
   };
-}
-
-function getPollIntervalMs(): number {
-  const value = parseInt(
-    String(getPref("webSummaryPollIntervalMs" as any) || "350"),
-    10,
-  );
-  return Number.isFinite(value) && value >= 200 ? value : 350;
 }
 
 function getProjectUrl(): string {
@@ -293,12 +314,174 @@ async function checkCompatibilityWarnings(
       }
       return true;
     });
-    for (const warning of warnings) {
-      ztoolkit.log("[AiNote][WebSummaryWorkflow][CompatibilityWarning]", warning);
-    }
+    void warnings;
   } catch (error) {
     ztoolkit.log("[AiNote][WebSummaryWorkflow] health check failed", error);
   }
+}
+
+async function discardBridgeTask(
+  taskId?: string,
+  reason = "网页总结任务已结束并清理",
+): Promise<void> {
+  const normalizedTaskId = String(taskId || "").trim();
+  if (!normalizedTaskId) {
+    return;
+  }
+  try {
+    await WebSummaryBridgeClient.cancelTask(normalizedTaskId, reason).catch(() => {});
+    await WebSummaryBridgeClient.removeTask(normalizedTaskId).catch(() => {});
+  } catch (error) {
+    ztoolkit.log("[AiNote][WebSummaryWorkflow] failed to discard bridge task", {
+      taskId: normalizedTaskId,
+      reason,
+      error,
+    });
+  }
+}
+
+async function cancelBridgeTaskAndThrowIfRequested(
+  canceled: boolean,
+  taskId?: string,
+): Promise<void> {
+  if (!canceled) {
+    return;
+  }
+  const normalizedTaskId = String(taskId || "").trim();
+  if (normalizedTaskId) {
+    try {
+      await WebSummaryBridgeClient.cancelTask(
+        normalizedTaskId,
+        getWebSummaryCanceledMessage(),
+      );
+    } catch (error) {
+      ztoolkit.log(
+        "[AiNote][WebSummaryWorkflow] cancel current task failed during submit stage",
+        error,
+      );
+    }
+  }
+  throwIfWebSummaryCanceled(canceled);
+}
+
+async function waitForTaskTerminalState(params: {
+  task: WebSummaryTask;
+  launchUrl?: string;
+  onTask?: (task: WebSummaryTask) => Promise<void> | void;
+}): Promise<WebSummaryTask> {
+  const { task, launchUrl, onTask } = params;
+  const taskId = task.taskId;
+  let latestTask = task;
+  let settled = false;
+  let queuedTimer: ReturnType<typeof setTimeout> | null = null;
+  let openingTimer: ReturnType<typeof setTimeout> | null = null;
+  let claimedTimer: ReturnType<typeof setTimeout> | null = null;
+  let unsubscribe = () => {};
+
+  const clearTimers = () => {
+    if (queuedTimer) clearTimeout(queuedTimer);
+    if (openingTimer) clearTimeout(openingTimer);
+    if (claimedTimer) clearTimeout(claimedTimer);
+    queuedTimer = null;
+    openingTimer = null;
+    claimedTimer = null;
+  };
+
+  const cleanup = () => {
+    if (settled) return;
+    settled = true;
+    clearTimers();
+    unsubscribe();
+  };
+
+  return new Promise<WebSummaryTask>((resolve, reject) => {
+    const fail = (error: Error) => {
+      if (settled) return;
+      cleanup();
+      reject(error);
+    };
+
+    const scheduleTimers = () => {
+      clearTimers();
+      if (latestTask.status === "queued") {
+        queuedTimer = setTimeout(() => {
+          if (launchUrl) {
+            launchChatGPTSurface(launchUrl);
+          }
+          fail(
+            new Error(
+              "已尝试主动打开 ChatGPT，但浏览器扩展仍未领取任务。请确认 Chrome 已启动、扩展已启用，并且扩展中的 Bridge URL 与 Zotero 中的端口一致。",
+            ),
+          );
+        }, EXTENSION_CLAIM_TIMEOUT_MS);
+      }
+      if (latestTask.status === "claimed") {
+        claimedTimer = setTimeout(() => {
+          void checkCompatibilityWarnings("runtime")
+            .catch(() => {})
+            .finally(() => {
+              fail(
+                new Error(
+                  "浏览器扩展已领取任务但尚未开始唤起网页。请确认扩展后台仍在运行；若持续出现，请重启 Chrome 和扩展后再试。",
+                ),
+              );
+            });
+        }, EXTENSION_CLAIM_STALL_TIMEOUT_MS);
+      }
+      if (latestTask.status === "opening_chat") {
+        openingTimer = setTimeout(() => {
+          void checkCompatibilityWarnings("runtime")
+            .catch(() => {})
+            .finally(() => {
+              fail(
+                new Error(
+                  "浏览器扩展已开始打开 ChatGPT，但页面脚本长时间未就绪。请确认 ChatGPT 页面已正常加载；若持续出现，请重启 Chrome 和扩展后再试。",
+                ),
+              );
+            });
+        }, EXTENSION_OPENING_CHAT_TIMEOUT_MS);
+      }
+    };
+
+    const handleTask = async (nextTask: WebSummaryTask) => {
+      latestTask = nextTask;
+      scheduleTimers();
+      if (onTask) {
+        await onTask(nextTask);
+      }
+      if (["succeeded", "failed", "canceled"].includes(nextTask.status)) {
+        cleanup();
+        resolve(nextTask);
+      }
+    };
+
+    unsubscribe = WebSummaryBridgeClient.subscribeTask(taskId, (nextTask) => {
+      void handleTask(nextTask).catch((error) =>
+        fail(error instanceof Error ? error : new Error(String(error))),
+      );
+    });
+
+    void WebSummaryBridgeClient.getTask(taskId)
+      .then((currentTask) => handleTask(currentTask))
+      .catch(async (error) => {
+        if (isTaskNotFoundError(error)) {
+          await handleTask({
+            ...task,
+            status: "canceled",
+            updatedAt: new Date().toISOString(),
+            cancelRequestedAt: new Date().toISOString(),
+            cancelReason: "网页总结任务已从活动列表移除",
+            errorCode: "INTERNAL_ERROR",
+            errorMessage: "网页总结任务已从活动列表移除",
+          });
+          return;
+        }
+        await handleTask(task);
+      })
+      .catch((error) =>
+        fail(error instanceof Error ? error : new Error(String(error))),
+      );
+  });
 }
 
 export class WebSummaryWorkflow {
@@ -319,7 +502,7 @@ export class WebSummaryWorkflow {
       if (currentTaskId) {
         void WebSummaryBridgeClient.cancelTask(
           currentTaskId,
-          getString("summary-canceled-unsaved" as any),
+          getWebSummaryCanceledMessage(),
         ).catch((error) => {
           ztoolkit.log(
             "[AiNote][WebSummaryWorkflow] cancel current task failed",
@@ -381,89 +564,57 @@ export class WebSummaryWorkflow {
     for (let payloadIndex = 0; payloadIndex < payloads.length; payloadIndex += 1) {
       const payload = payloads[payloadIndex];
       const isFallbackAttempt = payloadIndex > 0;
-      if (isFallbackAttempt) {
-        ztoolkit.log(
-          "[AiNote][WebSummaryWorkflow] fallback to new conversation summarize",
-          { itemId: target.item.id, title: String(target.item.getField("title") || "") },
-        );
-      }
+      let attemptTaskId = "";
+      void isFallbackAttempt;
 
+      throwIfWebSummaryCanceled(currentTaskCanceled);
       launchChatGPTSurface(
         payload.existingConversationUrl || payload.projectUrl || "https://chatgpt.com/",
       );
       hooks?.onStage?.(getString("web-summary-stage-submitting" as any), 5);
       await sleep(4000);
+      throwIfWebSummaryCanceled(currentTaskCanceled);
 
       try {
         await checkCompatibilityWarnings("preflight");
+        throwIfWebSummaryCanceled(currentTaskCanceled);
         let task;
         try {
           task = (await WebSummaryBridgeClient.createTask(payload)).task;
+          hooks?.onTaskCreated?.(task);
         } catch (error: any) {
+          if (currentTaskCanceled) {
+            throw toWebSummaryCanceledError(error);
+          }
           const createError = new Error(formatCreateTaskError(error));
           throw createError;
         }
         currentTaskId = task.taskId;
-        latestTask = task;
-        const queuedStartedAt = Date.now();
+        attemptTaskId = task.taskId;
+        await cancelBridgeTaskAndThrowIfRequested(currentTaskCanceled, currentTaskId);
         let conversationLinked = false;
-        let lastObservedStatus = latestTask.status;
-        let sameStatusSince = Date.now();
-        while (!["succeeded", "failed", "canceled"].includes(latestTask.status)) {
-          if (currentTaskCanceled) {
-            await WebSummaryBridgeClient.cancelTask(
-              latestTask.taskId,
-              getString("summary-canceled-unsaved" as any),
-            );
-          }
-          await sleep(getPollIntervalMs());
-          latestTask = await WebSummaryBridgeClient.getTask(task.taskId);
-          if (latestTask.status !== lastObservedStatus) {
-            lastObservedStatus = latestTask.status;
-            sameStatusSince = Date.now();
-          }
-          if (
-            latestTask.status === "queued" &&
-            Date.now() - queuedStartedAt >= EXTENSION_CLAIM_TIMEOUT_MS
-          ) {
-            launchChatGPTSurface(
-              payload.existingConversationUrl || payload.projectUrl || "https://chatgpt.com/",
-            );
-            throw new Error(
-              "已尝试主动打开 ChatGPT，但浏览器扩展仍未领取任务。请确认 Chrome 已启动、扩展已启用，并且扩展中的 Bridge URL 与 Zotero 中的端口一致。",
-            );
-          }
-          if (
-            latestTask.status === "claimed" &&
-            Date.now() - sameStatusSince >= EXTENSION_CLAIM_STALL_TIMEOUT_MS
-          ) {
-            await checkCompatibilityWarnings("runtime");
-            throw new Error(
-              "浏览器扩展已领取任务但尚未开始唤起网页。请确认扩展后台仍在运行；若持续出现，请重启 Chrome 和扩展后再试。",
-            );
-          }
-          if (
-            latestTask.status === "opening_chat" &&
-            Date.now() - sameStatusSince >= EXTENSION_OPENING_CHAT_TIMEOUT_MS
-          ) {
-            await checkCompatibilityWarnings("runtime");
-            throw new Error(
-              "浏览器扩展已开始打开 ChatGPT，但页面脚本长时间未就绪。请确认 ChatGPT 页面已正常加载；若持续出现，请重启 Chrome 和扩展后再试。",
-            );
-          }
-          hooks?.onStage?.(getStatusMessage(latestTask), 15);
-          if (
-            !conversationLinked &&
-            latestTask.conversationMeta?.conversationId &&
-            latestTask.conversationMeta?.conversationUrl
-          ) {
-            await WebSummaryRelationStore.saveLatestLink(
-              target.item,
-              toChatLink("chatgpt", latestTask.conversationMeta),
-            );
-            conversationLinked = true;
-          }
-        }
+        latestTask = await waitForTaskTerminalState({
+          task,
+          launchUrl:
+            payload.existingConversationUrl ||
+            payload.projectUrl ||
+            "https://chatgpt.com/",
+          onTask: async (nextTask) => {
+            latestTask = nextTask;
+            hooks?.onStage?.(getStatusMessage(latestTask), 15);
+            if (
+              !conversationLinked &&
+              latestTask.conversationMeta?.conversationId &&
+              latestTask.conversationMeta?.conversationUrl
+            ) {
+              await WebSummaryRelationStore.saveLatestLink(
+                target.item,
+                toChatLink("chatgpt", latestTask.conversationMeta),
+              );
+              conversationLinked = true;
+            }
+          },
+        });
         currentTaskId = "";
 
         if (latestTask.status === "canceled") {
@@ -484,31 +635,27 @@ export class WebSummaryWorkflow {
           payloadIndex < payloads.length - 1 &&
           shouldFallbackToNewConversation(runtimeError)
         ) {
-          ztoolkit.log(
-            "[AiNote][WebSummaryWorkflow] saved conversation unavailable, retrying with project URL",
-            {
-              itemId: target.item.id,
-              taskId: latestTask.taskId,
-              error: runtimeError.message,
-            },
-          );
           continue;
         }
         throw runtimeError;
       } catch (error) {
+        const cleanupTaskId =
+          currentTaskId ||
+          attemptTaskId ||
+          latestTask?.taskId ||
+          "";
+        if (cleanupTaskId) {
+          await discardBridgeTask(cleanupTaskId, "网页总结失败后清理遗留任务");
+        }
         currentTaskId = "";
+        if (currentTaskCanceled) {
+          throw toWebSummaryCanceledError(error);
+        }
         if (
           payload.existingConversationUrl &&
           payloadIndex < payloads.length - 1 &&
           shouldFallbackToNewConversation(error)
         ) {
-          ztoolkit.log(
-            "[AiNote][WebSummaryWorkflow] saved conversation open failed, retrying with project URL",
-            {
-              itemId: target.item.id,
-              error: String((error as any)?.message || error || ""),
-            },
-          );
           continue;
         }
         throw error;
@@ -586,7 +733,7 @@ export class WebSummaryWorkflow {
       if (currentTaskId) {
         void WebSummaryBridgeClient.cancelTask(
           currentTaskId,
-          "已停止当前条目的AI总结",
+          getWebSummaryCanceledMessage(),
         ).catch((error) => {
           ztoolkit.log(
             "[AiNote][WebSummaryWorkflow] cancel current task failed",
@@ -671,143 +818,87 @@ export class WebSummaryWorkflow {
         for (let payloadIndex = 0; payloadIndex < payloads.length; payloadIndex += 1) {
           const payload = payloads[payloadIndex];
           const isFallbackAttempt = payloadIndex > 0;
-          if (isFallbackAttempt) {
-            ztoolkit.log(
-              "[AiNote][WebSummaryWorkflow] batch fallback to new conversation summarize",
-              { itemId: target.item.id, title: itemTitle },
-            );
-          }
+          let attemptTaskId = "";
+          void isFallbackAttempt;
+          throwIfWebSummaryCanceled(currentTaskCanceled);
           launchChatGPTSurface(
             payload.existingConversationUrl || payload.projectUrl || "https://chatgpt.com/",
           );
 
           // 等待浏览器和扩展初始化（冷启动时 Chrome 需要时间启动，扩展 Service Worker 需要初始化轮询）
           await sleep(4000);
+          throwIfWebSummaryCanceled(currentTaskCanceled);
 
           try {
             await checkCompatibilityWarnings("preflight");
+            throwIfWebSummaryCanceled(currentTaskCanceled);
             let task;
             try {
               task = (await WebSummaryBridgeClient.createTask(payload)).task;
             } catch (error: any) {
+              if (currentTaskCanceled) {
+                throw toWebSummaryCanceledError(error);
+              }
               const createError = new Error(formatCreateTaskError(error));
               throw createError;
             }
             currentTaskId = task.taskId;
-            latestTask = task;
-            const queuedStartedAt = Date.now();
+            attemptTaskId = task.taskId;
+            await cancelBridgeTaskAndThrowIfRequested(
+              currentTaskCanceled,
+              currentTaskId,
+            );
             let conversationLinked = false;
-            let lastObservedStatus = latestTask.status;
-            let sameStatusSince = Date.now();
-
-            while (
-              !["succeeded", "failed", "canceled"].includes(latestTask.status)
-            ) {
-              if (currentTaskCanceled) {
-                await WebSummaryBridgeClient.cancelTask(
-                  latestTask.taskId,
-                  getString("summary-canceled-unsaved" as any),
-                );
-              }
-              await sleep(getPollIntervalMs());
-              latestTask = await WebSummaryBridgeClient.getTask(task.taskId);
-              if (latestTask.status !== lastObservedStatus) {
-                lastObservedStatus = latestTask.status;
-                sameStatusSince = Date.now();
-              }
-              if (
-                latestTask.status === "queued" &&
-                Date.now() - queuedStartedAt >= EXTENSION_CLAIM_TIMEOUT_MS
-              ) {
-                launchChatGPTSurface(
-                  payload.existingConversationUrl || payload.projectUrl || "https://chatgpt.com/",
-                );
-                throw new Error(
-                  "已尝试主动打开 ChatGPT，但浏览器扩展仍未领取任务。请确认 Chrome 已启动、扩展已启用，并且扩展中的 Bridge URL 与 Zotero 中的端口一致。",
-                );
-              }
-              if (
-                latestTask.status === "claimed" &&
-                Date.now() - sameStatusSince >= EXTENSION_CLAIM_STALL_TIMEOUT_MS
-              ) {
-                await checkCompatibilityWarnings("runtime");
-                throw new Error(
-                  "浏览器扩展已领取任务但尚未开始唤起网页。请确认扩展后台仍在运行；若持续出现，请重启 Chrome 和扩展后再试。",
-                );
-              }
-              if (
-                latestTask.status === "opening_chat" &&
-                Date.now() - sameStatusSince >= EXTENSION_OPENING_CHAT_TIMEOUT_MS
-              ) {
-                await checkCompatibilityWarnings("runtime");
-                throw new Error(
-                  "浏览器扩展已开始打开 ChatGPT，但页面脚本长时间未就绪。请确认 ChatGPT 页面已正常加载；若持续出现，请重启 Chrome 和扩展后再试。",
-                );
-              }
-              const statusMessage = getStatusMessage(latestTask);
-              if (statusMessage !== lastStatusMessage) {
-                outputWindow.updateCurrentStatus(statusMessage);
-                OutputWindowManager.recordStatusUpdate(statusMessage);
-                lastStatusMessage = statusMessage;
-              }
-              if (
-                !conversationLinked &&
-                latestTask.conversationMeta?.conversationId &&
-                latestTask.conversationMeta?.conversationUrl
-              ) {
-                try {
-                  await WebSummaryRelationStore.saveLatestLink(
-                    target.item,
-                    toChatLink("chatgpt", latestTask.conversationMeta),
-                  );
-                  conversationLinked = true;
-                  ztoolkit.log(
-                    "[AiNote][WebSummaryWorkflow] conversation linked early",
-                    {
-                      taskId: latestTask.taskId,
-                      conversationUrl: latestTask.conversationMeta?.conversationUrl,
-                    },
-                  );
-                } catch (linkError) {
-                  ztoolkit.log(
-                    "[AiNote][WebSummaryWorkflow] failed to link conversation early",
-                    {
-                      taskId: latestTask.taskId,
-                      error: linkError,
-                    },
-                  );
+            latestTask = await waitForTaskTerminalState({
+              task,
+              launchUrl:
+                payload.existingConversationUrl ||
+                payload.projectUrl ||
+                "https://chatgpt.com/",
+              onTask: async (nextTask) => {
+                latestTask = nextTask;
+                const statusMessage = getStatusMessage(latestTask);
+                if (statusMessage !== lastStatusMessage) {
+                  outputWindow.updateCurrentStatus(statusMessage);
+                  OutputWindowManager.recordStatusUpdate(statusMessage);
+                  lastStatusMessage = statusMessage;
                 }
-              }
-              if (latestTask.modeSwitchOk) {
-                const logText = `task=${latestTask.taskId}: 模型切换成功`;
-                if (logText !== lastModeSwitchLog) {
-                  ztoolkit.log("[AiNote][WebSummaryWorkflow]", logText);
-                  lastModeSwitchLog = logText;
+                if (
+                  !conversationLinked &&
+                  latestTask.conversationMeta?.conversationId &&
+                  latestTask.conversationMeta?.conversationUrl
+                ) {
+                  try {
+                    await WebSummaryRelationStore.saveLatestLink(
+                      target.item,
+                      toChatLink("chatgpt", latestTask.conversationMeta),
+                    );
+                    conversationLinked = true;
+                  } catch (linkError) {
+                    void linkError;
+                  }
                 }
-              }
-              if (latestTask.modeSwitchFailed || latestTask.modeSwitchError) {
-                const logText = `task=${latestTask.taskId}: 模型切换失败 ${latestTask.modeSwitchError || ""}`.trim();
-                if (logText !== lastModeSwitchLog) {
-                  ztoolkit.log("[AiNote][WebSummaryWorkflow]", logText);
-                  lastModeSwitchLog = logText;
+                if (latestTask.modeSwitchOk) {
+                  lastModeSwitchLog = `task=${latestTask.taskId}: 模型切换成功`;
                 }
-              }
-              if (latestTask.pdfUploadReady) {
-                const logText = `task=${latestTask.taskId}: PDF 上传完成`;
-                if (logText !== lastPdfUploadLog) {
-                  ztoolkit.log("[AiNote][WebSummaryWorkflow]", logText);
-                  lastPdfUploadLog = logText;
+                if (latestTask.modeSwitchFailed || latestTask.modeSwitchError) {
+                  const logText = `task=${latestTask.taskId}: 模型切换失败 ${latestTask.modeSwitchError || ""}`.trim();
+                  if (logText !== lastModeSwitchLog) {
+                    lastModeSwitchLog = logText;
+                  }
                 }
-              }
-              if (latestTask.debugMessage && latestTask.debugMessage !== lastDebugMessage) {
-                ztoolkit.log("[AiNote][WebSummaryWorkflow][Debug]", {
-                  taskId: latestTask.taskId,
-                  message: latestTask.debugMessage,
-                });
-                lastDebugMessage = latestTask.debugMessage;
-              }
-              progressCallback?.(current, total, 15, statusMessage);
-            }
+                if (latestTask.pdfUploadReady) {
+                  lastPdfUploadLog = `task=${latestTask.taskId}: PDF 上传完成`;
+                }
+                if (
+                  latestTask.debugMessage &&
+                  latestTask.debugMessage !== lastDebugMessage
+                ) {
+                  lastDebugMessage = latestTask.debugMessage;
+                }
+                progressCallback?.(current, total, 15, statusMessage);
+              },
+            });
             currentTaskId = "";
             if (latestTask.status === "succeeded" && latestTask.resultMarkdown) {
               break;
@@ -827,31 +918,30 @@ export class WebSummaryWorkflow {
               payloadIndex < payloads.length - 1 &&
               shouldFallbackToNewConversation(runtimeError)
             ) {
-              ztoolkit.log(
-                "[AiNote][WebSummaryWorkflow] batch saved conversation unavailable, retrying with project URL",
-                {
-                  itemId: target.item.id,
-                  taskId: latestTask.taskId,
-                  error: runtimeError.message,
-                },
-              );
               continue;
             }
             throw runtimeError;
           } catch (error) {
+            const cleanupTaskId =
+              currentTaskId ||
+              attemptTaskId ||
+              latestTask?.taskId ||
+              "";
+            if (cleanupTaskId) {
+              await discardBridgeTask(
+                cleanupTaskId,
+                "网页总结失败后清理遗留任务",
+              );
+            }
             currentTaskId = "";
+            if (currentTaskCanceled) {
+              throw toWebSummaryCanceledError(error);
+            }
             if (
               payload.existingConversationUrl &&
               payloadIndex < payloads.length - 1 &&
               shouldFallbackToNewConversation(error)
             ) {
-              ztoolkit.log(
-                "[AiNote][WebSummaryWorkflow] batch saved conversation open failed, retrying with project URL",
-                {
-                  itemId: target.item.id,
-                  error: String((error as any)?.message || error || ""),
-                },
-              );
               continue;
           }
             throw error;
@@ -864,13 +954,6 @@ export class WebSummaryWorkflow {
         if (latestTask.status !== "succeeded" || !latestTask.resultMarkdown) {
           throw new Error(latestTask.errorMessage || getString("web-summary-error-generic" as any));
         }
-        ztoolkit.log("[AiNote][WebSummaryWorkflow] summary content fetched", {
-          taskId: latestTask.taskId,
-          source: latestTask.resultSource || "unknown",
-          debugInfo: latestTask.resultDebugInfo || "",
-          length: latestTask.resultMarkdown.length,
-        });
-
         const noteBody = stripLeadingSummaryHeading(
           latestTask.resultMarkdown,
           summaryHeading,
@@ -1005,35 +1088,23 @@ export class WebSummaryWorkflow {
 
     const { task } = await WebSummaryBridgeClient.createTask(payload);
     const taskId = task.taskId;
-    let latestTask = task;
-    const queuedStartedAt = Date.now();
-
-    while (
-      !["succeeded", "failed", "canceled"].includes(latestTask.status)
-    ) {
-      await sleep(getPollIntervalMs());
-      latestTask = await WebSummaryBridgeClient.getTask(taskId);
+    const latestTask = await waitForTaskTerminalState({
+      task,
+      launchUrl: link.conversationUrl,
+    }).catch((error) => {
+      const message = String((error as Error)?.message || error || "");
       if (
-        latestTask.status === "queued" &&
-        Date.now() - queuedStartedAt >= EXTENSION_CLAIM_TIMEOUT_MS
+        message.includes("扩展仍未领取任务") ||
+        message.includes("Chrome 已启动")
       ) {
-        launchChatGPTSurface(link.conversationUrl);
-        throw new Error(
-          "浏览器扩展未领取调试任务，请确认扩展已启用",
-        );
+        throw new Error("浏览器扩展未领取调试任务，请确认扩展已启用");
       }
-    }
+      throw error;
+    });
 
     if (latestTask.status !== "succeeded" || !latestTask.resultMarkdown) {
       throw new Error(latestTask.errorMessage || "调试获取网页总结内容失败");
     }
-    ztoolkit.log("[AiNote][WebSummaryWorkflow][DebugFetch] content fetched", {
-      taskId,
-      source: latestTask.resultSource || "unknown",
-      debugInfo: latestTask.resultDebugInfo || "",
-      length: latestTask.resultMarkdown.length,
-    });
-
     const summaryHeading = `## AI Summary (Debug Fetch)\n\n`;
     const noteHtml = buildNoteHtmlFromMarkdown(
       summaryHeading,

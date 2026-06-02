@@ -10,6 +10,7 @@ export type SummaryTaskStatus =
 export interface SummaryTask {
   id: string;
   kind: SummaryTaskKind;
+  webTaskId?: string;
   itemID: number;
   itemKey?: string;
   title: string;

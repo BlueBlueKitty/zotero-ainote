@@ -40,6 +40,12 @@ async function onSave() {
 async function onTest() {
   status.textContent = t("statusTesting");
   try {
+    const heartbeatResult = await chrome.runtime.sendMessage({
+      type: "ainote-force-heartbeat",
+    });
+    if (!heartbeatResult?.ok) {
+      throw new Error(heartbeatResult?.error || "扩展后台未能完成握手");
+    }
     const result = await healthCheck();
     const checks = Array.isArray(result?.checks) ? result.checks : [];
     const relevantChecks = checks.filter((entry) => entry?.scope === "basic");
