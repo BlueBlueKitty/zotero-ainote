@@ -21,12 +21,12 @@
   "homepage": "https://github.com/BlueBlueKitty/zotero-ainote#readme",
   "license": "AGPL-3.0-or-later",
   "scripts": {
-    "start": "zotero-plugin serve",
-    "build": "zotero-plugin build && tsc --noEmit",
+    "start": "node scripts/prepare-scaffold-run.mjs serve && node scripts/run-scaffold.mjs serve",
+    "build": "node scripts/prepare-scaffold-run.mjs build && node scripts/run-scaffold.mjs build && tsc --noEmit",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
-    "release": "zotero-plugin release",
-    "test": "zotero-plugin test",
+    "release": "node scripts/prepare-scaffold-run.mjs release && node scripts/run-scaffold.mjs release",
+    "test": "node scripts/prepare-scaffold-run.mjs test && node scripts/run-scaffold.mjs test",
     "update-deps": "npm update --save"
   },
   "dependencies": {

@@ -1,9 +1,11 @@
 import { defineConfig } from "zotero-plugin-scaffold";
 import pkg from "./package.json";
 
+const scaffoldDist = process.env.AINOTE_SCAFFOLD_DIST ?? ".scaffold/build";
+
 export default defineConfig({
   source: ["src", "addon"],
-  dist: ".scaffold/build",
+  dist: scaffoldDist,
   name: pkg.config.addonName,
   id: pkg.config.addonID,
   namespace: pkg.config.addonRef,
@@ -34,7 +36,7 @@ export default defineConfig({
         },
         bundle: true,
         target: "firefox115",
-        outfile: `.scaffold/build/addon/content/scripts/${pkg.config.addonRef}.js`,
+        outfile: `${scaffoldDist}/addon/content/scripts/${pkg.config.addonRef}.js`,
       },
     ],
   },
