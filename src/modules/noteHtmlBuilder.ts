@@ -48,8 +48,11 @@ function normalizeNoteHtmlMath(html: string): string {
   const parser = new DOMParser();
   const doc = parser.parseFromString(`<body>${html}</body>`, "text/html");
   const body = doc.body;
+  if (!body) {
+    return html;
+  }
   normalizeMathInHtmlDom(body);
-  return body.innerHTML;
+  return String(body.innerHTML);
 }
 
 export function escapeHtml(text: string): string {

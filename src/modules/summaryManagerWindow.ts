@@ -46,6 +46,9 @@ export function normalizeDetailHeadingLevels(html: string): string {
   const parser = new DOMParser();
   const doc = parser.parseFromString(`<body>${raw}</body>`, "text/html");
   const body = doc.body;
+  if (!body) {
+    return raw;
+  }
   const headings = Array.from(body.querySelectorAll("h1, h2, h3, h4, h5, h6")) as HTMLElement[];
   if (!headings.length) {
     return raw;
@@ -79,7 +82,7 @@ export function normalizeDetailHeadingLevels(html: string): string {
     heading.replaceWith(replacement);
   }
 
-  return body.innerHTML;
+  return String(body.innerHTML);
 }
 
 function normalizeVisualStatus(status: string): SummaryTask["status"] {
