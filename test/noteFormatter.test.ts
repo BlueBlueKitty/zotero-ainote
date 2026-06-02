@@ -111,6 +111,20 @@ describe("noteFormatter", function () {
     assert.include(result.html, '<pre class="math">$$a&amp;b\\c&amp;d$$</pre>');
   });
 
+  it("should skip explicit inline delimiters when they wrap plain chinese prose", function () {
+    const input = [
+      "<p>\\(其中，T 表示像元值\\) 不应被当作公式。</p>",
+      "<p>$$其中，D 表示变化量$$ 也不应被当作公式。</p>",
+      "<p>\\(\\text{其中 } x < y\\) 这种显式 LaTeX 仍应保留。</p>",
+    ].join("");
+
+    const result = fixMathInNoteHtml(input);
+
+    assert.include(result.html, "\\(其中，T 表示像元值\\) 不应被当作公式。");
+    assert.include(result.html, "$$其中，D 表示变化量$$ 也不应被当作公式。");
+    assert.include(result.html, '<span class="math">$\\text{其中 } x &lt; y$</span>');
+  });
+
   it("should keep strict single-dollar exclusions while allowing lightweight math", function () {
     const input = [
       "<p>$x$、$n$、$a_i$、$x^2$、$(i,j)$、$f(x)$、$\\alpha+\\beta$、$2x$、$10^{-3}$ 应转换。</p>",

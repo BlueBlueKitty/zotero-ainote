@@ -1,7 +1,10 @@
 import { config } from "../../package.json";
 import { marked } from "marked";
 import { getString } from "../utils/locale";
-import { normalizeMathInMarkdown } from "./mathFormulaKernel";
+import {
+  normalizeMathInMarkdown,
+  shouldRenderExplicitInlineMathContent,
+} from "./mathFormulaKernel";
 
 type OutputItemStatus = "processing" | "completed" | "failed" | "canceled";
 
@@ -1488,7 +1491,10 @@ export class OutputWindow {
     });
     
     // 保护已有的 $$ $$ 块级公式
-    html = html.replace(/\$\$([\s\S]*?)\$\$/g, (match) => {
+    html = html.replace(/\$\$([\s\S]*?)\$\$/g, (match, formula) => {
+      if (!shouldRenderExplicitInlineMathContent(formula)) {
+        return match;
+      }
       const placeholder = `ⒻⓄⓇⓂⓊⓁⒶ_BLOCK_${formulas.length}`;
       formulas.push(match);
       return placeholder;
@@ -1496,6 +1502,9 @@ export class OutputWindow {
     
     // 转换并保护 LaTeX 行内公式: \(...\) → $...$
     html = html.replace(/\\\((.*?)\\\)/g, (match, formula) => {
+      if (!shouldRenderExplicitInlineMathContent(formula)) {
+        return match;
+      }
       const placeholder = `ⒻⓄⓇⓂⓊⓁⒶ_INLINE_${formulas.length}`;
       formulas.push(`$${formula}$`);
       return placeholder;

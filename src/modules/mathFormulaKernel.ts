@@ -58,6 +58,17 @@ export function normalizeMathInMarkdown(markdown: string): string {
   return normalized;
 }
 
+export function shouldRenderExplicitInlineMathContent(content: string): boolean {
+  const trimmed = normalizeInlineFormulaBody(content);
+  if (!trimmed) {
+    return false;
+  }
+  if (containsPlainUnicodeMathText(trimmed) && !looksLikeMathFormula(trimmed)) {
+    return false;
+  }
+  return true;
+}
+
 export function normalizeMathInHtmlDom(root: HTMLElement): MathNormalizeResult {
   const warnings: string[] = [];
   const stats: MathNormalizeStats = {
@@ -642,13 +653,12 @@ function shouldConvertMath(candidate: MathCandidate): boolean {
     return false;
   }
 
-  if (
-    candidate.delimiter === "$$" ||
-    candidate.delimiter === "\\(" ||
-    candidate.delimiter === "\\[" ||
-    candidate.delimiter === "env"
-  ) {
+  if (candidate.delimiter === "\\[" || candidate.delimiter === "env") {
     return true;
+  }
+
+  if (candidate.delimiter === "$$" || candidate.delimiter === "\\(") {
+    return shouldConvertExplicitInlineMath(candidate);
   }
 
   if (candidate.delimiter === "$") {
@@ -656,6 +666,10 @@ function shouldConvertMath(candidate: MathCandidate): boolean {
   }
 
   return false;
+}
+
+function shouldConvertExplicitInlineMath(candidate: MathCandidate): boolean {
+  return shouldRenderExplicitInlineMathContent(candidate.content);
 }
 
 function shouldConvertSingleDollarMath(candidate: MathCandidate): boolean {
@@ -835,6 +849,16 @@ function looksLikeMathFormula(content: string): boolean {
     return true;
   }
   return false;
+}
+
+function containsPlainUnicodeMathText(content: string): boolean {
+  const normalized = normalizeInlineFormulaBody(content);
+  if (!normalized) {
+    return false;
+  }
+  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(
+    normalized,
+  );
 }
 
 function mergeAdjacentTextSegments(segments: TextSegment[]): TextSegment[] {
