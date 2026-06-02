@@ -37,56 +37,6 @@ const HTML_DIALOG_TAGS = new Set([
 ]);
 type SelectOption = { value: string; label: string };
 
-export function normalizeDetailHeadingLevels(html: string): string {
-  const raw = String(html || "");
-  if (!raw.trim() || typeof DOMParser === "undefined") {
-    return raw;
-  }
-
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(`<div>${raw}</div>`, "text/html");
-  const body = doc.body;
-  const container = body?.firstElementChild as HTMLElement | null;
-  if (!container) {
-    return raw;
-  }
-
-  const headings = Array.from(
-    container.querySelectorAll("h1, h2, h3, h4, h5, h6"),
-  ) as HTMLElement[];
-  if (!headings.length) {
-    return raw;
-  }
-
-  const firstHeading = headings[0];
-  const firstLevel = parseInt(firstHeading.tagName.slice(1), 10);
-  if (!Number.isFinite(firstLevel) || firstLevel <= 1) {
-    return String(container.innerHTML);
-  }
-
-  const shift = firstLevel - 1;
-  for (const heading of headings) {
-    const currentLevel = parseInt(heading.tagName.slice(1), 10);
-    if (!Number.isFinite(currentLevel)) {
-      continue;
-    }
-    const nextLevel = Math.max(1, currentLevel - shift);
-    if (nextLevel === currentLevel) {
-      continue;
-    }
-    const replacement = doc.createElement(`h${nextLevel}`);
-    for (const attr of Array.from(heading.attributes)) {
-      replacement.setAttribute(attr.name, attr.value);
-    }
-    while (heading.firstChild) {
-      replacement.appendChild(heading.firstChild);
-    }
-    heading.replaceWith(replacement);
-  }
-
-  return String(container.innerHTML);
-}
-
 function normalizeVisualStatus(status: string): SummaryTask["status"] {
   if (status === "succeeded") return "completed";
   if (status === "canceled") return "cancelled";
@@ -2535,20 +2485,22 @@ export class SummaryManagerWindow {
         configScript.text = `
           window.MathJax = {
           tex: {
-            // Do NOT enable single-$ delimiters here; they can accidentally
-            // capture non-math text and produce giant broken SVG output.
-            inlineMath: [['\\\\(', '\\\\)']],
-            displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
-            processEscapes: true
+            inlineMath: [['$', '$']],
+            displayMath: [['$$', '$$']],
           },
           svg: {
             fontCache: 'global'
           },
           options: {
-            skipHtmlTags: { '[-]': ['pre'] },
-            enableMenu: false,
             enableAssistiveMml: false,
-            renderActions: { assistiveMml: [] }
+            renderActions: {
+              assistiveMml: []
+            }
+          },
+          startup: {
+            ready: () => {
+              MathJax.startup.defaultReady();
+            }
           }
         };
         `;
@@ -2560,6 +2512,7 @@ export class SummaryManagerWindow {
       const candidates = [
         `chrome://${config.addonRef}/content/lib/mathjax/es5/tex-chtml.js`,
         `chrome://${config.addonRef}/content/lib/mathjax/tex-svg.js`,
+        `chrome://${config.addonRef}/content/lib/mathjax/es5/tex-svg.js`,
       ];
       let idx = 0;
       script.src = candidates[idx];
@@ -2623,11 +2576,7 @@ export class SummaryManagerWindow {
   }
 
   private convertDetailMarkdownToHTML(markdown: string): string {
-    const normalized = this.normalizeInlineMathDelimiters(markdown);
-    const html = String(OutputWindow.convertMarkdownToHTMLCore(normalized));
-    return normalizeDetailHeadingLevels(
-      this.normalizeMathDelimitersInHTML(html),
-    );
+    return OutputWindow.convertMarkdownToDisplayHTML(markdown);
   }
 
   private stripDuplicatedSummaryPreamble(
@@ -2692,68 +2641,5 @@ export class SummaryManagerWindow {
 
     const stripped = lines.slice(i).join("\n").replace(/^\s+/, "");
     return stripped || raw;
-  }
-
-  private normalizeInlineMathDelimiters(markdown: string): string {
-    // Convert simple inline `$...$` into `\\(...\\)` so we can disable
-    // single-dollar delimiters in MathJax and avoid accidental over-matching.
-    // Keep display math `$$...$$` unchanged.
-    return markdown.replace(
-      /(^|[^\\$])\$([^\$\n]+?)\$(?!\$)/g,
-      (_match, prefix: string, expr: string) => `${prefix}\\(${expr.trim()}\\)`,
-    );
-  }
-
-  private normalizeMathDelimitersInHTML(html: string): string {
-    // Keep display/inlined math delimiters readable by MathJax even when
-    // markdown conversion escapes dollar symbols as entities.
-    let normalized = String(html || "")
-      .replace(/&#36;/g, "$")
-      .replace(/&dollar;/g, "$");
-
-    // Convert Zotero-style math pre blocks into standalone display containers
-    // so MathJax can reliably discover and typeset them.
-    normalized = normalized.replace(
-      /<pre\b[^>]*class=["'][^"']*\bmath\b[^"']*["'][^>]*>\s*([\s\S]*?)\s*<\/pre>/gi,
-      (_match, expr: string) => {
-        const raw = String(expr || "").trim();
-        const inner = this.stripOuterDisplayMathDelimiters(raw);
-        return `<div class="ainote-math-display">$$${inner}$$</div>`;
-      },
-    );
-
-    // Ensure display math appears as independent blocks for more stable parsing.
-    normalized = normalized.replace(
-      /<p>\s*\$\$([\s\S]*?)\$\$\s*<\/p>/g,
-      (_match, expr: string) => {
-        const inner = this.stripOuterDisplayMathDelimiters(String(expr || "").trim());
-        return `<div class="ainote-math-display">$$${inner}$$</div>`;
-      },
-    );
-
-    return normalized;
-  }
-
-  private stripOuterDisplayMathDelimiters(input: string): string {
-    let value = String(input || "").trim();
-
-    // Remove duplicated outer display delimiters like
-    // `$$$$ ... $$$$` / `$$...$$` / `\\[...\\]` before wrapping once.
-    while (
-      (value.startsWith("$$") && value.endsWith("$$") && value.length >= 4) ||
-      (value.startsWith("\\[") && value.endsWith("\\]") && value.length >= 4)
-    ) {
-      if (value.startsWith("$$") && value.endsWith("$$")) {
-        value = value.slice(2, -2).trim();
-        continue;
-      }
-      if (value.startsWith("\\[") && value.endsWith("\\]")) {
-        value = value.slice(2, -2).trim();
-        continue;
-      }
-      break;
-    }
-
-    return value;
   }
 }

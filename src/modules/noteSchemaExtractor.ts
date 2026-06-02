@@ -5,6 +5,9 @@ export interface NoteSchemaExtractResult {
   features: string[];
 }
 
+const ELEMENT_NODE = 1;
+const TEXT_NODE = 3;
+
 function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
@@ -112,11 +115,11 @@ export class NoteSchemaExtractor {
       const inlineToText = (el: Element): string => {
         const out: string[] = [];
         const walk = (node: Node) => {
-          if (node.nodeType === Node.TEXT_NODE) {
+          if (node.nodeType === TEXT_NODE) {
             out.push(node.textContent || "");
             return;
           }
-          if (node.nodeType !== Node.ELEMENT_NODE) return;
+          if (node.nodeType !== ELEMENT_NODE) return;
           const element = node as Element;
           const tag = element.tagName.toLowerCase();
           if (tag === "br") {
@@ -178,12 +181,12 @@ export class NoteSchemaExtractor {
       const blocks: string[] = [];
       for (const child of Array.from(root.childNodes)) {
         if (!child) continue;
-        if (child.nodeType === Node.TEXT_NODE) {
+        if (child.nodeType === TEXT_NODE) {
           const text = normalizeWhitespace(child.textContent || "");
           if (text) blocks.push(text);
           continue;
         }
-        if (child.nodeType === Node.ELEMENT_NODE) {
+        if (child.nodeType === ELEMENT_NODE) {
           blocks.push(blockToDisplay(child as Element));
         }
       }

@@ -1519,6 +1519,14 @@ export class OutputWindow {
   }
 
   /**
+   * 静态方法：将 Markdown 转换为与实时输出窗口一致的展示 HTML。
+   */
+  public static convertMarkdownToDisplayHTML(markdown: string): string {
+    const html = OutputWindow.convertMarkdownToHTMLCore(markdown);
+    return OutputWindow.normalizeDisplayMathBlocks(html);
+  }
+
+  /**
    * 简单的 HTML 转义（用于代码块）
    */
   private escapeHtmlSimple(text: string): string {
@@ -1569,7 +1577,6 @@ export class OutputWindow {
    * @returns 转换后的 HTML（带样式，用于弹出窗口显示）
    */
   public convertMarkdownToHTML(markdown: string): string {
-    const html = OutputWindow.convertMarkdownToHTMLCore(markdown);
-    return OutputWindow.normalizeDisplayMathBlocks(html);
+    return OutputWindow.convertMarkdownToDisplayHTML(markdown);
   }
 }
