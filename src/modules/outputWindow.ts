@@ -1513,7 +1513,7 @@ export class OutputWindow {
     // ===== 步骤 3: 恢复所有公式 =====
     html = html.replace(/ⒻⓄⓇⓂⓊⓁⒶ_(BLOCK|INLINE)_(\d+)/g, (match, type, index) => {
       const formula = formulas[parseInt(index)];
-      return formula || match;
+      return formula ? OutputWindow.escapeHtmlStatic(formula) : match;
     });
 
     return html;
