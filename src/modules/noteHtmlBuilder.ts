@@ -38,27 +38,8 @@ function formatCompletedAt(date: Date): string {
  */
 export function convertMarkdownToNoteHTML(markdown: string): string {
   let html = OutputWindow.convertMarkdownToHTMLCore(normalizeMathInMarkdown(markdown));
-  const blockPlaceholders: string[] = [];
 
   html = html.replace(/\s+style="[^"]*"/g, "");
-
-  html = html.replace(
-    /\$\$([\s\S]*?)\$\$/g,
-    (_match: string, formula: string) => {
-      const placeholder = `AINOTE_BLOCK_MATH_${blockPlaceholders.length}`;
-      blockPlaceholders.push(`<pre class="math">$$${formula}$$</pre>`);
-      return placeholder;
-    },
-  );
-
-  // eslint-disable-next-line no-useless-escape
-  html = html.replace(/\$([^\$\n]+?)\$/g, (_match: string, formula: string) => {
-    return `<span class="math">$${formula}$</span>`;
-  });
-
-  html = html.replace(/AINOTE_BLOCK_MATH_(\d+)/g, (_match: string, index: string) => {
-    return blockPlaceholders[parseInt(index, 10)] || _match;
-  });
 
   return normalizeNoteHtmlMath(html);
 }

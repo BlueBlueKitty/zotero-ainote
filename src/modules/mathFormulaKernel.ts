@@ -14,6 +14,19 @@ interface FormulaCandidate {
   text: string;
 }
 
+type MathDelimiter = "$" | "$$" | "\\(" | "\\[" | "env";
+
+interface MathCandidate {
+  kind: "inline" | "display";
+  delimiter: MathDelimiter;
+  raw: string;
+  content: string;
+  start: number;
+  end: number;
+  before: string;
+  after: string;
+}
+
 interface TextSegment {
   type: "text" | "inline-math";
   content: string;
@@ -22,14 +35,16 @@ interface TextSegment {
 const SUPPORTED_BLOCK_ENVS = new Set([
   "equation",
   "align",
+  "aligned",
   "gather",
+  "matrix",
   "multline",
   "cases",
 ]);
 const BLOCK_FORMULA_CONTAINER_SELECTOR =
   "p, div, li, td, th, blockquote, h1, h2, h3, h4, h5, h6";
 const SKIP_MATH_SELECTOR =
-  "pre, code, a, .math, .katex, script, style, textarea";
+  "pre, code, a, input, .math, .math-inline, .math-display, .katex, script, style, textarea";
 const TEXT_NODE = 3;
 const SHOW_TEXT = 0x4;
 
@@ -410,11 +425,22 @@ function splitTextByInlineMath(
         segments.push({ type: "text", content: text.slice(start) });
         break;
       }
-      const formulaBody = normalizeInlineFormulaBody(text.slice(start + 2, end));
-      if (!formulaBody) {
+      const candidate = createMathCandidate(text, {
+        kind: "inline",
+        delimiter: "\\(",
+        start,
+        contentStart: start + 2,
+        contentEnd: end,
+        end: end + 2,
+      });
+      if (!shouldConvertMath(candidate)) {
+        stats.riskySkipped++;
         segments.push({ type: "text", content: text.slice(start, end + 2) });
       } else {
-        segments.push({ type: "inline-math", content: formulaBody });
+        segments.push({
+          type: "inline-math",
+          content: normalizeInlineFormulaBody(candidate.content),
+        });
       }
       cursor = end + 2;
       continue;
@@ -427,8 +453,15 @@ function splitTextByInlineMath(
         break;
       }
 
-      const candidate = text.slice(start + 2, end);
-      if (!isSafeInlineDoubleDollarFormula(candidate)) {
+      const candidate = createMathCandidate(text, {
+        kind: "inline",
+        delimiter: "$$",
+        start,
+        contentStart: start + 2,
+        contentEnd: end,
+        end: end + 2,
+      });
+      if (!shouldConvertMath(candidate)) {
         stats.riskySkipped++;
         segments.push({ type: "text", content: text.slice(start, end + 2) });
         cursor = end + 2;
@@ -437,7 +470,7 @@ function splitTextByInlineMath(
 
       segments.push({
         type: "inline-math",
-        content: normalizeInlineFormulaBody(candidate),
+        content: normalizeInlineFormulaBody(candidate.content),
       });
       cursor = end + 2;
       continue;
@@ -449,17 +482,24 @@ function splitTextByInlineMath(
       break;
     }
 
-    const candidate = text.slice(start + 1, end);
-    if (!isSafeInlineDollarFormula(candidate, text, start, end)) {
+    const candidate = createMathCandidate(text, {
+      kind: "inline",
+      delimiter: "$",
+      start,
+      contentStart: start + 1,
+      contentEnd: end,
+      end: end + 1,
+    });
+    if (!shouldConvertMath(candidate)) {
       stats.riskySkipped++;
-      segments.push({ type: "text", content: text.slice(start, end + 1) });
-      cursor = end + 1;
+      segments.push({ type: "text", content: text.slice(start, start + 1) });
+      cursor = start + 1;
       continue;
     }
 
     segments.push({
       type: "inline-math",
-      content: normalizeInlineFormulaBody(candidate),
+      content: normalizeInlineFormulaBody(candidate.content),
     });
     cursor = end + 1;
   }
@@ -566,19 +606,176 @@ function normalizeDoubleEscapedLatexCommands(content: string): string {
   return content.replace(/\\\\([A-Za-z]+)\b/g, "\\$1");
 }
 
-function findNextInlineDoubleDollarStart(text: string, fromIndex: number): number {
-  for (let index = fromIndex; index < text.length - 1; index++) {
-    if (text[index] !== "$" || text[index + 1] !== "$") continue;
-    if (text[index - 1] === "\\") continue;
-    return index;
+function containsDangerousHtml(content: string): boolean {
+  return /<\/?(script|style|iframe|object|embed|link|meta)\b/i.test(content);
+}
+
+function createMathCandidate(
+  text: string,
+  params: {
+    kind: "inline" | "display";
+    delimiter: MathDelimiter;
+    start: number;
+    contentStart: number;
+    contentEnd: number;
+    end: number;
+  },
+): MathCandidate {
+  return {
+    kind: params.kind,
+    delimiter: params.delimiter,
+    raw: text.slice(params.start, params.end),
+    content: text.slice(params.contentStart, params.contentEnd),
+    start: params.start,
+    end: params.end,
+    before: text.slice(Math.max(0, params.start - 32), params.start),
+    after: text.slice(params.end, Math.min(text.length, params.end + 32)),
+  };
+}
+
+function shouldConvertMath(candidate: MathCandidate): boolean {
+  const content = candidate.content.trim();
+  if (!content) {
+    return false;
+  }
+  if (containsDangerousHtml(content)) {
+    return false;
+  }
+
+  if (
+    candidate.delimiter === "$$" ||
+    candidate.delimiter === "\\(" ||
+    candidate.delimiter === "\\[" ||
+    candidate.delimiter === "env"
+  ) {
+    return true;
+  }
+
+  if (candidate.delimiter === "$") {
+    return shouldConvertSingleDollarMath(candidate);
+  }
+
+  return false;
+}
+
+function shouldConvertSingleDollarMath(candidate: MathCandidate): boolean {
+  const content = candidate.content;
+  if (!content.trim()) {
+    return false;
+  }
+  if (content.includes("$")) {
+    return false;
+  }
+  if (content.includes("\n")) {
+    return false;
+  }
+  if (/^\s|\s$/.test(content)) {
+    return false;
+  }
+  if (containsDangerousHtml(content)) {
+    return false;
+  }
+  if (looksLikeCurrency(candidate)) {
+    return false;
+  }
+  if (isPlainTextInline(content)) {
+    return false;
+  }
+
+  const trimmed = normalizeInlineFormulaBody(content);
+  const previousChar = candidate.before.slice(-1);
+  const nextChar = candidate.after[0] || "";
+  if (/\w/.test(previousChar) && /\w/.test(trimmed[0] || "")) {
+    return false;
+  }
+  if (/\w/.test(nextChar) && /\w/.test(trimmed[trimmed.length - 1] || "")) {
+    return false;
+  }
+
+  return looksLikeMathFormula(trimmed);
+}
+
+function isPlainTextInline(content: string): boolean {
+  const normalized = normalizeInlineFormulaBody(content);
+  if (/^[A-Za-z]+(\s+[A-Za-z]+)+$/.test(normalized)) {
+    return true;
+  }
+  return /^(OK|Ok|ok|Note|NOTE|Yes|No|TODO|Done|Error|Warning|Success|Failed)$/i.test(
+    normalized,
+  );
+}
+
+function looksLikeCurrency(candidate: MathCandidate): boolean {
+  const normalized = normalizeInlineFormulaBody(candidate.content);
+  const before = candidate.before;
+  const after = candidate.after;
+
+  if (/^\d+(\.\d{1,2})?$/.test(normalized)) {
+    return true;
+  }
+  if (/^\d{1,3}(,\d{3})+(\.\d{1,2})?$/.test(normalized)) {
+    return true;
+  }
+  if (/^\d+(\.\d{1,2})?\s*[-–—]\s*\$?\s*\d+(\.\d{1,2})?$/.test(normalized)) {
+    return true;
+  }
+  if (
+    /(USD|US|HKD|AUD|CAD|SGD|RMB|CNY|JPY|EUR|GBP)\s*$/i.test(before) &&
+    /^\d/.test(normalized)
+  ) {
+    return true;
+  }
+  if (/(US|HK|AU|CA|SG|CN|JP|EU|UK)$/i.test(before) && /^\d/.test(normalized)) {
+    return true;
+  }
+  if (/^\d/.test(after)) {
+    return true;
+  }
+  if (
+    /\b(price|cost|fee|paid|pay|dollar|dollars|usd|amount|budget|charge)\s*$/i.test(
+      before,
+    ) &&
+    /^\d/.test(normalized)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function isEscaped(text: string, index: number): boolean {
+  let slashCount = 0;
+  let cursor = index - 1;
+  while (cursor >= 0 && text[cursor] === "\\") {
+    slashCount++;
+    cursor--;
+  }
+  return slashCount % 2 === 1;
+}
+
+function findNextUnescaped(text: string, token: string, from: number): number {
+  let cursor = from;
+  while (cursor < text.length) {
+    const index = text.indexOf(token, cursor);
+    if (index < 0) {
+      return -1;
+    }
+    if (!isEscaped(text, index)) {
+      return index;
+    }
+    cursor = index + token.length;
   }
   return -1;
+}
+
+function findNextInlineDoubleDollarStart(text: string, fromIndex: number): number {
+  return findNextUnescaped(text, "$$", fromIndex);
 }
 
 function findNextInlineDollarStart(text: string, fromIndex: number): number {
   for (let index = fromIndex; index < text.length; index++) {
     if (text[index] !== "$") continue;
-    if (text[index - 1] === "\\") continue;
+    if (isEscaped(text, index)) continue;
     if (text[index + 1] === "$") {
       index++;
       continue;
@@ -589,63 +786,54 @@ function findNextInlineDollarStart(text: string, fromIndex: number): number {
 }
 
 function findClosingInlineDoubleDollar(text: string, fromIndex: number): number {
-  for (let index = fromIndex; index < text.length - 1; index++) {
-    if (text[index] !== "$" || text[index + 1] !== "$") continue;
-    if (text[index - 1] === "\\") continue;
-    return index;
-  }
-  return -1;
+  return findNextUnescaped(text, "$$", fromIndex);
 }
 
 function findClosingInlineDollar(text: string, fromIndex: number): number {
+  return findNextValidSingleDollarEnd(text, fromIndex);
+}
+
+function findNextValidSingleDollarEnd(text: string, fromIndex: number): number {
   for (let index = fromIndex; index < text.length; index++) {
     if (text[index] !== "$") continue;
-    if (text[index - 1] === "\\") continue;
+    if (isEscaped(text, index)) continue;
     if (text[index + 1] === "$") continue;
+    const previousChar = text[index - 1] || "";
+    const nextChar = text[index + 1] || "";
+    if (/\s/.test(previousChar)) continue;
+    if (/\d/.test(nextChar)) continue;
     return index;
   }
   return -1;
 }
 
 function findClosingInlineParenthesis(text: string, fromIndex: number): number {
-  for (let index = fromIndex; index < text.length - 1; index++) {
-    if (text[index] === "\\" && text[index + 1] === ")") return index;
-  }
-  return -1;
-}
-
-function isSafeInlineDollarFormula(
-  candidate: string,
-  fullText: string,
-  startIndex: number,
-  endIndex: number,
-): boolean {
-  const trimmed = normalizeInlineFormulaBody(candidate);
-  if (!trimmed || trimmed.includes("\n")) return false;
-  if (/^[\d\s.,%+-]+$/.test(trimmed)) return false;
-
-  const previousChar = fullText[startIndex - 1] || "";
-  const nextChar = fullText[endIndex + 1] || "";
-  if (/\w/.test(previousChar) && /\w/.test(trimmed[0] || "")) return false;
-  if (/\w/.test(nextChar) && /\w/.test(trimmed[trimmed.length - 1] || "")) return false;
-
-  return looksLikeMathFormula(trimmed);
-}
-
-function isSafeInlineDoubleDollarFormula(candidate: string): boolean {
-  const trimmed = normalizeInlineFormulaBody(candidate);
-  if (!trimmed || trimmed.includes("\n")) return false;
-  if (/^[A-Za-z][A-Za-z0-9]{0,31}$/.test(trimmed)) return true;
-  return looksLikeMathFormula(trimmed);
+  return findNextUnescaped(text, "\\)", fromIndex);
 }
 
 function looksLikeMathFormula(content: string): boolean {
-  if (!content) return false;
-  if (/\\[a-zA-Z]+/.test(content)) return true;
-  if (/[=^_{}]/.test(content)) return true;
-  if (/[A-Za-z]\s*[+\-*/=<>]\s*[A-Za-z0-9]/.test(content)) return true;
-  if (/^[A-Za-z]$/.test(content)) return true;
-  if (/^[A-Za-z][A-Za-z0-9]*\([^)]*\)$/.test(content)) return true;
+  const normalized = normalizeInlineFormulaBody(content);
+  if (!normalized) return false;
+  if (/\\[a-zA-Z]+/.test(normalized)) return true;
+  if (/[\^_{}]/.test(normalized)) return true;
+  if (/[=<>≤≥≈≠∈∉∑∏√∞∂∇]/.test(normalized)) return true;
+  if (/[+\-*/]/.test(normalized) && !/^[A-Za-z]+-[A-Za-z]+$/.test(normalized)) {
+    return true;
+  }
+  if (/^[A-Za-z]$/.test(normalized)) return true;
+  if (/^\d+(\.\d+)?[A-Za-z]+$/.test(normalized)) return true;
+  if (/^[A-Za-z]+\d+$/.test(normalized)) return true;
+  if (/^[A-Za-z_][A-Za-z0-9_]*\s*\(.+\)$/.test(normalized)) return true;
+  if (
+    /^\(?\s*[A-Za-z_][A-Za-z0-9_]*\s*,\s*[A-Za-z_][A-Za-z0-9_]*\s*\)?$/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  if (/^[([{]\s*[A-Za-z0-9_\\+\-*/=<>.,\s]+\s*[)\]}]$/.test(normalized)) {
+    return true;
+  }
   return false;
 }
 

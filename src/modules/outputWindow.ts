@@ -1501,14 +1501,6 @@ export class OutputWindow {
       return placeholder;
     });
     
-    // 保护已有的 $ $ 行内公式
-    // eslint-disable-next-line no-useless-escape
-    html = html.replace(/\$([^\$\n]+?)\$/g, (match) => {
-      const placeholder = `ⒻⓄⓇⓂⓊⓁⒶ_INLINE_${formulas.length}`;
-      formulas.push(match);
-      return placeholder;
-    });
-
     // ===== 步骤 2: 使用 marked 转换 Markdown 为 HTML =====
     try {
       html = OutputWindow.parseMarkdownToHTML(html);

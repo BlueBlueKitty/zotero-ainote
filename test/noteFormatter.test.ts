@@ -87,6 +87,64 @@ describe("noteFormatter", function () {
     assert.equal(result.stats.inlineFixed, 3);
   });
 
+  it("should trust explicit math delimiters by default", function () {
+    const input = [
+      "<p>$$ (i,j) $$、$$x$$、$$n$$、$$A$$、$$abc$$、$$Note$$、$$OK$$ 都应转换。</p>",
+      "<p>\\(x+1\\) 也应转换。</p>",
+      "<p>\\[x+1=y\\]</p>",
+      "<p>\\begin{aligned}x&=1\\\\y&=2\\end{aligned}</p>",
+      "<p>\\begin{matrix}a&b\\\\c&d\\end{matrix}</p>",
+    ].join("");
+
+    const result = fixMathInNoteHtml(input);
+
+    assert.include(result.html, '<span class="math">$(i,j)$</span>');
+    assert.include(result.html, '<span class="math">$x$</span>');
+    assert.include(result.html, '<span class="math">$n$</span>');
+    assert.include(result.html, '<span class="math">$A$</span>');
+    assert.include(result.html, '<span class="math">$abc$</span>');
+    assert.include(result.html, '<span class="math">$Note$</span>');
+    assert.include(result.html, '<span class="math">$OK$</span>');
+    assert.include(result.html, '<span class="math">$x+1$</span>');
+    assert.include(result.html, '<pre class="math">$$x+1=y$$</pre>');
+    assert.include(result.html, '<pre class="math">$$x&amp;=1\\y&amp;=2$$</pre>');
+    assert.include(result.html, '<pre class="math">$$a&amp;b\\c&amp;d$$</pre>');
+  });
+
+  it("should keep strict single-dollar exclusions while allowing lightweight math", function () {
+    const input = [
+      "<p>$x$、$n$、$a_i$、$x^2$、$(i,j)$、$f(x)$、$\\alpha+\\beta$、$2x$、$10^{-3}$ 应转换。</p>",
+      "<p>$100、$ 100、$1,234.56、$5-$10、$OK$、$Note$、$hello world$ 不应转换。</p>",
+      "<p>The price is $20 and $30.</p>",
+      "<p>US$100 与 USD $100 不应转换。</p>",
+      "<p>\\$100 应保留。</p>",
+      '<p>已有 <span class="math">$x$</span> 不应重复包裹。</p>',
+      '<p>已有 <span class="math-inline">$n$</span> 与 <span class="math-display">$$x=1$$</span> 不应重复包裹。</p>',
+      "<pre><code>$x$</code></pre>",
+      '<a href="$x$">link</a>',
+    ].join("");
+
+    const result = fixMathInNoteHtml(input);
+
+    assert.include(result.html, '<span class="math">$x$</span>');
+    assert.include(result.html, '<span class="math">$n$</span>');
+    assert.include(result.html, '<span class="math">$a_i$</span>');
+    assert.include(result.html, '<span class="math">$x^2$</span>');
+    assert.include(result.html, '<span class="math">$(i,j)$</span>');
+    assert.include(result.html, '<span class="math">$f(x)$</span>');
+    assert.include(result.html, '<span class="math">$\\alpha+\\beta$</span>');
+    assert.include(result.html, '<span class="math">$2x$</span>');
+    assert.include(result.html, '<span class="math">$10^{-3}$</span>');
+    assert.include(result.html, "$100、$ 100、$1,234.56、$5-$10、$OK$、$Note$、$hello world$ 不应转换。");
+    assert.include(result.html, "The price is $20 and $30.");
+    assert.include(result.html, "US$100 与 USD $100 不应转换。");
+    assert.include(result.html, "\\$100 应保留。");
+    assert.include(result.html, '<span class="math-inline">$n$</span>');
+    assert.include(result.html, '<span class="math-display">$$x=1$$</span>');
+    assert.include(result.html, "<pre><code>$x$</code></pre>");
+    assert.include(result.html, '<a href="$x$">link</a>');
+  });
+
   it("should fix markdown math fences in raw text and code blocks", function () {
     const input = [
       "<p>```math<br>F = ma<br>```</p>",
