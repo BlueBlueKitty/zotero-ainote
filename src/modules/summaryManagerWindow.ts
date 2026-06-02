@@ -124,6 +124,24 @@ function formatTaskTimeToMinute(timestamp?: number): string {
   return `${year}-${month}-${day} ${hour}:${minute}`;
 }
 
+export function showSummaryManagerAlert(message: string, win?: Window): void {
+  try {
+    if (typeof Services !== "undefined" && Services.prompt) {
+      Services.prompt.alert(win as any, "AiNote", message);
+      return;
+    }
+  } catch (error) {
+    ztoolkit.log("[AiNote][SummaryManagerWindow] Failed to show native alert", error);
+  }
+
+  if (win && typeof win.alert === "function") {
+    win.alert(message);
+    return;
+  }
+
+  showToast(message, "error");
+}
+
 function extractYearFromDate(value: string): string {
   const raw = String(value || "").trim();
   if (!raw) return "-";
@@ -1319,7 +1337,10 @@ export class SummaryManagerWindow {
       this.getHistoryTasksForRender().find((entry) => entry.id === taskId);
     const noteID = task?.noteID;
     if (!task || !noteID) {
-      showToast(getString("selected-note-not-found" as any), "error");
+      showSummaryManagerAlert(
+        getString("selected-note-not-found" as any),
+        this.getLiveDialogWindow(),
+      );
       return;
     }
     const note = Zotero.Items.get(noteID);
@@ -1329,7 +1350,10 @@ export class SummaryManagerWindow {
       !note.isNote?.() ||
       note.parentID !== task.itemID;
     if (invalidNote) {
-      showToast(getString("selected-note-not-found" as any), "error");
+      showSummaryManagerAlert(
+        getString("selected-note-not-found" as any),
+        this.getLiveDialogWindow(),
+      );
       ztoolkit.log(
         "[AiNote][SummaryManagerWindow] Task note is missing or invalid",
         {
@@ -1355,7 +1379,10 @@ export class SummaryManagerWindow {
     }
     // Avoid URI fallback because it can trigger deprecated URI-loading paths
     // and may navigate to an unintended item when the target note is invalid.
-    showToast(getString("selected-note-not-found" as any), "error");
+    showSummaryManagerAlert(
+      getString("selected-note-not-found" as any),
+      this.getLiveDialogWindow(),
+    );
   }
 
   private bindCustomSelect(select: Element, onChange: () => void): void {
