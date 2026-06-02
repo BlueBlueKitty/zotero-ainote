@@ -67,7 +67,7 @@ Per-item summary window example (for viewing and managing the progress and resul
 1. Open your system's default browser and go to the extensions management interface.
 2. Enable Developer Mode.
 3. Click Load Unzipped Extension.
-4. Download the [extension ZIP file](https://raw.githubusercontent.com/BlueBlueKitty/zotero-ainote/main/dist/ainote-web-extension-v0.1.0-edge.zip), then extract it locally.
+4. Download the [extension ZIP file](https://raw.githubusercontent.com/BlueBlueKitty/zotero-ainote/main/dist/ainote-web-extension-v0.1.1-edge.zip), then extract it locally.
 5. In `Load unpacked`, select the extracted extension folder, and the extension can be successfully installed.
 6. Open the extension options page and confirm `Bridge URL` is set to `http://127.0.0.1:23123` (this is the default value). Click "Test Connection". If the connection is successful, you can use the ChatGPT web summary function of the ainote plugin.
 
