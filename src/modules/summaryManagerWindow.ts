@@ -37,6 +37,51 @@ const HTML_DIALOG_TAGS = new Set([
 ]);
 type SelectOption = { value: string; label: string };
 
+export function normalizeDetailHeadingLevels(html: string): string {
+  const raw = String(html || "");
+  if (!raw.trim()) {
+    return raw;
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<body>${raw}</body>`, "text/html");
+  const body = doc.body;
+  const headings = Array.from(body.querySelectorAll("h1, h2, h3, h4, h5, h6")) as HTMLElement[];
+  if (!headings.length) {
+    return raw;
+  }
+
+  const levels = headings
+    .map((heading) => parseInt(heading.tagName.slice(1), 10))
+    .filter((level) => Number.isFinite(level));
+  const minLevel = Math.min(...levels);
+  if (!Number.isFinite(minLevel) || minLevel <= 1) {
+    return raw;
+  }
+
+  const shift = minLevel - 1;
+  for (const heading of headings) {
+    const currentLevel = parseInt(heading.tagName.slice(1), 10);
+    if (!Number.isFinite(currentLevel)) {
+      continue;
+    }
+    const nextLevel = Math.max(1, currentLevel - shift);
+    if (nextLevel === currentLevel) {
+      continue;
+    }
+    const replacement = doc.createElement(`h${nextLevel}`);
+    for (const attribute of Array.from(heading.attributes)) {
+      replacement.setAttribute(attribute.name, attribute.value);
+    }
+    while (heading.firstChild) {
+      replacement.appendChild(heading.firstChild);
+    }
+    heading.replaceWith(replacement);
+  }
+
+  return body.innerHTML;
+}
+
 function normalizeVisualStatus(status: string): SummaryTask["status"] {
   if (status === "succeeded") return "completed";
   if (status === "canceled") return "cancelled";
@@ -2576,7 +2621,7 @@ export class SummaryManagerWindow {
   }
 
   private convertDetailMarkdownToHTML(markdown: string): string {
-    return OutputWindow.convertMarkdownToDisplayHTML(markdown);
+    return normalizeDetailHeadingLevels(OutputWindow.convertMarkdownToDisplayHTML(markdown));
   }
 
   private stripDuplicatedSummaryPreamble(

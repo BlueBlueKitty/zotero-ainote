@@ -349,7 +349,14 @@ function fixMathFenceCodeBlocks(root: HTMLElement, stats: MathNormalizeStats) {
     const codeText = normalizeText(codeBlock.textContent || "");
     const formulaFromFence = extractMathFenceContent(codeText);
     const formulaFromStandalone = parseStandaloneBlockFormula(codeText);
-    const formula = formulaFromFence || formulaFromStandalone?.text || null;
+    const formulaFromMathLanguageBlock = isMathLanguageCodeBlock(codeBlock)
+      ? normalizeFormulaBody(codeText)
+      : null;
+    const formula =
+      formulaFromFence ||
+      formulaFromStandalone?.text ||
+      formulaFromMathLanguageBlock ||
+      null;
     if (!formula || formula.startsWith("__UNSUPPORTED_ENV__")) {
       continue;
     }
@@ -360,6 +367,16 @@ function fixMathFenceCodeBlocks(root: HTMLElement, stats: MathNormalizeStats) {
     preElement.replaceWith(replacement);
     stats.blockFixed++;
   }
+}
+
+function isMathLanguageCodeBlock(codeBlock: HTMLElement): boolean {
+  const classNames = `${codeBlock.className || ""} ${
+    codeBlock.getAttribute("data-language") || ""
+  }`.trim();
+  if (!classNames) {
+    return false;
+  }
+  return /\b(?:language-|lang-)?math\b/i.test(classNames);
 }
 
 function splitTextByInlineMath(

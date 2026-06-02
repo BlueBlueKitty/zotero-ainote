@@ -1281,11 +1281,20 @@ export class OutputWindow {
       const originalCode = renderer.code.bind(renderer);
       renderer.code = (token: any) => {
         const text = token.text;
+        const rawLanguage = String(token.lang || token.language || "").trim();
+        const escapedLanguage = rawLanguage
+          .replace(/&/g, "&amp;")
+          .replace(/"/g, "&quot;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
         const escaped = text
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;");
-        return `<pre style="background: rgba(0,0,0,0.1); padding: 10px; border-radius: 4px; overflow-x: auto; margin: 10px 0;"><code>${escaped}</code></pre>`;
+        const languageAttrs = escapedLanguage
+          ? ` class="language-${escapedLanguage}" data-language="${escapedLanguage}"`
+          : "";
+        return `<pre style="background: rgba(0,0,0,0.1); padding: 10px; border-radius: 4px; overflow-x: auto; margin: 10px 0;"><code${languageAttrs}>${escaped}</code></pre>`;
       };
 
       // 行内代码样式

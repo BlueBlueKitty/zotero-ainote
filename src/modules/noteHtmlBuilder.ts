@@ -1,6 +1,6 @@
 import { OutputWindow } from "./outputWindow";
 import { runtimeT } from "../utils/runtimeLocale";
-import { normalizeMathInMarkdown } from "./mathFormulaKernel";
+import { normalizeMathInHtmlDom, normalizeMathInMarkdown } from "./mathFormulaKernel";
 
 /**
  * 统一处理 Markdown -> Zotero Note HTML 的转换逻辑，供 API 总结与网页总结共用。
@@ -60,7 +60,15 @@ export function convertMarkdownToNoteHTML(markdown: string): string {
     return blockPlaceholders[parseInt(index, 10)] || _match;
   });
 
-  return html;
+  return normalizeNoteHtmlMath(html);
+}
+
+function normalizeNoteHtmlMath(html: string): string {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<body>${html}</body>`, "text/html");
+  const body = doc.body;
+  normalizeMathInHtmlDom(body);
+  return body.innerHTML;
 }
 
 export function escapeHtml(text: string): string {
