@@ -769,7 +769,7 @@ async function runSummarizeTask(task) {
       logLevel: getLogLevel(),
       autoSend: true,
       projectUrl: task.projectUrl || "",
-      chatgptMode: task.chatgptMode || "thinking",
+      chatgptMode: task.chatgptMode || "advanced",
     });
     debugLog("Background", "runSummarizeTask dispatchTaskMessage returned", {
       workerInstanceId: WORKER_INSTANCE_ID,

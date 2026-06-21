@@ -81,22 +81,46 @@
   };
 
   const MODE_LABELS = {
-    instant: ["instant", "auto", "fast", "即时", "自动", "快速", "快"],
-    thinking: [
+    fast: ["instant", "fast", "极速", "極速", "快速", "快", "auto"],
+    balanced: ["balanced", "smart", "均衡", "平衡", "智能"],
+    advanced: [
       "thinking",
       "think",
       "reasoning",
       "reason",
+      "advanced",
+      "高级",
+      "高級",
       "思考",
       "深度思考",
       "推理",
       "进阶",
-      "advanced",
       "extended",
       "deep",
       "深度",
     ],
   };
+
+  const MODE_PICKER_KEYWORDS = [
+    ...MODE_LABELS.fast,
+    ...MODE_LABELS.balanced,
+    ...MODE_LABELS.advanced,
+    "intelligence",
+  ];
+
+  function normalizeChatGPTMode(mode) {
+    const normalized = normalizeText(String(mode || ""));
+    if (normalized === "instant" || normalized === "fast") {
+      return "fast";
+    }
+    if (normalized === "balanced" || normalized === "smart") {
+      return "balanced";
+    }
+    if (normalized === "thinking" || normalized === "advanced") {
+      return "advanced";
+    }
+    return "advanced";
+  }
 
   class TaskCanceledError extends Error {
     constructor(message = "已停止当前条目的AI总结") {
@@ -648,7 +672,7 @@
   }
 
   async function applyChatGPTMode(mode) {
-    const normalizedMode = mode === "instant" ? "instant" : "thinking";
+    const normalizedMode = normalizeChatGPTMode(mode);
     const desiredLabels = MODE_LABELS[normalizedMode];
 
     await waitFor(
@@ -664,10 +688,7 @@
         if (!(btn instanceof HTMLElement)) continue;
         if (!isVisibleElement(btn)) continue;
         const label = normalizeText(btn.textContent || "");
-        const hasModeLang = [
-          ...MODE_LABELS.instant,
-          ...MODE_LABELS.thinking,
-        ].some((keyword) => label.includes(keyword));
+        const hasModeLang = MODE_PICKER_KEYWORDS.some((keyword) => label.includes(keyword));
         if (hasModeLang) return btn;
       }
       return null;
@@ -690,13 +711,13 @@
 
     const findOpenMenu = () => {
       return document.querySelector(
-        '[role="menu"][data-state="open"], [role="listbox"][data-state="open"]',
+        '[data-testid="composer-intelligence-picker-content"], [role="menu"][data-state="open"], [role="listbox"][data-state="open"]',
       );
     };
 
     const findMenuOption = (menuRoot) => {
       if (!menuRoot) return null;
-      if (normalizedMode === "thinking") {
+      if (normalizedMode === "advanced") {
         const exactThinking = menuRoot.querySelector(
           '[data-model-picker-thinking-effort-menu-item="true"], [data-testid="model-switcher-gpt-5-5-thinking"]',
         );
@@ -704,7 +725,7 @@
           return exactThinking;
         }
       }
-      if (normalizedMode === "instant") {
+      if (normalizedMode === "fast") {
         const exactInstant = menuRoot.querySelector(
           '[data-testid="model-switcher-gpt-5-5"]',
         );
@@ -795,14 +816,16 @@
       );
       if (activeOption instanceof HTMLElement) {
         const activeText = normalizeText(activeOption.textContent || "");
-        if (normalizedMode === "thinking") {
+        if (normalizedMode === "advanced") {
           switchedOk =
             activeOption.getAttribute("data-model-picker-thinking-effort-menu-item") === "true" ||
-            activeText.includes("thinking");
-        } else {
+            desiredLabels.some((label) => activeText.includes(label));
+        } else if (normalizedMode === "fast") {
           switchedOk =
             activeOption.getAttribute("data-testid") === "model-switcher-gpt-5-5" ||
-            activeText.includes("instant");
+            desiredLabels.some((label) => activeText.includes(label));
+        } else {
+          switchedOk = desiredLabels.some((label) => activeText.includes(label));
         }
       }
     }
@@ -1501,7 +1524,7 @@
 
       try {
         const modeSwitched = await applyChatGPTMode(
-          message.chatgptMode || task.chatgptMode || "thinking",
+          message.chatgptMode || task.chatgptMode || "advanced",
         );
         if (!modeSwitched) {
           await sendTaskStatus({

@@ -4,7 +4,36 @@ export type WebSummaryActionType = "summarize" | "open_conversation";
 
 export type WebSummaryConversationMode = "new-per-item";
 
-export type WebSummaryChatGPTMode = "instant" | "thinking";
+export type WebSummaryChatGPTMode = "fast" | "balanced" | "advanced";
+
+export function normalizeWebSummaryChatGPTMode(value: unknown): WebSummaryChatGPTMode {
+  const normalized = String(value || "").trim().toLowerCase();
+  switch (normalized) {
+    case "instant":
+    case "fast":
+      return "fast";
+    case "balanced":
+    case "smart":
+      return "balanced";
+    case "thinking":
+    case "advanced":
+      return "advanced";
+    default:
+      return "advanced";
+  }
+}
+
+export function getWebSummaryChatGPTModeLabel(mode: WebSummaryChatGPTMode): string {
+  switch (mode) {
+    case "fast":
+      return "Fast";
+    case "balanced":
+      return "Balanced";
+    case "advanced":
+    default:
+      return "Advanced";
+  }
+}
 
 export type WebSummaryTaskStatus =
   | "queued"

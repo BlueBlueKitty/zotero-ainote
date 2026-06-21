@@ -13,6 +13,8 @@ import { debugWebSummaryLog, errorWebSummaryLog } from "./webSummaryDebug";
 import { WebSummaryRelationStore } from "./webSummaryRelations";
 import {
   CreateTaskRequest,
+  getWebSummaryChatGPTModeLabel,
+  normalizeWebSummaryChatGPTMode,
   WebSummaryChatGPTMode,
   WebSummaryConversationMeta,
   WebSummaryPlatform,
@@ -142,9 +144,7 @@ function getProjectUrl(): string {
 }
 
 function getChatGPTMode(): WebSummaryChatGPTMode {
-  return getPref("webSummaryChatGPTMode" as any) === "instant"
-    ? "instant"
-    : "thinking";
+  return normalizeWebSummaryChatGPTMode(getPref("webSummaryChatGPTMode" as any));
 }
 
 function resolvePdfUploadFileName(
@@ -193,7 +193,7 @@ function buildTaskScopedPdfUploadFileName(params: {
 export function getWebSummaryModelLabel(
   mode: WebSummaryChatGPTMode,
 ): string {
-  return `${WEB_SUMMARY_MODEL_LABEL} (${mode === "instant" ? "Instant" : "Thinking"})`;
+  return `${WEB_SUMMARY_MODEL_LABEL} (${getWebSummaryChatGPTModeLabel(mode)})`;
 }
 
 function launchChatGPTSurface(url: string): void {

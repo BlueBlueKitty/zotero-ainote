@@ -130,7 +130,7 @@ function initializeDefaultPrefsOnStartup() {
     webSummaryRequestTimeoutMs: "15000",
     webSummaryAutoStartBridge: true,
     webSummaryChatGPTProjectUrl: "https://chatgpt.com",
-    webSummaryChatGPTMode: "thinking",
+    webSummaryChatGPTMode: "advanced",
     webSummaryLogLevel: "error",
     webSummaryEnableContinueChatMenu: true,
     summaryListSplitRatioV2: "0.3",

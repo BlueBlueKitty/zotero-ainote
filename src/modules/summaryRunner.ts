@@ -8,7 +8,10 @@ import {
   WebSummaryWorkflow,
 } from "./webSummaryWorkflow";
 import { SummaryTask } from "./summaryTaskTypes";
-import { WebSummaryChatGPTMode } from "./webSummaryTypes";
+import {
+  normalizeWebSummaryChatGPTMode,
+  WebSummaryChatGPTMode,
+} from "./webSummaryTypes";
 
 export interface SummaryRunnerHooks {
   onStage: (stage: string, progress?: number) => void;
@@ -115,10 +118,9 @@ export class SummaryRunner {
       preferredPdfAttachment,
       templateId: task.templateId,
     };
-    const mode: WebSummaryChatGPTMode =
-      getPref("webSummaryChatGPTMode" as any) === "instant"
-        ? "instant"
-        : "thinking";
+    const mode: WebSummaryChatGPTMode = normalizeWebSummaryChatGPTMode(
+      getPref("webSummaryChatGPTMode" as any),
+    );
     const result = await WebSummaryWorkflow.summarizeSingleTarget(target, {
       onStage: hooks.onStage,
       onContent: (content) => hooks.onChunk(content),

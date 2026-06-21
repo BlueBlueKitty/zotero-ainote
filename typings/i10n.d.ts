@@ -199,8 +199,6 @@ export type FluentMessageId =
   | 'prefs-web-summary-bridge-port-hint'
   | 'prefs-web-summary-chatgpt-mode'
   | 'prefs-web-summary-chatgpt-mode-hint'
-  | 'prefs-web-summary-chatgpt-mode-instant'
-  | 'prefs-web-summary-chatgpt-mode-thinking'
   | 'prefs-web-summary-enable'
   | 'prefs-web-summary-enable-continue-chat'
   | 'prefs-web-summary-enable-continue-chat-hint'

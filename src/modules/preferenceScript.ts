@@ -24,6 +24,7 @@ import {
 } from "./llmProfiles";
 import { runtimeT } from "../utils/runtimeLocale";
 import { getString } from "../utils/locale";
+import { normalizeWebSummaryChatGPTMode } from "./webSummaryTypes";
 
 const PROVIDER_OPTIONS: Array<{ value: ProviderType; label: string }> = [
   {
@@ -98,6 +99,30 @@ function getProviderLabel(providerType: ProviderType): string {
     PROVIDER_OPTIONS.find((option) => option.value === providerType)?.label ||
     providerType
   );
+}
+
+function getWebSummaryModeOptionLabel(mode: "fast" | "balanced" | "advanced"): string {
+  switch (mode) {
+    case "fast":
+      return runtimeT({
+        "en-US": "Fast",
+        "zh-CN": "极速",
+        "zh-TW": "極速",
+      });
+    case "balanced":
+      return runtimeT({
+        "en-US": "Balanced",
+        "zh-CN": "均衡",
+        "zh-TW": "均衡",
+      });
+    case "advanced":
+    default:
+      return runtimeT({
+        "en-US": "Advanced",
+        "zh-CN": "高级",
+        "zh-TW": "高級",
+      });
+  }
 }
 
 function supportsTopP(providerType: ProviderType) {
@@ -305,7 +330,7 @@ function initializeDefaultPrefs() {
     webSummaryRequestTimeoutMs: "15000",
     webSummaryAutoStartBridge: true,
     webSummaryChatGPTProjectUrl: "https://chatgpt.com",
-    webSummaryChatGPTMode: "thinking",
+    webSummaryChatGPTMode: "advanced",
     webSummaryLogLevel: "error",
     webSummaryEnableContinueChatMenu: true,
   };
@@ -1415,24 +1440,22 @@ function renderChatGPTWebProfileCard(
     doc,
     card,
     getString("prefs-web-summary-chatgpt-mode"),
-    getPref("webSummaryChatGPTMode" as any) === "instant"
-      ? "instant"
-      : "thinking",
+    normalizeWebSummaryChatGPTMode(getPref("webSummaryChatGPTMode" as any)),
     [
       {
-        value: "thinking",
-        label: getString("prefs-web-summary-chatgpt-mode-thinking"),
+        value: "advanced",
+        label: getWebSummaryModeOptionLabel("advanced"),
       },
       {
-        value: "instant",
-        label: getString("prefs-web-summary-chatgpt-mode-instant"),
+        value: "balanced",
+        label: getWebSummaryModeOptionLabel("balanced"),
+      },
+      {
+        value: "fast",
+        label: getWebSummaryModeOptionLabel("fast"),
       },
     ],
-    (value) =>
-      setPref(
-        "webSummaryChatGPTMode" as any,
-        value === "instant" ? "instant" : "thinking",
-      ),
+    (value) => setPref("webSummaryChatGPTMode" as any, normalizeWebSummaryChatGPTMode(value)),
   );
   appendHelperText(doc, card, getString("prefs-web-summary-chatgpt-mode-hint"));
 
