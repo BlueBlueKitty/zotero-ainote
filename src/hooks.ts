@@ -131,6 +131,7 @@ function initializeDefaultPrefsOnStartup() {
     webSummaryAutoStartBridge: true,
     webSummaryChatGPTProjectUrl: "https://chatgpt.com",
     webSummaryChatGPTMode: "thinking",
+    webSummaryLogLevel: "error",
     webSummaryEnableContinueChatMenu: true,
     summaryListSplitRatioV2: "0.3",
     summaryMainPaneSplitRatioV1: "0.35",

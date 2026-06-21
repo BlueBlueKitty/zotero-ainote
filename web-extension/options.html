@@ -53,6 +53,16 @@
     </div>
 
     <div class="row">
+      <label for="logLevel" data-i18n="logLevelLabel">Log Level</label>
+      <select id="logLevel">
+        <option value="off" data-i18n="logLevelOff">Off</option>
+        <option value="error" data-i18n="logLevelError">Errors only</option>
+        <option value="debug" data-i18n="logLevelDebug">Debug</option>
+      </select>
+      <div class="hint" data-i18n="logLevelHint">Default is errors only. Switch to debug only when diagnosing issues.</div>
+    </div>
+
+    <div class="row">
       <button id="save" data-i18n="saveButton">Save</button>
       <button id="test" data-i18n="testButton">Test Connection</button>
     </div>

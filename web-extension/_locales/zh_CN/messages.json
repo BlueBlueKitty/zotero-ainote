@@ -17,6 +17,21 @@
   "bridgeUrlLabel": {
     "message": "桥接服务地址"
   },
+  "logLevelLabel": {
+    "message": "日志级别"
+  },
+  "logLevelOff": {
+    "message": "关闭"
+  },
+  "logLevelError": {
+    "message": "仅错误"
+  },
+  "logLevelDebug": {
+    "message": "调试"
+  },
+  "logLevelHint": {
+    "message": "默认仅输出错误。排查问题时再切换到调试。"
+  },
   "saveButton": {
     "message": "保存"
   },

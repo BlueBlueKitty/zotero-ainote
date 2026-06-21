@@ -306,6 +306,7 @@ function initializeDefaultPrefs() {
     webSummaryAutoStartBridge: true,
     webSummaryChatGPTProjectUrl: "https://chatgpt.com",
     webSummaryChatGPTMode: "thinking",
+    webSummaryLogLevel: "error",
     webSummaryEnableContinueChatMenu: true,
   };
 
@@ -802,6 +803,32 @@ function renderWebSummarySettingsUI(win: Window) {
       helperText: getString("prefs-web-summary-timeout-hint"),
     },
   );
+  addSelectRow(
+    doc,
+    card,
+    getString("prefs-web-summary-log-level"),
+    String(getPref("webSummaryLogLevel" as any) || "error"),
+    [
+      {
+        value: "off",
+        label: getString("prefs-web-summary-log-level-off"),
+      },
+      {
+        value: "error",
+        label: getString("prefs-web-summary-log-level-error"),
+      },
+      {
+        value: "debug",
+        label: getString("prefs-web-summary-log-level-debug"),
+      },
+    ],
+    (value) =>
+      setPref(
+        "webSummaryLogLevel" as any,
+        value === "off" || value === "debug" ? value : "error",
+      ),
+  );
+  appendHelperText(doc, card, getString("prefs-web-summary-log-level-hint"));
   container.appendChild(card);
 }
 

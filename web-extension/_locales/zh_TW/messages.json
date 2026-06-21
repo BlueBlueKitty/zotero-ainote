@@ -17,6 +17,21 @@
   "bridgeUrlLabel": {
     "message": "橋接服務位址"
   },
+  "logLevelLabel": {
+    "message": "日誌等級"
+  },
+  "logLevelOff": {
+    "message": "關閉"
+  },
+  "logLevelError": {
+    "message": "僅錯誤"
+  },
+  "logLevelDebug": {
+    "message": "除錯"
+  },
+  "logLevelHint": {
+    "message": "預設僅輸出錯誤。排查問題時再切換到除錯。"
+  },
   "saveButton": {
     "message": "儲存"
   },

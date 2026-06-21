@@ -1,5 +1,6 @@
 import {
   decodeChatLinkFromRelationValue,
+  normalizeConversationUrl,
   WEB_AI_RELATION_PREDICATE,
   WEB_AI_RELATION_PREFIX,
 } from "./webSummaryConversation";
@@ -49,7 +50,13 @@ export class WebSummaryRelationStore {
 
     const normalized: WebSummaryItemChatLink[] = [];
     for (const list of grouped.values()) {
-      const best = list.slice().sort((a, b) => this.compareLinkFreshness(a, b))[0];
+      const best = list
+        .map((entry) => ({
+          ...entry,
+          conversationUrl: normalizeConversationUrl(entry.conversationUrl || ""),
+        }))
+        .slice()
+        .sort((a, b) => this.compareLinkFreshness(a, b))[0];
       if (best) {
         normalized.push(best);
       }
@@ -156,10 +163,14 @@ export class WebSummaryRelationStore {
     item: Zotero.Item,
     link: WebSummaryItemChatLink,
   ): Promise<void> {
+    const normalizedLink: WebSummaryItemChatLink = {
+      ...link,
+      conversationUrl: normalizeConversationUrl(link.conversationUrl || ""),
+    };
     const existing = this.normalizeLinks(this.getLinks(item)).filter(
-      (entry) => entry.platform !== link.platform,
+      (entry) => entry.platform !== normalizedLink.platform,
     );
-    const next = this.normalizeLinks([...existing, link]);
+    const next = this.normalizeLinks([...existing, normalizedLink]);
     this.writeLinksToExtra(item, next);
     this.removeLegacyRelations(item);
     await item.saveTx();

@@ -1,6 +1,22 @@
 // @ts-check
 
 import { getSettings } from "./storage.js";
+import { debugLog, errorLog, setLogLevel } from "./debug.js";
+
+function shouldLogBridgeClientRequest(path, method) {
+  const normalizedMethod = String(method || "GET").toUpperCase();
+  const normalizedPath = String(path || "");
+  if (normalizedMethod === "GET" && normalizedPath === "/api/health") {
+    return false;
+  }
+  if (normalizedMethod === "POST" && normalizedPath === "/api/ext/handshake") {
+    return false;
+  }
+  if (normalizedMethod === "GET" && normalizedPath.startsWith("/api/ext/tasks/next")) {
+    return false;
+  }
+  return true;
+}
 
 /**
  * @param {string} path
@@ -8,7 +24,15 @@ import { getSettings } from "./storage.js";
  */
 async function request(path, init = {}) {
   const settings = await getSettings();
+  setLogLevel(settings.logLevel);
   const url = `${settings.bridgeUrl}${path}`;
+  const method = init.method || "GET";
+  if (shouldLogBridgeClientRequest(path, method)) {
+    debugLog("BridgeClient", "request", {
+      method,
+      url,
+    });
+  }
   const headers = new Headers(init.headers || {});
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
@@ -20,22 +44,46 @@ async function request(path, init = {}) {
       headers,
     });
   } catch (error) {
+    errorLog("BridgeClient", "request failed", {
+      method,
+      url,
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw new Error(
-      `Bridge 请求失败: ${init.method || "GET"} ${url} - ${error instanceof Error ? error.message : String(error)}`,
+      `Bridge 请求失败: ${method} ${url} - ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   let json;
   try {
     json = await response.json();
   } catch (error) {
+    errorLog("BridgeClient", "response json parse failed", {
+      method,
+      url,
+      status: response.status,
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw new Error(
-      `Bridge 响应解析失败: ${init.method || "GET"} ${url} - HTTP ${response.status}`,
+      `Bridge 响应解析失败: ${method} ${url} - HTTP ${response.status}`,
     );
   }
   if (!response.ok || !json?.ok) {
+    errorLog("BridgeClient", "response returned error", {
+      method,
+      url,
+      status: response.status,
+      errorMessage: json?.error?.message || `HTTP ${response.status}`,
+    });
     throw new Error(
-      `Bridge 返回错误: ${init.method || "GET"} ${url} - ${json?.error?.message || `HTTP ${response.status}`}`,
+      `Bridge 返回错误: ${method} ${url} - ${json?.error?.message || `HTTP ${response.status}`}`,
     );
+  }
+  if (shouldLogBridgeClientRequest(path, method)) {
+    debugLog("BridgeClient", "response", {
+      method,
+      url,
+      ok: true,
+    });
   }
   return json.data;
 }
@@ -46,13 +94,26 @@ async function request(path, init = {}) {
  */
 async function requestArrayBuffer(path, init = {}) {
   const settings = await getSettings();
+  setLogLevel(settings.logLevel);
   const url = `${settings.bridgeUrl}${path}`;
+  const method = init.method || "GET";
+  if (shouldLogBridgeClientRequest(path, method)) {
+    debugLog("BridgeClient", "requestArrayBuffer", {
+      method,
+      url,
+    });
+  }
   let response;
   try {
     response = await fetch(url, init);
   } catch (error) {
+    errorLog("BridgeClient", "requestArrayBuffer failed", {
+      method,
+      url,
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw new Error(
-      `Bridge 请求失败: ${init.method || "GET"} ${url} - ${error instanceof Error ? error.message : String(error)}`,
+      `Bridge 请求失败: ${method} ${url} - ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   if (!response.ok) {
@@ -63,15 +124,35 @@ async function requestArrayBuffer(path, init = {}) {
     } catch {
       // ignore non-JSON error bodies
     }
+    errorLog("BridgeClient", "requestArrayBuffer returned error", {
+      method,
+      url,
+      status: response.status,
+      errorMessage: message,
+    });
     throw new Error(
-      `Bridge 返回错误: ${init.method || "GET"} ${url} - ${message}`,
+      `Bridge 返回错误: ${method} ${url} - ${message}`,
     );
   }
   try {
-    return await response.arrayBuffer();
+    const buffer = await response.arrayBuffer();
+    if (shouldLogBridgeClientRequest(path, method)) {
+      debugLog("BridgeClient", "responseArrayBuffer", {
+        method,
+        url,
+        byteLength: buffer.byteLength,
+      });
+    }
+    return buffer;
   } catch (error) {
+    errorLog("BridgeClient", "responseArrayBuffer parse failed", {
+      method,
+      url,
+      status: response.status,
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw new Error(
-      `Bridge 响应解析失败: ${init.method || "GET"} ${url} - HTTP ${response.status}`,
+      `Bridge 响应解析失败: ${method} ${url} - HTTP ${response.status}`,
     );
   }
 }

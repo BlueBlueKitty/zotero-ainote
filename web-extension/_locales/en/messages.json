@@ -17,6 +17,21 @@
   "bridgeUrlLabel": {
     "message": "Bridge URL"
   },
+  "logLevelLabel": {
+    "message": "Log level"
+  },
+  "logLevelOff": {
+    "message": "Off"
+  },
+  "logLevelError": {
+    "message": "Errors only"
+  },
+  "logLevelDebug": {
+    "message": "Debug"
+  },
+  "logLevelHint": {
+    "message": "Default is errors only. Switch to debug only when diagnosing issues."
+  },
   "saveButton": {
     "message": "Save"
   },

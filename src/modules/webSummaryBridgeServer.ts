@@ -16,6 +16,7 @@ import {
   WebSummaryTask,
 } from "./webSummaryTypes";
 import { WebSummaryCompatibilityManager } from "./webSummaryCompat";
+import { debugWebSummaryLog, errorWebSummaryLog } from "./webSummaryDebug";
 import { WebSummaryTaskStore } from "./webSummaryTaskStore";
 
 const LOG_PREFIX = "[AiNote][WebSummaryBridge]";
@@ -40,6 +41,19 @@ interface HttpResponse {
   statusText: string;
   headers?: Record<string, string>;
   body?: string | Uint8Array;
+}
+
+function shouldLogBridgeRequest(request: ParsedHttpRequest): boolean {
+  if (request.pathname === "/api/health" && request.method === "GET") {
+    return false;
+  }
+  if (request.pathname === "/api/ext/tasks/next" && request.method === "GET") {
+    return false;
+  }
+  if (request.pathname === "/api/ext/handshake" && request.method === "POST") {
+    return false;
+  }
+  return true;
 }
 
 function getByteLength(str: string): number {
@@ -248,6 +262,19 @@ export class WebSummaryBridgeServer {
       void this.refreshVersionInfo();
       const report = this.compatibilityManager.evaluate("summarize");
       if (!report.allowCreateSummarize) {
+        errorWebSummaryLog("Bridge", "createTask blocked by compatibility gate", {
+          blockingReasons: report.blockingReasons,
+          warnings: report.warnings,
+          runtimeStatus: report.details.runtimeStatus,
+          environment: report.details.environment,
+          extensionVersion: report.details.extensionVersion,
+          extensionProtocolVersion: report.details.extensionProtocolVersion,
+          extensionTaskContractVersion: report.details.extensionTaskContractVersion,
+          requiredCapabilities: report.details.requiredCapabilities,
+          extensionCapabilities: report.details.extensionCapabilities,
+          requiredPermissions: report.details.requiredPermissions,
+          extensionPermissions: report.details.extensionPermissions,
+        });
         const primaryReason = report.blockingReasons[0];
         const error = new Error(
           this.buildCompatibilityErrorMessage(report),
@@ -259,6 +286,13 @@ export class WebSummaryBridgeServer {
       }
     }
     const task = this.taskStore.createTask(request);
+    debugWebSummaryLog("Bridge", "createTask accepted", {
+      taskId: task.taskId,
+      itemId: task.itemId,
+      actionType: task.actionType,
+      projectUrl: task.projectUrl,
+      existingConversationUrl: task.existingConversationUrl,
+    });
     return { task };
   }
 
@@ -446,6 +480,13 @@ export class WebSummaryBridgeServer {
   }
 
   private async routeRequest(request: ParsedHttpRequest): Promise<HttpResponse> {
+    if (shouldLogBridgeRequest(request)) {
+      debugWebSummaryLog("Bridge", "routeRequest", {
+        method: request.method,
+        pathname: request.pathname,
+        query: request.query,
+      });
+    }
     if (request.method === "OPTIONS") {
       return {
         status: 204,
@@ -504,6 +545,13 @@ export class WebSummaryBridgeServer {
         ),
       );
       const task = await this.taskStore.claimNextTaskOrWait(waitMs);
+      if (task) {
+        debugWebSummaryLog("Bridge", "claimNextTaskOrWait", {
+          waitMs,
+          taskId: task.taskId,
+          status: task.status,
+        });
+      }
       const payload: ClaimNextTaskResponse = {
         task,
       };
@@ -518,6 +566,12 @@ export class WebSummaryBridgeServer {
       this.recordRuntimeActivity("task-status");
       const taskId = extractTaskId(request.pathname, "/status");
       const payload = parseJsonBody<ReportTaskStatusRequest>(request);
+      debugWebSummaryLog("Bridge", "task status report", {
+        taskId,
+        status: payload.status,
+        debugMessage: payload.debugMessage,
+        errorMessage: payload.errorMessage,
+      });
       try {
         return buildJsonResponse(
           200,
@@ -542,6 +596,12 @@ export class WebSummaryBridgeServer {
       this.recordRuntimeActivity("task-result");
       const taskId = extractTaskId(request.pathname, "/result");
       const payload = parseJsonBody<ReportTaskResultRequest>(request);
+      debugWebSummaryLog("Bridge", "task result report", {
+        taskId,
+        resultSource: payload.resultSource,
+        resultLength: payload.resultMarkdown?.length || 0,
+        resultDebugInfo: payload.resultDebugInfo,
+      });
       try {
         return buildJsonResponse(
           200,
@@ -566,6 +626,11 @@ export class WebSummaryBridgeServer {
       this.recordRuntimeActivity("task-fail");
       const taskId = extractTaskId(request.pathname, "/fail");
       const payload = parseJsonBody<ReportTaskFailureRequest>(request);
+      debugWebSummaryLog("Bridge", "task failure report", {
+        taskId,
+        errorCode: payload.errorCode,
+        errorMessage: payload.errorMessage,
+      });
       try {
         return buildJsonResponse(
           200,
@@ -620,9 +685,18 @@ export class WebSummaryBridgeServer {
         }
         const request = parseHttpRequest(requestText);
         const response = await this.routeRequest(request);
+        if (shouldLogBridgeRequest(request)) {
+          debugWebSummaryLog("Bridge", "sendResponse", {
+            method: request.method,
+            pathname: request.pathname,
+            status: response.status,
+          });
+        }
         this.sendResponse(output, response);
       } catch (error: any) {
-        ztoolkit.log(`${LOG_PREFIX} request failed`, error);
+        errorWebSummaryLog("Bridge", "request failed", {
+          error: error?.message || String(error),
+        });
         if (output) {
           try {
             this.sendResponse(

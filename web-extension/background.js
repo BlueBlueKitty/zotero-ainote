@@ -16,6 +16,8 @@ import {
   WEB_SUMMARY_REQUIRED_PERMISSIONS,
   WEB_SUMMARY_TASK_CONTRACT_VERSION,
 } from "./compat.js";
+import { debugLog, errorLog, getLogLevel, setLogLevel } from "./debug.js";
+import { getSettings } from "./storage.js";
 
 const CHATGPT_URL = "https://chatgpt.com/";
 const CHATGPT_URL_PREFIXES = [
@@ -28,7 +30,7 @@ let runningTaskTabId = 0;
 const pendingTaskResolvers = new Map();
 let workerLoopRunning = false;
 let workerLoopStopToken = 0;
-const TASK_CLAIM_WAIT_MS = 30000;
+const TASK_CLAIM_WAIT_MS = 8000;
 const CLAIM_FAILURE_BACKOFF_MS = 1500;
 const CANCEL_WATCH_INTERVAL_MS = 800;
 const CHATGPT_TAB_READY_TIMEOUT_MS = 60000;
@@ -36,6 +38,7 @@ const CONTENT_SCRIPT_READY_TIMEOUT_MS = 20000;
 const HANDSHAKE_INTERVAL_MS = 45000;
 const CLAIM_WAKE_ALARM_NAME = "ainote-claim-wake";
 const CLAIM_WAKE_ALARM_PERIOD_MINUTES = 0.5;
+const WORKER_INSTANCE_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 let lastHandshakeAtMs = 0;
 let lastBridgeTrafficAtMs = 0;
 let activeClaimPromise = null;
@@ -43,6 +46,15 @@ let activeCancelWatcherToken = 0;
 let bootstrapPromise = null;
 const taskPorts = new Map();
 const cancelPendingTasks = new Map();
+
+async function syncLogLevelFromSettings() {
+  try {
+    const settings = await getSettings();
+    setLogLevel(settings.logLevel);
+  } catch {
+    setLogLevel("error");
+  }
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -180,19 +192,33 @@ async function sendCompatibilityHeartbeat(reason, force = false) {
     markBridgeActivity();
     lastHandshakeAtMs = now;
   } catch (error) {
-    console.warn(
-      `[AiNote][WebExtension] heartbeat failed (${reason})`,
-      error instanceof Error ? error.message : String(error),
-    );
+    errorLog("Background", `heartbeat failed (${reason})`, {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
 async function ensureBackgroundActive(reason = "unknown") {
+  debugLog("Background", "ensureBackgroundActive called", {
+    reason,
+    workerInstanceId: WORKER_INSTANCE_ID,
+    hasBootstrapPromise: !!bootstrapPromise,
+    workerLoopRunning,
+    workerLoopStopToken,
+  });
   if (!bootstrapPromise) {
     bootstrapPromise = (async () => {
       try {
+        debugLog("Background", "ensureBackgroundActive bootstrap start", {
+          reason,
+          workerInstanceId: WORKER_INSTANCE_ID,
+        });
         await schedulePolling(reason);
       } finally {
+        debugLog("Background", "ensureBackgroundActive bootstrap end", {
+          reason,
+          workerInstanceId: WORKER_INSTANCE_ID,
+        });
         bootstrapPromise = null;
       }
     })();
@@ -206,10 +232,9 @@ function scheduleWakeAlarm() {
       periodInMinutes: CLAIM_WAKE_ALARM_PERIOD_MINUTES,
     });
   } catch (error) {
-    console.warn(
-      "[AiNote][WebExtension] Failed to schedule wake alarm",
-      error instanceof Error ? error.message : String(error),
-    );
+    errorLog("Background", "Failed to schedule wake alarm", {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -236,7 +261,7 @@ function pushTaskCancelToContent(taskId, payload) {
       cancelPendingTasks.delete(taskId);
       return true;
     } catch (error) {
-      console.warn("[AiNote][WebExtension] Failed to push cancel to content", {
+      errorLog("Background", "Failed to push cancel to content", {
         taskId,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -290,10 +315,9 @@ async function shortCircuitCanceledTask(task) {
     });
     markBridgeActivity();
   } catch (error) {
-    console.warn(
-      "[AiNote][WebExtension] Failed to finalize canceled task before launch",
-      error instanceof Error ? error.message : String(error),
-    );
+    errorLog("Background", "Failed to finalize canceled task before launch", {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
   return true;
 }
@@ -322,10 +346,9 @@ async function watchRunningTaskCancellation(taskId) {
         break;
       }
     } catch (error) {
-      console.warn(
-        "[AiNote][WebExtension] cancel watcher failed",
-        error instanceof Error ? error.message : String(error),
-      );
+      errorLog("Background", "cancel watcher failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     await sleep(CANCEL_WATCH_INTERVAL_MS);
   }
@@ -341,7 +364,17 @@ async function waitForChatGPTTabReady(tabId, timeoutMs = CHATGPT_TAB_READY_TIMEO
   while (Date.now() - startedAt < timeoutMs) {
     const tab = await chrome.tabs.get(tabId);
     const url = tab.url || "";
+    debugLog("Background", "waitForChatGPTTabReady tick", {
+      tabId,
+      url,
+      pendingUrl: tab.pendingUrl || "",
+      status: tab.status || "",
+    });
     if (isChatGPTUrlCandidate(url)) {
+      debugLog("Background", "waitForChatGPTTabReady success", {
+        tabId,
+        url,
+      });
       return tab;
     }
     await sleep(300);
@@ -352,7 +385,7 @@ async function waitForChatGPTTabReady(tabId, timeoutMs = CHATGPT_TAB_READY_TIMEO
 async function pingContentScript(tabId) {
   return sendTabMessage(
     tabId,
-    { type: "ainote-ping" },
+    { type: "ainote-ping", logLevel: getLogLevel() },
     1,
   );
 }
@@ -366,6 +399,10 @@ async function waitForContentScriptReady(
   while (Date.now() - startedAt < timeoutMs) {
     try {
       const response = await pingContentScript(tabId);
+      debugLog("Background", "waitForContentScriptReady ping", {
+        tabId,
+        response,
+      });
       if (response?.ok) {
         return;
       }
@@ -427,6 +464,7 @@ async function waitForStableContentScript(
 }
 
 async function ensureContentScript(tabId) {
+  debugLog("Background", "ensureContentScript start", { tabId });
   // 快速验证：标签页应该已在 ensureChatGPTTab 中就绪，5s 内未就绪视为异常
   try {
     await waitForChatGPTTabReady(tabId, 5000);
@@ -439,8 +477,10 @@ async function ensureContentScript(tabId) {
   // 给 manifest 的 document_idle 注入足够时间（冷启动页面加载慢，延长到 10s）
   try {
     await waitForStableContentScript(tabId, 10000);
+    debugLog("Background", "ensureContentScript stable without reinject", { tabId });
     return;
   } catch {
+    debugLog("Background", "ensureContentScript needs reinject", { tabId });
   }
 
   // 冷启动时扩展刚初始化，tab 的渲染进程可能尚未就绪，延长注入重试窗口到 30s
@@ -451,6 +491,10 @@ async function ensureContentScript(tabId) {
   while (Date.now() - startedAt < COLD_START_INJECT_TIMEOUT) {
     injectAttempt += 1;
     try {
+      debugLog("Background", "executeScript attempt", {
+        tabId,
+        injectAttempt,
+      });
       await chrome.scripting.executeScript({
         target: { tabId },
         files: ["content.js"],
@@ -458,10 +502,16 @@ async function ensureContentScript(tabId) {
       });
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      console.warn("[AiNote][WebExtension] executeScript failed", lastError?.message);
+      errorLog("Background", "executeScript failed", {
+        error: lastError?.message || "",
+      });
     }
     try {
       await waitForContentScriptReady(tabId, 3000);
+      debugLog("Background", "ensureContentScript ready after inject", {
+        tabId,
+        injectAttempt,
+      });
       return;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
@@ -485,10 +535,9 @@ async function sendTabMessage(tabId, payload, retries = 3) {
       });
     } catch (error) {
       if (attempt < retries) {
-        console.warn(
-          `[AiNote] sendTabMessage attempt ${attempt} failed, retrying...`,
-          error,
-        );
+        errorLog("Background", `sendTabMessage attempt ${attempt} failed, retrying`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
         await sleep(1000);
       } else {
         throw error;
@@ -507,10 +556,9 @@ async function dispatchTaskMessage(tabId, payload, retries = 3) {
       if (attempt >= retries || !isTransientPortError(lastError)) {
         throw lastError;
       }
-      console.warn(
-        `[AiNote][WebExtension] Task dispatch attempt ${attempt} hit transient port error, retrying...`,
-        lastError,
-      );
+      errorLog("Background", `Task dispatch attempt ${attempt} hit transient port error`, {
+        error: lastError?.message || String(lastError),
+      });
       await sleep(700);
       await ensureContentScript(tabId);
     }
@@ -519,6 +567,7 @@ async function dispatchTaskMessage(tabId, payload, retries = 3) {
 }
 
 async function ensureChatGPTTab(targetUrl) {
+  debugLog("Background", "ensureChatGPTTab start", { targetUrl });
   // 先尝试按 URL 模式查找已加载的标签页
   let all = await chrome.tabs.query({
     url: ["https://chatgpt.com/*", "https://chat.openai.com/*"],
@@ -543,8 +592,17 @@ async function ensureChatGPTTab(targetUrl) {
     // 如果标签页当前 URL 不是 targetUrl，导航到 targetUrl 确保内容脚本运行在正确页面
     const currentUrl = String(matching.url || matching.pendingUrl || "");
     if (currentUrl !== targetUrl) {
+      debugLog("Background", "ensureChatGPTTab reuse existing with navigate", {
+        tabId: matching.id,
+        currentUrl,
+        targetUrl,
+      });
       await chrome.tabs.update(matching.id, { url: targetUrl, active: true });
     } else {
+      debugLog("Background", "ensureChatGPTTab reuse existing active", {
+        tabId: matching.id,
+        currentUrl,
+      });
       await chrome.tabs.update(matching.id, { active: true });
     }
     await waitForChatGPTTabReady(matching.id);
@@ -555,6 +613,10 @@ async function ensureChatGPTTab(targetUrl) {
   if (!created.id) {
     throw new Error("Failed to create ChatGPT tab");
   }
+  debugLog("Background", "ensureChatGPTTab created", {
+    tabId: created.id,
+    targetUrl,
+  });
   await waitForChatGPTTabReady(created.id);
   return created.id;
 }
@@ -606,10 +668,56 @@ async function runSummarizeTask(task) {
   if (await shortCircuitCanceledTask(task)) {
     return;
   }
+  debugLog("Background", "runSummarizeTask start", {
+    workerInstanceId: WORKER_INSTANCE_ID,
+    taskId: task.taskId,
+    projectUrl: task.projectUrl || CHATGPT_URL,
+    existingConversationUrl: task.existingConversationUrl || "",
+  });
   // task 在 claim 时已自动设为 opening_chat 状态，无需再重复上报
   // 此处仅更新 debugMessage 以便调试
   const targetUrl = task.projectUrl || CHATGPT_URL;
-  const tabId = await ensureChatGPTTab(targetUrl);
+  let tabId = 0;
+  try {
+    debugLog("Background", "runSummarizeTask report opening_chat begin", {
+      workerInstanceId: WORKER_INSTANCE_ID,
+      taskId: task.taskId,
+      targetUrl,
+    });
+    await withTimeout(
+      reportTaskStatus(task.taskId, {
+        status: "opening_chat",
+        debugMessage: `开始打开目标页面: ${targetUrl}`,
+      }),
+      4000,
+      "report opening_chat start timeout",
+    ).catch(() => {});
+    debugLog("Background", "runSummarizeTask ensureChatGPTTab begin", {
+      workerInstanceId: WORKER_INSTANCE_ID,
+      taskId: task.taskId,
+      targetUrl,
+    });
+    tabId = await ensureChatGPTTab(targetUrl);
+    debugLog("Background", "runSummarizeTask ensureChatGPTTab returned", {
+      workerInstanceId: WORKER_INSTANCE_ID,
+      taskId: task.taskId,
+      tabId,
+    });
+    await withTimeout(
+      reportTaskStatus(task.taskId, {
+        status: "opening_chat",
+        debugMessage: `已定位 ChatGPT 标签页 tabId=${tabId}，准备检测页面脚本`,
+      }),
+      4000,
+      "report tab-selected timeout",
+    ).catch(() => {});
+  } catch (error) {
+    await reportTaskFailure(task.taskId, {
+      errorCode: "INTERNAL_ERROR",
+      errorMessage: `打开 ChatGPT 标签页失败: ${error instanceof Error ? error.message : String(error)}`,
+    }).catch(() => {});
+    throw error;
+  }
   await sendCompatibilityHeartbeat("before-summarize-task", true);
   runningTaskTabId = tabId;
   await withTimeout(
@@ -620,26 +728,90 @@ async function runSummarizeTask(task) {
     4000,
     "report tab-selected timeout",
   ).catch(() => {});
-  await ensureContentScript(tabId);
+  try {
+    debugLog("Background", "runSummarizeTask ensureContentScript begin", {
+      workerInstanceId: WORKER_INSTANCE_ID,
+      taskId: task.taskId,
+      tabId,
+    });
+    await ensureContentScript(tabId);
+    debugLog("Background", "runSummarizeTask ensureContentScript returned", {
+      workerInstanceId: WORKER_INSTANCE_ID,
+      taskId: task.taskId,
+      tabId,
+    });
+    await withTimeout(
+      reportTaskStatus(task.taskId, {
+        status: "opening_chat",
+        debugMessage: `页面脚本已就绪，准备下发任务到 tabId=${tabId}`,
+      }),
+      4000,
+      "report content-ready timeout",
+    ).catch(() => {});
+  } catch (error) {
+    await reportTaskFailure(task.taskId, {
+      errorCode: "INTERNAL_ERROR",
+      errorMessage: `ChatGPT 页面脚本未就绪: ${error instanceof Error ? error.message : String(error)}`,
+    }).catch(() => {});
+    throw error;
+  }
   const completion = waitForContentTask(task.taskId);
-  const response = await dispatchTaskMessage(tabId, {
-    type: "ainote-run-summarize-task",
-    task,
-    autoSend: true,
-    projectUrl: task.projectUrl || "",
-    chatgptMode: task.chatgptMode || "thinking",
-  });
+  let response;
+  try {
+    debugLog("Background", "runSummarizeTask dispatchTaskMessage begin", {
+      workerInstanceId: WORKER_INSTANCE_ID,
+      taskId: task.taskId,
+      tabId,
+    });
+    response = await dispatchTaskMessage(tabId, {
+      type: "ainote-run-summarize-task",
+      task,
+      logLevel: getLogLevel(),
+      autoSend: true,
+      projectUrl: task.projectUrl || "",
+      chatgptMode: task.chatgptMode || "thinking",
+    });
+    debugLog("Background", "runSummarizeTask dispatchTaskMessage returned", {
+      workerInstanceId: WORKER_INSTANCE_ID,
+      taskId: task.taskId,
+      responseOk: !!response?.ok,
+      response,
+    });
+  } catch (error) {
+    await reportTaskFailure(task.taskId, {
+      errorCode: "INTERNAL_ERROR",
+      errorMessage: `向页面脚本派发任务失败: ${error instanceof Error ? error.message : String(error)}`,
+    }).catch(() => {});
+    throw error;
+  }
   if (!response?.ok) {
     pendingTaskResolvers.delete(task.taskId);
-    throw new Error(response?.error || "Content script task failed");
+    const error = new Error(response?.error || "Content script task failed");
+    await reportTaskFailure(task.taskId, {
+      errorCode: "INTERNAL_ERROR",
+      errorMessage: `页面脚本拒绝执行任务: ${error.message}`,
+    }).catch(() => {});
+    throw error;
   }
+  debugLog("Background", "runSummarizeTask awaiting completion", {
+    workerInstanceId: WORKER_INSTANCE_ID,
+    taskId: task.taskId,
+  });
   await completion;
+  debugLog("Background", "runSummarizeTask completion resolved", {
+    workerInstanceId: WORKER_INSTANCE_ID,
+    taskId: task.taskId,
+  });
 }
 
 async function runOpenConversationTask(task) {
   if (await shortCircuitCanceledTask(task)) {
     return;
   }
+  debugLog("Background", "runOpenConversationTask start", {
+    taskId: task.taskId,
+    url: task.existingConversationUrl || CHATGPT_URL,
+  });
   await sendCompatibilityHeartbeat("before-open-conversation-task", true);
   await withTimeout(
     reportTaskStatus(task.taskId, {
@@ -649,10 +821,21 @@ async function runOpenConversationTask(task) {
     4000,
     "report opening_chat timeout",
   ).catch((error) => {
-    console.warn("[AiNote][WebExtension] report opening_chat failed", error);
+    errorLog("Background", "report opening_chat failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
   });
   const url = task.existingConversationUrl || CHATGPT_URL;
-  const tabId = await ensureChatGPTTab(url);
+  let tabId = 0;
+  try {
+    tabId = await ensureChatGPTTab(url);
+  } catch (error) {
+    await reportTaskFailure(task.taskId, {
+      errorCode: "INTERNAL_ERROR",
+      errorMessage: `打开历史对话页面失败: ${error instanceof Error ? error.message : String(error)}`,
+    }).catch(() => {});
+    throw error;
+  }
   runningTaskTabId = tabId;
   await withTimeout(
     reportTaskStatus(task.taskId, {
@@ -662,15 +845,46 @@ async function runOpenConversationTask(task) {
     4000,
     "report tab-selected timeout",
   ).catch(() => {});
-  await ensureContentScript(tabId);
+  try {
+    await ensureContentScript(tabId);
+    await withTimeout(
+      reportTaskStatus(task.taskId, {
+        status: "opening_chat",
+        debugMessage: `历史对话页面脚本已就绪，准备下发任务到 tabId=${tabId}`,
+      }),
+      4000,
+      "report content-ready timeout",
+    ).catch(() => {});
+  } catch (error) {
+    await reportTaskFailure(task.taskId, {
+      errorCode: "INTERNAL_ERROR",
+      errorMessage: `历史对话页面脚本未就绪: ${error instanceof Error ? error.message : String(error)}`,
+    }).catch(() => {});
+    throw error;
+  }
   const completion = waitForContentTask(task.taskId);
-  const response = await dispatchTaskMessage(tabId, {
-    type: "ainote-open-conversation-task",
-    task,
-  });
+  let response;
+  try {
+    response = await dispatchTaskMessage(tabId, {
+      type: "ainote-open-conversation-task",
+      task,
+      logLevel: getLogLevel(),
+    });
+  } catch (error) {
+    await reportTaskFailure(task.taskId, {
+      errorCode: "INTERNAL_ERROR",
+      errorMessage: `向历史对话页面派发任务失败: ${error instanceof Error ? error.message : String(error)}`,
+    }).catch(() => {});
+    throw error;
+  }
   if (!response?.ok) {
     pendingTaskResolvers.delete(task.taskId);
-    throw new Error(response?.error || "Open conversation failed");
+    const error = new Error(response?.error || "Open conversation failed");
+    await reportTaskFailure(task.taskId, {
+      errorCode: "INTERNAL_ERROR",
+      errorMessage: `历史对话页面拒绝执行任务: ${error.message}`,
+    }).catch(() => {});
+    throw error;
   }
   await completion;
 }
@@ -691,13 +905,32 @@ async function claimNextTaskWithLongPoll(waitMs = TASK_CLAIM_WAIT_MS) {
 }
 
 async function processNextTask(stopToken) {
+  debugLog("Background", "processNextTask enter", {
+    workerInstanceId: WORKER_INSTANCE_ID,
+    stopToken,
+    workerLoopStopToken,
+    runningTaskId,
+  });
   if (runningTaskId) {
     return "busy";
   }
 
   await sendCompatibilityHeartbeat("poll-loop");
 
-  const data = await claimNextTaskWithLongPoll(TASK_CLAIM_WAIT_MS);
+  let data;
+  try {
+    data = await claimNextTaskWithLongPoll(TASK_CLAIM_WAIT_MS);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    if (message.includes("/api/ext/tasks/next") && message.includes("Failed to fetch")) {
+      debugLog("Background", "claimNextTask long-poll interrupted", {
+        waitMs: TASK_CLAIM_WAIT_MS,
+        error: message,
+      });
+      return "idle";
+    }
+    throw error;
+  }
   if (stopToken !== workerLoopStopToken) {
     return "stale";
   }
@@ -708,34 +941,64 @@ async function processNextTask(stopToken) {
   if (!task) {
     return "idle";
   }
+  debugLog("Background", "processNextTask claimed task", {
+    workerInstanceId: WORKER_INSTANCE_ID,
+    taskId: task.taskId,
+    status: task.status,
+    actionType: task.actionType,
+  });
 
+  debugLog("Background", "processNextTask set running task", {
+    workerInstanceId: WORKER_INSTANCE_ID,
+    taskId: task.taskId,
+  });
   runningTaskId = task.taskId;
   runningTaskTabId = 0;
   void watchRunningTaskCancellation(task.taskId);
   try {
+    debugLog("Background", "processNextTask before task runner", {
+      workerInstanceId: WORKER_INSTANCE_ID,
+      taskId: task.taskId,
+      actionType: task.actionType,
+    });
     if (task.actionType === "open_conversation") {
       await runOpenConversationTask(task);
     } else {
       await runSummarizeTask(task);
     }
+    debugLog("Background", "processNextTask task runner returned", {
+      workerInstanceId: WORKER_INSTANCE_ID,
+      taskId: task.taskId,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("[AiNote][WebExtension] Task failed", task.taskId, message);
+    errorLog("Background", "Task failed", {
+      taskId: task.taskId,
+      error: message,
+    });
     try {
       await reportTaskFailure(task.taskId, {
         errorCode: "INTERNAL_ERROR",
         errorMessage: message,
       });
     } catch (reportError) {
-      console.error(
-        "[AiNote][WebExtension] Failed to report task failure",
-        task.taskId,
-        reportError instanceof Error
-          ? reportError.message
-          : String(reportError),
+      errorLog(
+        "Background",
+        "Failed to report task failure",
+        {
+          taskId: task.taskId,
+          error:
+            reportError instanceof Error
+              ? reportError.message
+              : String(reportError),
+        },
       );
     }
   } finally {
+    debugLog("Background", "processNextTask finally cleanup", {
+      workerInstanceId: WORKER_INSTANCE_ID,
+      taskId: task.taskId,
+    });
     activeCancelWatcherToken += 1;
     clearTaskPort(task.taskId);
     cancelPendingTasks.delete(task.taskId);
@@ -797,6 +1060,7 @@ async function handleRunningTaskTabClosed(closedTabId) {
           existingConversationId: task.conversationMeta?.conversationId || task.existingConversationId,
           existingConversationUrl: task.conversationMeta?.conversationUrl || task.existingConversationUrl,
         },
+        logLevel: getLogLevel(),
         recoverRunningTask: true,
       });
       if (!response?.ok) {
@@ -804,24 +1068,43 @@ async function handleRunningTaskTabClosed(closedTabId) {
       }
     }
   } catch (error) {
-    console.error(
-      "[AiNote][WebExtension] Tab-close handler failed",
-      runningTaskId,
-      error instanceof Error ? error.message : String(error),
-    );
+    errorLog("Background", "Tab-close handler failed", {
+      taskId: runningTaskId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
 async function runWorkerLoop(stopToken) {
+  debugLog("Background", "runWorkerLoop enter", {
+    workerInstanceId: WORKER_INSTANCE_ID,
+    stopToken,
+    workerLoopStopToken,
+    workerLoopRunning,
+  });
   if (workerLoopRunning) return;
   workerLoopRunning = true;
   try {
     while (true) {
       if (stopToken !== workerLoopStopToken) {
+        debugLog("Background", "runWorkerLoop stopToken changed", {
+          workerInstanceId: WORKER_INSTANCE_ID,
+          stopToken,
+          workerLoopStopToken,
+        });
         break;
       }
       try {
+        debugLog("Background", "runWorkerLoop iteration begin", {
+          workerInstanceId: WORKER_INSTANCE_ID,
+          stopToken,
+        });
         const result = await processNextTask(stopToken);
+        debugLog("Background", "runWorkerLoop iteration result", {
+          workerInstanceId: WORKER_INSTANCE_ID,
+          stopToken,
+          result,
+        });
         if (result === "task") {
           continue;
         }
@@ -831,14 +1114,18 @@ async function runWorkerLoop(stopToken) {
         }
         continue;
       } catch (error) {
-        console.warn(
-          "[AiNote][WebExtension] Worker loop iteration failed",
-          error instanceof Error ? error.message : String(error),
-        );
+        errorLog("Background", "Worker loop iteration failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
         await sleep(CLAIM_FAILURE_BACKOFF_MS);
       }
     }
   } finally {
+    debugLog("Background", "runWorkerLoop finally", {
+      workerInstanceId: WORKER_INSTANCE_ID,
+      stopToken,
+      workerLoopStopToken,
+    });
     workerLoopRunning = false;
     // 如果在运行中收到新的 stopToken，确保自动拉起新循环，避免“claimed 后不继续”
     if (stopToken !== workerLoopStopToken) {
@@ -848,11 +1135,22 @@ async function runWorkerLoop(stopToken) {
 }
 
 async function schedulePolling(reason = "manual") {
+  await syncLogLevelFromSettings();
+  debugLog("Background", "schedulePolling start", {
+    workerInstanceId: WORKER_INSTANCE_ID,
+    reason,
+    workerLoopStopToken,
+  });
   if (pollingTimer) {
     clearInterval(pollingTimer);
     pollingTimer = null;
   }
   workerLoopStopToken += 1;
+  debugLog("Background", "schedulePolling new stop token", {
+    workerInstanceId: WORKER_INSTANCE_ID,
+    reason,
+    workerLoopStopToken,
+  });
   scheduleWakeAlarm();
   await sendCompatibilityHeartbeat("schedule-polling", true);
   void runWorkerLoop(workerLoopStopToken);
@@ -867,6 +1165,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.storage.onChanged.addListener(() => {
+  void syncLogLevelFromSettings();
   void ensureBackgroundActive("storage.onChanged");
 });
 
@@ -923,6 +1222,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message?.type === "ainote-page-ready") {
+    debugLog("Background", "ainote-page-ready", message.payload);
     void sendCompatibilityHeartbeat("content-page-ready")
       .then(async () => {
         markBridgeActivity();
@@ -937,6 +1237,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message?.type === "ainote-task-status" && message.taskId) {
+    debugLog("Background", "ainote-task-status", {
+      taskId: message.taskId,
+      payload: message.payload,
+    });
     void reportTaskStatus(message.taskId, message.payload)
       .then(() => {
         markBridgeActivity();
@@ -1035,4 +1339,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
+debugLog("Background", "module-load", {
+  workerInstanceId: WORKER_INSTANCE_ID,
+});
 void ensureBackgroundActive("module-load");

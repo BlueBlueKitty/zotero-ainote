@@ -6,6 +6,42 @@
   }
   window.__ainoteContentLoaded = true;
 
+  let webSummaryLogLevel = "error";
+
+  function shouldLog(level) {
+    if (webSummaryLogLevel === "off") {
+      return false;
+    }
+    if (level === "error") {
+      return webSummaryLogLevel === "error" || webSummaryLogLevel === "debug";
+    }
+    return webSummaryLogLevel === "debug";
+  }
+
+  function debugLog(scope, message, details) {
+    if (!shouldLog("debug")) {
+      return;
+    }
+    const prefix = `[AiNote][WebSummaryDebug][${scope}] ${message}`;
+    if (details === undefined) {
+      console.log(prefix);
+      return;
+    }
+    console.log(prefix, details);
+  }
+
+  function errorLog(scope, message, details) {
+    if (!shouldLog("error")) {
+      return;
+    }
+    const prefix = `[AiNote][WebSummaryError][${scope}] ${message}`;
+    if (details === undefined) {
+      console.error(prefix);
+      return;
+    }
+    console.error(prefix, details);
+  }
+
   const SELECTORS = {
     promptInput: [
       "#prompt-textarea",
@@ -717,7 +753,7 @@
         document.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
         );
-        console.warn(`[AiNote] 未找到 ChatGPT ${normalizedMode} 模式选项`);
+        errorLog("Content", `未找到 ChatGPT ${normalizedMode} 模式选项`);
         return false;
       }
 
@@ -1336,10 +1372,9 @@
       const content = lastAssistant?.content || "";
       return content;
     } catch (error) {
-      console.warn(
-        "[AiNote] Failed to fetch conversation detail for markdown extraction",
-        error,
-      );
+      errorLog("Content", "Failed to fetch conversation detail for markdown extraction", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return "";
     }
   }
@@ -1444,6 +1479,11 @@
 
   async function runSummarizeTask(message) {
     const task = message.task;
+    debugLog("Content", "runSummarizeTask start", {
+      taskId: task.taskId,
+      href: location.href,
+      readyState: document.readyState,
+    });
     const taskRuntime = createTaskRuntime(task.taskId);
     const sendTaskStatus = createTaskStatusReporter(task.taskId);
     try {
@@ -1479,10 +1519,9 @@
           });
         }
       } catch (error) {
-        console.warn(
-          "[AiNote] ChatGPT mode switch failed, continue with current mode",
-          error,
-        );
+        errorLog("Content", "ChatGPT mode switch failed, continue with current mode", {
+          error: error instanceof Error ? error.message : String(error),
+        });
         await sendTaskStatus({
           status: "creating_conversation",
           modeSwitchFailed: true,
@@ -1576,6 +1615,12 @@
   }
 
   async function openConversationTask(message) {
+    debugLog("Content", "openConversationTask start", {
+      taskId: message.task.taskId,
+      href: location.href,
+      readyState: document.readyState,
+      existingConversationUrl: message.task.existingConversationUrl || "",
+    });
     const taskRuntime = createTaskRuntime(message.task.taskId);
     const sendTaskStatus = createTaskStatusReporter(message.task.taskId);
     const targetUrl = message.task.existingConversationUrl;
@@ -1643,7 +1688,15 @@
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (typeof message?.logLevel === "string") {
+      webSummaryLogLevel = message.logLevel;
+    }
     if (message?.type === "ainote-ping") {
+      debugLog("Content", "ainote-ping", {
+        href: location.href,
+        readyState: document.readyState || "",
+        title: document.title || "",
+      });
       sendResponse({
         ok: true,
         ready: true,
@@ -1654,6 +1707,10 @@
       return false;
     }
     if (message?.type === "ainote-run-summarize-task") {
+      debugLog("Content", "ainote-run-summarize-task", {
+        taskId: message.task?.taskId,
+        href: location.href,
+      });
       sendResponse({ ok: true, started: true });
       void runSummarizeTask(message)
         .then((result) => reportTaskResult(message.task.taskId, result))
@@ -1662,12 +1719,19 @@
             return;
           }
           reportTaskFailure(message.task.taskId, error).catch((reportErr) => {
-            console.error("[AiNote] Failed to report task failure", reportErr);
+            errorLog("Content", "Failed to report task failure", {
+              error:
+                reportErr instanceof Error ? reportErr.message : String(reportErr),
+            });
           });
         });
       return false;
     }
     if (message?.type === "ainote-open-conversation-task") {
+      debugLog("Content", "ainote-open-conversation-task", {
+        taskId: message.task?.taskId,
+        href: location.href,
+      });
       sendResponse({ ok: true, started: true });
       void openConversationTask(message)
         .then((result) =>
@@ -1680,7 +1744,10 @@
         )
         .catch((error) => {
           reportTaskFailure(message.task.taskId, error).catch((reportErr) => {
-            console.error("[AiNote] Failed to report task failure", reportErr);
+            errorLog("Content", "Failed to report task failure", {
+              error:
+                reportErr instanceof Error ? reportErr.message : String(reportErr),
+            });
           });
         });
       return false;

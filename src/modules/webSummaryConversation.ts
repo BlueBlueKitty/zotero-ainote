@@ -29,6 +29,30 @@ export function sanitizeTitlePart(value: string): string {
     .slice(0, 80) || "Unknown";
 }
 
+export function normalizeConversationUrl(value: string): string {
+  let text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+
+  const markdownLinkMatch = text.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/i);
+  if (markdownLinkMatch) {
+    text = markdownLinkMatch[2].trim();
+  }
+
+  text = text.replace(/^<|>$/g, "").trim();
+  text = text.replace(/^['"]|['"]$/g, "").trim();
+
+  const directUrlMatch = text.match(/https?:\/\/\S+/i);
+  if (!directUrlMatch) {
+    return text;
+  }
+
+  let normalized = directUrlMatch[0].trim();
+  normalized = normalized.replace(/[)\],.;]+$/g, "");
+  return normalized;
+}
+
 export function encodeChatLinkToRelationValue(
   link: WebSummaryItemChatLink,
 ): string {
@@ -61,7 +85,7 @@ export function mergeConversationMetaIntoChatLink(
 ): WebSummaryConversationMeta {
   return {
     conversationId: meta.conversationId,
-    conversationUrl: meta.conversationUrl,
+    conversationUrl: normalizeConversationUrl(meta.conversationUrl || ""),
     conversationTitle: meta.conversationTitle,
     folderName: meta.folderName,
     folderResolved: meta.folderResolved,

@@ -16,8 +16,7 @@ import {
   WEB_SUMMARY_UPDATE_CHECK_TTL_MS,
   WEB_SUMMARY_VERSION_INFO_URL,
 } from "./webSummaryTypes";
-
-declare let ztoolkit: ZToolkit;
+import { debugWebSummaryLog, errorWebSummaryLog } from "./webSummaryDebug";
 
 interface HandshakeState {
   payload: ExtensionHandshakePayload;
@@ -124,14 +123,23 @@ export class WebSummaryCompatibilityManager {
     const warnings: CompatibilityWarning[] = [];
     const handshake = this.handshakeState?.payload;
     const runtimeStatus = this.getRuntimeStatus();
+    const hasRecentHandshake = !!this.handshakeState;
 
     if (!runtimeStatus.online) {
       if (actionType === "summarize") {
-        blockingReasons.push({
-          code: "EXTENSION_OFFLINE",
-          message:
-            "浏览器扩展未在线或心跳已过期。请确保 Chrome 已启动、扩展已启用，并保持与 Zotero 的 Bridge 连接。",
-        });
+        if (!hasRecentHandshake) {
+          blockingReasons.push({
+            code: "EXTENSION_OFFLINE",
+            message:
+              "浏览器扩展未在线或心跳已过期。请确保 Chrome 已启动、扩展已启用，并保持与 Zotero 的 Bridge 连接。",
+          });
+        } else {
+          warnings.push({
+            code: "EXTENSION_OFFLINE",
+            message:
+              "扩展最近有过握手，但当前心跳已过期。将继续尝试创建任务；若任务长期无响应，请重启 Chrome 扩展后重试。",
+          });
+        }
       } else {
         warnings.push({
           code: "EXTENSION_OFFLINE",
@@ -206,6 +214,19 @@ export class WebSummaryCompatibilityManager {
 
     this.appendUpdateWarnings(warnings, handshake);
 
+    if (!runtimeStatus.online || blockingReasons.length > 0) {
+      debugWebSummaryLog("Compat", "evaluate", {
+        actionType,
+        hasHandshake: !!handshake,
+        handshakeReceivedAt: this.handshakeState?.receivedAt || null,
+        runtimeActivitySource: this.runtimeActivityState?.source || null,
+        runtimeActivityReceivedAt: this.runtimeActivityState?.receivedAt || null,
+        runtimeStatus,
+        blockingReasons,
+        warnings,
+      });
+    }
+
     return {
       allowCreateSummarize: actionType !== "summarize" || blockingReasons.length === 0,
       blockingReasons,
@@ -249,7 +270,9 @@ export class WebSummaryCompatibilityManager {
         remote: json,
       };
     } catch (error) {
-      ztoolkit.log("[AiNote][WebSummaryCompatibility] update check failed", error);
+      errorWebSummaryLog("Compat", "update check failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       this.updateCache = {
         fetchedAtMs: now,
       };

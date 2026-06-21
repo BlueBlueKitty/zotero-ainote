@@ -8,6 +8,7 @@ import {
   WebSummaryTask,
   WebSummaryTaskStatus,
 } from "./webSummaryTypes";
+import { debugWebSummaryLog } from "./webSummaryDebug";
 
 const TRANSITIONS: Record<WebSummaryTaskStatus, WebSummaryTaskStatus[]> = {
   queued: [
@@ -131,6 +132,14 @@ export class WebSummaryTaskStore {
       },
     };
     this.tasks.set(task.taskId, task);
+    debugWebSummaryLog("TaskStore", "createTask", {
+      taskId: task.taskId,
+      itemId: task.itemId,
+      status: task.status,
+      actionType: task.actionType,
+      projectUrl: task.projectUrl,
+      existingConversationUrl: task.existingConversationUrl,
+    });
     this.notifyTaskAvailable();
     return this.emitTaskChanged(task);
   }
@@ -172,6 +181,13 @@ export class WebSummaryTaskStore {
     // 将状态从 claimed 推进到 opening_chat，消除冷启动时 HTTP 可能失败的时间窗口
     task.status = "opening_chat";
     task.updatedAt = new Date().toISOString();
+    debugWebSummaryLog("TaskStore", "claimNextTask", {
+      taskId: task.taskId,
+      fromStatus: "queued",
+      toStatus: task.status,
+      projectUrl: task.projectUrl,
+      existingConversationUrl: task.existingConversationUrl,
+    });
     return this.emitTaskChanged(task);
   }
 
@@ -218,6 +234,12 @@ export class WebSummaryTaskStore {
       task.errorMessage = task.cancelReason;
     }
 
+    debugWebSummaryLog("TaskStore", "requestCancel", {
+      taskId,
+      status: task.status,
+      reason: task.cancelReason,
+    });
+
     return this.emitTaskChanged(task);
   }
 
@@ -239,6 +261,11 @@ export class WebSummaryTaskStore {
         removedTask.errorMessage || removedTask.cancelReason;
     }
     this.tasks.delete(taskId);
+    debugWebSummaryLog("TaskStore", "removeTask", {
+      taskId,
+      removedStatus: removedTask.status,
+      cancelReason: removedTask.cancelReason,
+    });
     return this.emitTaskChanged(removedTask);
   }
 
@@ -281,6 +308,13 @@ export class WebSummaryTaskStore {
     if (typeof request.debugMessage === "string") {
       task.debugMessage = request.debugMessage;
     }
+    debugWebSummaryLog("TaskStore", "updateStatus", {
+      taskId,
+      status: task.status,
+      debugMessage: task.debugMessage,
+      errorMessage: task.errorMessage,
+      conversationUrl: task.conversationMeta?.conversationUrl,
+    });
     return this.emitTaskChanged(task);
   }
 
@@ -306,6 +340,12 @@ export class WebSummaryTaskStore {
       createdAt: task.conversationMeta?.createdAt || task.createdAt,
       lastUsedAt: task.updatedAt,
     });
+    debugWebSummaryLog("TaskStore", "completeTask", {
+      taskId,
+      resultSource: task.resultSource,
+      resultLength: task.resultMarkdown?.length || 0,
+      resultDebugInfo: task.resultDebugInfo,
+    });
     return this.emitTaskChanged(task);
   }
 
@@ -328,6 +368,12 @@ export class WebSummaryTaskStore {
       folderName: request.folderName,
       folderResolved: request.folderResolved,
       lastUsedAt: task.updatedAt,
+    });
+    debugWebSummaryLog("TaskStore", "failTask", {
+      taskId,
+      errorCode: task.errorCode,
+      errorMessage: task.errorMessage,
+      conversationUrl: task.conversationMeta?.conversationUrl,
     });
     return this.emitTaskChanged(task);
   }

@@ -5,7 +5,11 @@ import { buildNoteHtmlFromMarkdown } from "./noteHtmlBuilder";
 import { OutputWindow } from "./outputWindow";
 import { OutputWindowManager } from "./outputWindowManager";
 import { WebSummaryBridgeClient } from "./webSummaryBridgeClient";
-import { buildConversationTitleFromItem } from "./webSummaryConversation";
+import {
+  buildConversationTitleFromItem,
+  normalizeConversationUrl,
+} from "./webSummaryConversation";
+import { debugWebSummaryLog, errorWebSummaryLog } from "./webSummaryDebug";
 import { WebSummaryRelationStore } from "./webSummaryRelations";
 import {
   CreateTaskRequest,
@@ -124,7 +128,7 @@ function toChatLink(
   return {
     platform,
     conversationId: meta.conversationId,
-    conversationUrl: meta.conversationUrl,
+    conversationUrl: normalizeConversationUrl(meta.conversationUrl || ""),
     conversationTitle: meta.conversationTitle,
     folderName: meta.folderName,
     folderResolved: meta.folderResolved,
@@ -193,7 +197,8 @@ export function getWebSummaryModelLabel(
 }
 
 function launchChatGPTSurface(url: string): void {
-  const targetUrl = String(url || "").trim() || "https://chatgpt.com/";
+  const targetUrl = normalizeConversationUrl(String(url || "").trim()) || "https://chatgpt.com/";
+  debugWebSummaryLog("Workflow", "launchChatGPTSurface", { targetUrl });
   try {
     if (typeof (Zotero as any).launchURL === "function") {
       (Zotero as any).launchURL(targetUrl);
@@ -204,6 +209,10 @@ function launchChatGPTSurface(url: string): void {
       "[AiNote][WebSummaryWorkflow] Failed to launch ChatGPT surface via Zotero.launchURL",
       error,
     );
+    errorWebSummaryLog("Workflow", "Failed to launch ChatGPT surface via Zotero.launchURL", {
+      error: error instanceof Error ? error.message : String(error),
+      targetUrl,
+    });
   }
 
   try {
@@ -221,6 +230,10 @@ function launchChatGPTSurface(url: string): void {
       "[AiNote][WebSummaryWorkflow] Failed to launch ChatGPT surface",
       error,
     );
+    errorWebSummaryLog("Workflow", "Failed to launch ChatGPT surface", {
+      error: error instanceof Error ? error.message : String(error),
+      targetUrl,
+    });
   }
 }
 
@@ -261,6 +274,19 @@ function formatCreateTaskError(error: any): string {
   return error?.message || String(error);
 }
 
+function logCreateTaskFailure(context: string, error: any, payload: CreateTaskRequest): void {
+  errorWebSummaryLog("Workflow", `${context} createTask failed`, {
+    bridgeCode: String(error?.bridgeCode || ""),
+    rawMessage: error?.message || String(error),
+    formattedMessage: formatCreateTaskError(error),
+    actionType: payload.actionType,
+    projectUrl: payload.projectUrl,
+    existingConversationUrl: payload.existingConversationUrl,
+    existingConversationId: payload.existingConversationId,
+    conversationTitle: payload.conversationTitle,
+  });
+}
+
 function buildSummarizePayload(params: {
   item: Zotero.Item;
   pdfPath: string;
@@ -281,11 +307,15 @@ function buildSummarizePayload(params: {
     platform: "chatgpt",
     actionType: "summarize",
     conversationMode: "new-per-item",
-    projectUrl: String(params.projectUrl || getProjectUrl()).trim(),
+    projectUrl: normalizeConversationUrl(
+      String(params.projectUrl || getProjectUrl()).trim(),
+    ),
     chatgptMode: params.chatgptMode,
     conversationTitle: buildConversationTitleFromItem(params.item),
     existingConversationId: params.existingConversationId,
-    existingConversationUrl: params.existingConversationUrl,
+    existingConversationUrl: normalizeConversationUrl(
+      params.existingConversationUrl || "",
+    ),
   };
 }
 
@@ -307,6 +337,9 @@ async function checkCompatibilityWarnings(
   phase: "preflight" | "runtime" = "preflight",
 ): Promise<void> {
   try {
+    debugWebSummaryLog("Workflow", "checkCompatibilityWarnings start", {
+      phase,
+    });
     const health = await WebSummaryBridgeClient.healthCheck();
     const warnings = (health.compatibilityWarnings || []).filter((warning) => {
       if (phase === "preflight" && warning.code === "TARGET_PAGE_UNAVAILABLE") {
@@ -314,9 +347,18 @@ async function checkCompatibilityWarnings(
       }
       return true;
     });
-    void warnings;
+    debugWebSummaryLog("Workflow", "checkCompatibilityWarnings success", {
+      phase,
+      healthStatus: health.status,
+      runtimeStatus: health.runtimeStatus,
+      warningCount: warnings.length,
+      warnings,
+    });
   } catch (error) {
-    ztoolkit.log("[AiNote][WebSummaryWorkflow] health check failed", error);
+    errorWebSummaryLog("Workflow", "health check failed", {
+      error: error instanceof Error ? error.message : String(error),
+      phase,
+    });
   }
 }
 
@@ -332,10 +374,10 @@ async function discardBridgeTask(
     await WebSummaryBridgeClient.cancelTask(normalizedTaskId, reason).catch(() => {});
     await WebSummaryBridgeClient.removeTask(normalizedTaskId).catch(() => {});
   } catch (error) {
-    ztoolkit.log("[AiNote][WebSummaryWorkflow] failed to discard bridge task", {
+    errorWebSummaryLog("Workflow", "failed to discard bridge task", {
       taskId: normalizedTaskId,
       reason,
-      error,
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 }
@@ -355,10 +397,10 @@ async function cancelBridgeTaskAndThrowIfRequested(
         getWebSummaryCanceledMessage(),
       );
     } catch (error) {
-      ztoolkit.log(
-        "[AiNote][WebSummaryWorkflow] cancel current task failed during submit stage",
-        error,
-      );
+      errorWebSummaryLog("Workflow", "cancel current task failed during submit stage", {
+        taskId: normalizedTaskId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
   throwIfWebSummaryCanceled(canceled);
@@ -397,6 +439,12 @@ async function waitForTaskTerminalState(params: {
   return new Promise<WebSummaryTask>((resolve, reject) => {
     const fail = (error: Error) => {
       if (settled) return;
+      debugWebSummaryLog("Workflow", "waitForTaskTerminalState failed", {
+        taskId,
+        status: latestTask.status,
+        error: error.message,
+        debugMessage: latestTask.debugMessage,
+      });
       cleanup();
       reject(error);
     };
@@ -444,6 +492,18 @@ async function waitForTaskTerminalState(params: {
     };
 
     const handleTask = async (nextTask: WebSummaryTask) => {
+      if (
+        latestTask.status !== nextTask.status ||
+        latestTask.debugMessage !== nextTask.debugMessage
+      ) {
+        debugWebSummaryLog("Workflow", "task state update", {
+          taskId,
+          fromStatus: latestTask.status,
+          toStatus: nextTask.status,
+          debugMessage: nextTask.debugMessage,
+          errorMessage: nextTask.errorMessage,
+        });
+      }
       latestTask = nextTask;
       scheduleTimers();
       if (onTask) {
@@ -504,10 +564,10 @@ export class WebSummaryWorkflow {
           currentTaskId,
           getWebSummaryCanceledMessage(),
         ).catch((error) => {
-          ztoolkit.log(
-            "[AiNote][WebSummaryWorkflow] cancel current task failed",
-            error,
-          );
+          errorWebSummaryLog("Workflow", "cancel current task failed", {
+            taskId: currentTaskId,
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
       }
     });
@@ -567,22 +627,63 @@ export class WebSummaryWorkflow {
       let attemptTaskId = "";
       void isFallbackAttempt;
 
+      debugWebSummaryLog("Workflow", "single-target attempt start", {
+        payloadIndex,
+        targetTitle: String(target.item.getField("title") || ""),
+        projectUrl: payload.projectUrl,
+        existingConversationUrl: payload.existingConversationUrl,
+        existingConversationId: payload.existingConversationId,
+      });
       throwIfWebSummaryCanceled(currentTaskCanceled);
       launchChatGPTSurface(
         payload.existingConversationUrl || payload.projectUrl || "https://chatgpt.com/",
       );
       hooks?.onStage?.(getString("web-summary-stage-submitting" as any), 5);
+      debugWebSummaryLog("Workflow", "single-target sleep before preflight", {
+        payloadIndex,
+      });
       await sleep(4000);
+      debugWebSummaryLog("Workflow", "single-target wake before preflight", {
+        payloadIndex,
+      });
       throwIfWebSummaryCanceled(currentTaskCanceled);
 
       try {
+        debugWebSummaryLog("Workflow", "single-target preflight begin", {
+          payloadIndex,
+        });
         await checkCompatibilityWarnings("preflight");
+        debugWebSummaryLog("Workflow", "single-target preflight passed", {
+          payloadIndex,
+        });
         throwIfWebSummaryCanceled(currentTaskCanceled);
         let task;
         try {
+          debugWebSummaryLog("Workflow", "single-target createTask call begin", {
+            payloadIndex,
+            projectUrl: payload.projectUrl,
+            existingConversationUrl: payload.existingConversationUrl,
+            existingConversationId: payload.existingConversationId,
+          });
           task = (await WebSummaryBridgeClient.createTask(payload)).task;
+          debugWebSummaryLog("Workflow", "single-target createTask call returned", {
+            payloadIndex,
+            taskId: task.taskId,
+            status: task.status,
+          });
+          debugWebSummaryLog("Workflow", "bridge task created", {
+            taskId: task.taskId,
+            itemId: task.itemId,
+            title: task.title,
+            actionType: task.actionType,
+            targetUrl:
+              payload.existingConversationUrl ||
+              payload.projectUrl ||
+              "https://chatgpt.com/",
+          });
           hooks?.onTaskCreated?.(task);
         } catch (error: any) {
+          logCreateTaskFailure("single-target", error, payload);
           if (currentTaskCanceled) {
             throw toWebSummaryCanceledError(error);
           }
@@ -639,11 +740,25 @@ export class WebSummaryWorkflow {
         }
         throw runtimeError;
       } catch (error) {
+        errorWebSummaryLog("Workflow", "single-target outer attempt catch", {
+          payloadIndex,
+          error: error instanceof Error ? error.message : String(error),
+          currentTaskId,
+          attemptTaskId,
+          latestTaskId: latestTask?.taskId || "",
+          latestStatus: latestTask?.status || "",
+        });
         const cleanupTaskId =
           currentTaskId ||
           attemptTaskId ||
           latestTask?.taskId ||
           "";
+        debugWebSummaryLog("Workflow", "summarizeSingleTarget attempt failed", {
+          cleanupTaskId,
+          error: error instanceof Error ? error.message : String(error),
+          latestStatus: latestTask?.status,
+          latestDebugMessage: latestTask?.debugMessage,
+        });
         if (cleanupTaskId) {
           await discardBridgeTask(cleanupTaskId, "网页总结失败后清理遗留任务");
         }
@@ -735,10 +850,10 @@ export class WebSummaryWorkflow {
           currentTaskId,
           getWebSummaryCanceledMessage(),
         ).catch((error) => {
-          ztoolkit.log(
-            "[AiNote][WebSummaryWorkflow] cancel current task failed",
-            error,
-          );
+          errorWebSummaryLog("Workflow", "cancel current task failed", {
+            taskId: currentTaskId,
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
       }
     });
@@ -820,22 +935,71 @@ export class WebSummaryWorkflow {
           const isFallbackAttempt = payloadIndex > 0;
           let attemptTaskId = "";
           void isFallbackAttempt;
+          debugWebSummaryLog("Workflow", "batch attempt start", {
+            payloadIndex,
+            current,
+            total,
+            targetTitle: itemTitle,
+            projectUrl: payload.projectUrl,
+            existingConversationUrl: payload.existingConversationUrl,
+            existingConversationId: payload.existingConversationId,
+          });
           throwIfWebSummaryCanceled(currentTaskCanceled);
           launchChatGPTSurface(
             payload.existingConversationUrl || payload.projectUrl || "https://chatgpt.com/",
           );
 
           // 等待浏览器和扩展初始化（冷启动时 Chrome 需要时间启动，扩展 Service Worker 需要初始化轮询）
+          debugWebSummaryLog("Workflow", "batch sleep before preflight", {
+            payloadIndex,
+            current,
+          });
           await sleep(4000);
+          debugWebSummaryLog("Workflow", "batch wake before preflight", {
+            payloadIndex,
+            current,
+          });
           throwIfWebSummaryCanceled(currentTaskCanceled);
 
           try {
+            debugWebSummaryLog("Workflow", "batch preflight begin", {
+              payloadIndex,
+              current,
+            });
             await checkCompatibilityWarnings("preflight");
+            debugWebSummaryLog("Workflow", "batch preflight passed", {
+              payloadIndex,
+              current,
+            });
             throwIfWebSummaryCanceled(currentTaskCanceled);
             let task;
             try {
+              debugWebSummaryLog("Workflow", "batch createTask call begin", {
+                payloadIndex,
+                current,
+                projectUrl: payload.projectUrl,
+                existingConversationUrl: payload.existingConversationUrl,
+                existingConversationId: payload.existingConversationId,
+              });
               task = (await WebSummaryBridgeClient.createTask(payload)).task;
+              debugWebSummaryLog("Workflow", "batch createTask call returned", {
+                payloadIndex,
+                current,
+                taskId: task.taskId,
+                status: task.status,
+              });
+              debugWebSummaryLog("Workflow", "batch bridge task created", {
+                taskId: task.taskId,
+                itemId: task.itemId,
+                title: task.title,
+                actionType: task.actionType,
+                targetUrl:
+                  payload.existingConversationUrl ||
+                  payload.projectUrl ||
+                  "https://chatgpt.com/",
+              });
             } catch (error: any) {
+              logCreateTaskFailure("batch", error, payload);
               if (currentTaskCanceled) {
                 throw toWebSummaryCanceledError(error);
               }
@@ -922,11 +1086,26 @@ export class WebSummaryWorkflow {
             }
             throw runtimeError;
           } catch (error) {
+            errorWebSummaryLog("Workflow", "batch outer attempt catch", {
+              payloadIndex,
+              current,
+              error: error instanceof Error ? error.message : String(error),
+              currentTaskId,
+              attemptTaskId,
+              latestTaskId: latestTask?.taskId || "",
+              latestStatus: latestTask?.status || "",
+            });
             const cleanupTaskId =
               currentTaskId ||
               attemptTaskId ||
               latestTask?.taskId ||
               "";
+            debugWebSummaryLog("Workflow", "batch summarize attempt failed", {
+              cleanupTaskId,
+              error: error instanceof Error ? error.message : String(error),
+              latestStatus: latestTask?.status,
+              latestDebugMessage: latestTask?.debugMessage,
+            });
             if (cleanupTaskId) {
               await discardBridgeTask(
                 cleanupTaskId,
@@ -1087,6 +1266,11 @@ export class WebSummaryWorkflow {
     };
 
     const { task } = await WebSummaryBridgeClient.createTask(payload);
+    debugWebSummaryLog("Workflow", "debugFetchConversationContent task created", {
+      taskId: task.taskId,
+      itemId: task.itemId,
+      existingConversationUrl: link.conversationUrl,
+    });
     const taskId = task.taskId;
     const latestTask = await waitForTaskTerminalState({
       task,

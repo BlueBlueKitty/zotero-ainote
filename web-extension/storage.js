@@ -2,6 +2,7 @@
 
 export const DEFAULT_SETTINGS = {
   bridgeUrl: "http://127.0.0.1:23123",
+  logLevel: "error",
 };
 
 const LEGACY_BRIDGE_URLS = new Set([

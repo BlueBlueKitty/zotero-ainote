@@ -36,7 +36,7 @@ export type BridgeErrorCode =
 
 export const WEB_SUMMARY_PROTOCOL_VERSION = "1.0.0";
 export const WEB_SUMMARY_TASK_CONTRACT_VERSION = "1.0.0";
-export const WEB_SUMMARY_EXTENSION_HEARTBEAT_TTL_MS = 60_000;
+export const WEB_SUMMARY_EXTENSION_HEARTBEAT_TTL_MS = 180_000;
 export const WEB_SUMMARY_UPDATE_CHECK_TTL_MS = 12 * 60 * 60 * 1000;
 export const WEB_SUMMARY_VERSION_INFO_URL =
   "https://raw.githubusercontent.com/BlueBlueKitty/zotero-ainote/main/web-version.json";

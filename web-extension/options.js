@@ -4,6 +4,7 @@ import { healthCheck } from "./bridge-client.js";
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from "./storage.js";
 
 const bridgeUrl = /** @type {HTMLInputElement} */ (document.getElementById("bridgeUrl"));
+const logLevel = /** @type {HTMLSelectElement} */ (document.getElementById("logLevel"));
 const status = /** @type {HTMLDivElement} */ (document.getElementById("status"));
 
 function t(key) {
@@ -28,11 +29,13 @@ function applyI18n() {
 async function load() {
   const settings = await getSettings();
   bridgeUrl.value = settings.bridgeUrl;
+  logLevel.value = settings.logLevel || DEFAULT_SETTINGS.logLevel;
 }
 
 async function onSave() {
   await saveSettings({
     bridgeUrl: bridgeUrl.value.trim() || DEFAULT_SETTINGS.bridgeUrl,
+    logLevel: logLevel.value === "off" || logLevel.value === "debug" ? logLevel.value : "error",
   });
   status.textContent = t("statusSaved");
 }
