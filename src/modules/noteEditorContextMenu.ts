@@ -3,7 +3,9 @@ import {
   clearEditorContextMenuEvent,
   getActiveNoteEditorContext,
   getAllLiveEditorInstances,
+  getEditorPopup,
   getEditorRoot,
+  getEditorWindow,
   recordEditorContextMenuEvent,
   showSectionActionResult,
 } from "./noteEditorAdapter";
@@ -127,7 +129,7 @@ function scanAndBindEditors() {
 }
 
 function bindEditorInstance(editorInstance: Zotero.EditorInstance) {
-  const editorWindow = editorInstance._iframeWindow;
+  const editorWindow = getEditorWindow(editorInstance);
   const editorDocument = editorWindow?.document;
   const editorRoot = getEditorRoot(editorInstance);
   if (!editorWindow || !editorDocument || !editorRoot) {
@@ -194,8 +196,9 @@ function ensureNativePopupBound(editorInstance: Zotero.EditorInstance) {
   (popup as any).__ainoteContextMenuBound = true;
   popup.addEventListener("popupshowing", () => {
     const activeEditor =
-      ((popup as any).__ainoteCurrentEditorInstance as Zotero.EditorInstance | undefined) ||
-      editorInstance;
+      ((popup as any).__ainoteCurrentEditorInstance as
+        | Zotero.EditorInstance
+        | undefined) || editorInstance;
     ensureNativePopupMenuItems(activeEditor, popup);
   });
   ensureNativePopupMenuItems(editorInstance, popup);
@@ -245,7 +248,9 @@ function ensureNativePopupMenuItems(
   }
 
   for (const action of MENU_ACTIONS) {
-    let menuitem = doc.getElementById(`${ROOT_MENU_ITEM_ID}-${action.id}`) as any;
+    let menuitem = doc.getElementById(
+      `${ROOT_MENU_ITEM_ID}-${action.id}`,
+    ) as any;
     if (!menuitem) {
       menuitem = doc.createXULElement("menuitem") as any;
       menuitem.id = `${ROOT_MENU_ITEM_ID}-${action.id}`;
@@ -264,7 +269,7 @@ function openCustomContextMenu(
   editorInstance: Zotero.EditorInstance,
   event: MouseEvent,
 ) {
-  const editorDocument = editorInstance._iframeWindow?.document;
+  const editorDocument = getEditorWindow(editorInstance)?.document;
   if (!editorDocument || !getHeadingContext(editorInstance)) {
     return;
   }
@@ -404,11 +409,19 @@ async function executeSectionAction(
   try {
     const context = getActiveNoteEditorContext(editorInstance);
     if (!context) {
-      showSectionActionResult(getString("note-section-no-editor-context"), "error");
+      showSectionActionResult(
+        getString("note-section-no-editor-context"),
+        "error",
+      );
       return;
     }
-    if (!findClosestHeading(context.lastContextMenuEvent?.target as Node | null)) {
-      showSectionActionResult(getString("note-section-request-place-cursor"), "warning");
+    if (
+      !findClosestHeading(context.lastContextMenuEvent?.target as Node | null)
+    ) {
+      showSectionActionResult(
+        getString("note-section-request-place-cursor"),
+        "warning",
+      );
       return;
     }
     await runNoteSectionAction(action, context);
@@ -423,23 +436,17 @@ async function executeSectionAction(
   }
 }
 
-function getHeadingContext(editorInstance: Zotero.EditorInstance): HTMLElement | null {
+function getHeadingContext(
+  editorInstance: Zotero.EditorInstance,
+): HTMLElement | null {
   const context = getActiveNoteEditorContext(editorInstance);
-  return findClosestHeading(context?.lastContextMenuEvent?.target as Node | null);
+  return findClosestHeading(
+    context?.lastContextMenuEvent?.target as Node | null,
+  );
 }
 
 function getNativePopupElement(
   editorInstance: Zotero.EditorInstance,
 ): XUL.MenuPopup | null {
-  const popup = editorInstance?._popup;
-  if (!popup) {
-    return null;
-  }
-  if (popup.tagName === "menupopup") {
-    return popup as XUL.MenuPopup;
-  }
-  if (typeof popup.querySelector === "function") {
-    return popup.querySelector("menupopup") as XUL.MenuPopup | null;
-  }
-  return null;
+  return getEditorPopup(editorInstance);
 }

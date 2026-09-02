@@ -30,6 +30,7 @@ import {
 import { WebSummaryRelationStore } from "./modules/webSummaryRelations";
 import { SummaryTaskManager } from "./modules/summaryTaskManager";
 import { SummaryManagerWindow } from "./modules/summaryManagerWindow";
+import { getZoteroRuntimeInfo } from "./modules/zoteroCompat";
 
 const GENERATE_SUMMARY_MENU_ID = "ainote-generate-summary-menu";
 const WEB_CONTINUE_CHAT_MENU_ID = "ainote-web-continue-chat-menu";
@@ -43,6 +44,9 @@ async function onStartup() {
     Zotero.uiReadyPromise,
   ]);
 
+  const runtime = getZoteroRuntimeInfo();
+  ztoolkit.log(`[AiNote] Zotero runtime detected: ${runtime.version}`);
+
   initLocale();
   await SummaryTaskManager.getInstance().ensureLoaded();
 
@@ -50,7 +54,10 @@ async function onStartup() {
   initializeDefaultPrefsOnStartup();
   startWebSummaryBridgeIfNeeded();
   void WebSummaryRelationStore.migrateLegacyRelations().catch((error) => {
-    ztoolkit.log("[AiNote] Legacy web-summary relation migration failed:", error);
+    ztoolkit.log(
+      "[AiNote] Legacy web-summary relation migration failed:",
+      error,
+    );
   });
 
   // Register preferences pane
@@ -170,7 +177,6 @@ function initializeDefaultPrefsOnStartup() {
         ztoolkit.log(`[AiNote] 启动时强制设置配置失败: ${key}`, e);
       }
     }
-
   }
 
   const profiles = parseProfiles(getPref("profiles"));
@@ -186,10 +192,16 @@ function initializeDefaultPrefsOnStartup() {
     setPref("activeProfileId" as any, profiles[0].id);
   }
 
-  if (profiles.length && !profiles.some((p) => p.providerType === "chatgpt_web")) {
+  if (
+    profiles.length &&
+    !profiles.some((p) => p.providerType === "chatgpt_web")
+  ) {
     const nextProfiles = [
       ...profiles,
-      createProfile("chatgpt_web", getString("prefs-provider-chatgpt-web" as any)),
+      createProfile(
+        "chatgpt_web",
+        getString("prefs-provider-chatgpt-web" as any),
+      ),
     ];
     setPref("profiles" as any, JSON.stringify(nextProfiles));
   }
@@ -359,7 +371,6 @@ function buildContinueChatMenuOptions(menuIcon: string): any {
   };
 }
 
-
 function buildNoteFormatMenuOptions(menuIcon: string): any {
   return {
     tag: "menu",
@@ -387,7 +398,10 @@ function buildNoteFormatMenuOptions(menuIcon: string): any {
 async function normalizeSelectionTargets(
   items: Zotero.Item[],
   templateId?: string,
-): Promise<{ targets: NoteGenerationTarget[]; skippedNoAttachmentTitles: string[] }> {
+): Promise<{
+  targets: NoteGenerationTarget[];
+  skippedNoAttachmentTitles: string[];
+}> {
   const targets: NoteGenerationTarget[] = [];
   const skippedNoAttachmentTitles: string[] = [];
 
@@ -452,7 +466,7 @@ async function handleGenerateSummary(templateId?: string) {
   const profiles = parseProfiles(profilesRaw);
   const activeProfile = profiles.find((p) => p.id === activeId) || profiles[0];
 
-    if (!activeProfile || !activeProfile.enabled) {
+  if (!activeProfile || !activeProfile.enabled) {
     new ztoolkit.ProgressWindow("AiNote", {
       closeOnClick: true,
       closeTime: 5000,
@@ -494,17 +508,16 @@ async function handleGenerateSummary(templateId?: string) {
     return;
   }
 
-  const { targets, skippedNoAttachmentTitles } = await normalizeSelectionTargets(
-    selectedItems,
-    templateId,
-  );
+  const { targets, skippedNoAttachmentTitles } =
+    await normalizeSelectionTargets(selectedItems, templateId);
 
   if (skippedNoAttachmentTitles.length > 0) {
     const count = skippedNoAttachmentTitles.length;
     const preview = skippedNoAttachmentTitles.slice(0, 2).join("、");
-    const suffix = count > 2
-      ? ` ${getString("warn-skip-no-pdf-suffix" as any, { args: { count } })}`
-      : "";
+    const suffix =
+      count > 2
+        ? ` ${getString("warn-skip-no-pdf-suffix" as any, { args: { count } })}`
+        : "";
     new ztoolkit.ProgressWindow("AiNote", {
       closeOnClick: true,
       closeTime: 3500,
@@ -588,7 +601,6 @@ async function handleContinueWebChat() {
     progressWin.startCloseTimer(8000);
   }
 }
-
 
 async function handleNoteFormatAction(actionType: NoteFormatActionType) {
   try {

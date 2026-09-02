@@ -3,12 +3,12 @@
     "ainote@zotero.org": {
       "updates": [
         {
-          "version": "1.3.4",
-          "update_link": "https://github.com/BlueBlueKitty/zotero-ainote/releases/download/v1.3.4/ainote.xpi",
+          "version": "1.3.6",
+          "update_link": "https://github.com/BlueBlueKitty/zotero-ainote/releases/download/v1.3.6/ainote.xpi",
           "applications": {
             "zotero": {
               "strict_min_version": "7.0.0-beta.70",
-              "strict_max_version": "9.0.*"
+              "strict_max_version": "10.0.*"
             }
           }
         }

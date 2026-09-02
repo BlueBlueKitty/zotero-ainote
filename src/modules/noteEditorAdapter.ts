@@ -1,3 +1,10 @@
+import {
+  getEditorItem as getCompatibleEditorItem,
+  getEditorPopup,
+  getEditorWindow as getCompatibleEditorWindow,
+  getLiveEditorInstances,
+} from "./zoteroCompat";
+
 const LOG_PREFIX = "[AiNote][NoteEditorAdapter]";
 const EDITOR_ROOT_SELECTOR = ".primary-editor, .ProseMirror";
 
@@ -16,15 +23,22 @@ interface StoredEditorContext {
   lastContextTimestamp: number;
 }
 
-const editorContextStore = new WeakMap<Zotero.EditorInstance, StoredEditorContext>();
+const editorContextStore = new WeakMap<
+  Zotero.EditorInstance,
+  StoredEditorContext
+>();
 let lastGlobalEditorContext: StoredEditorContext | null = null;
 
-export function getEditorRoot(editorInstance: Zotero.EditorInstance): HTMLElement | null {
+export function getEditorRoot(
+  editorInstance: Zotero.EditorInstance,
+): HTMLElement | null {
   const editorDocument = getEditorDocument(editorInstance);
   if (!editorDocument) {
     return null;
   }
-  return editorDocument.querySelector(EDITOR_ROOT_SELECTOR) as HTMLElement | null;
+  return editorDocument.querySelector(
+    EDITOR_ROOT_SELECTOR,
+  ) as HTMLElement | null;
 }
 
 export function getEditorDocument(
@@ -37,21 +51,10 @@ export function getEditorDocument(
 export function getEditorWindow(
   editorInstance: Zotero.EditorInstance,
 ): Window | null {
-  const iframeWindow = editorInstance?._iframeWindow;
-  if (!iframeWindow) {
-    return null;
-  }
-
-  try {
-    if (Components.utils.isDeadWrapper(iframeWindow)) {
-      return null;
-    }
-  } catch (_error) {
-    return null;
-  }
-
-  return iframeWindow;
+  return getCompatibleEditorWindow(editorInstance);
 }
+
+export { getEditorPopup };
 
 export function recordEditorContextMenuEvent(
   editorInstance: Zotero.EditorInstance,
@@ -66,7 +69,9 @@ export function recordEditorContextMenuEvent(
   lastGlobalEditorContext = storedContext;
 }
 
-export function clearEditorContextMenuEvent(editorInstance: Zotero.EditorInstance) {
+export function clearEditorContextMenuEvent(
+  editorInstance: Zotero.EditorInstance,
+) {
   const storedContext = editorContextStore.get(editorInstance);
   if (storedContext) {
     storedContext.lastContextMenuEvent = null;
@@ -90,8 +95,13 @@ export function getActiveNoteEditorContext(
     const editorWindow = getEditorWindow(editorInstance);
     const editorDocument = editorWindow?.document;
     const editorRoot = getEditorRoot(editorInstance);
-    const noteItem = editorInstance?._item;
-    if (!editorWindow || !editorDocument || !editorRoot || !noteItem?.isNote?.()) {
+    const noteItem = getCompatibleEditorItem(editorInstance);
+    if (
+      !editorWindow ||
+      !editorDocument ||
+      !editorRoot ||
+      !noteItem?.isNote?.()
+    ) {
       continue;
     }
 
@@ -110,10 +120,7 @@ export function getActiveNoteEditorContext(
 }
 
 export function getAllLiveEditorInstances(): Zotero.EditorInstance[] {
-  const editors = Array.isArray(Zotero.Notes?._editorInstances)
-    ? Zotero.Notes._editorInstances
-    : [];
-  return editors.filter((editorInstance) => !!getEditorWindow(editorInstance));
+  return getLiveEditorInstances();
 }
 
 export function readCurrentNoteHtml(noteItem: Zotero.Item): string {
@@ -165,7 +172,10 @@ export function confirmDeleteCurrentSection(
       return Services.prompt.confirm(editorWindow as any, "AiNote", message);
     }
   } catch (error) {
-    ztoolkit.log(`${LOG_PREFIX} 原生确认框调用失败，改用 window.confirm`, error);
+    ztoolkit.log(
+      `${LOG_PREFIX} 原生确认框调用失败，改用 window.confirm`,
+      error,
+    );
   }
 
   if (typeof editorWindow.confirm === "function") {
