@@ -24,7 +24,8 @@ import {
 } from "./llmProfiles";
 import { runtimeT } from "../utils/runtimeLocale";
 import { getString } from "../utils/locale";
-import { normalizeWebSummaryChatGPTMode } from "./webSummaryTypes";
+import { showToast } from "../utils/window";
+import type { WebSummaryBridgeStatus } from "./webSummaryTypes";
 
 const PROVIDER_OPTIONS: Array<{ value: ProviderType; label: string }> = [
   {
@@ -99,30 +100,6 @@ function getProviderLabel(providerType: ProviderType): string {
     PROVIDER_OPTIONS.find((option) => option.value === providerType)?.label ||
     providerType
   );
-}
-
-function getWebSummaryModeOptionLabel(mode: "fast" | "balanced" | "advanced"): string {
-  switch (mode) {
-    case "fast":
-      return runtimeT({
-        "en-US": "Fast",
-        "zh-CN": "极速",
-        "zh-TW": "極速",
-      });
-    case "balanced":
-      return runtimeT({
-        "en-US": "Balanced",
-        "zh-CN": "均衡",
-        "zh-TW": "均衡",
-      });
-    case "advanced":
-    default:
-      return runtimeT({
-        "en-US": "Advanced",
-        "zh-CN": "高级",
-        "zh-TW": "高級",
-      });
-  }
 }
 
 function supportsTopP(providerType: ProviderType) {
@@ -325,12 +302,8 @@ function initializeDefaultPrefs() {
     pinCurrentPromptTemplate: false,
     promptTemplatesVersion: PROMPT_TEMPLATES_VERSION,
     enableWebSummary: true,
-    webSummaryBridgePort: "23123",
-    webSummaryPollIntervalMs: "350",
-    webSummaryRequestTimeoutMs: "15000",
-    webSummaryAutoStartBridge: true,
-    webSummaryChatGPTProjectUrl: "https://chatgpt.com",
-    webSummaryChatGPTMode: "advanced",
+    webSummaryChatGPTProjectUrl: "",
+    webSummaryResponseTimeoutMinutes: "15",
     webSummaryLogLevel: "error",
     webSummaryEnableContinueChatMenu: true,
   };
@@ -358,10 +331,16 @@ function initializeDefaultPrefs() {
   } else if (!activeId || !profiles.some((p) => p.id === activeId)) {
     setPref("activeProfileId" as any, profiles[0].id);
   }
-  if (profiles.length && !profiles.some((p) => p.providerType === "chatgpt_web")) {
+  if (
+    profiles.length &&
+    !profiles.some((p) => p.providerType === "chatgpt_web")
+  ) {
     const nextProfiles = [
       ...profiles,
-      createProfile("chatgpt_web", getString("prefs-provider-chatgpt-web" as any)),
+      createProfile(
+        "chatgpt_web",
+        getString("prefs-provider-chatgpt-web" as any),
+      ),
     ];
     setPref("profiles" as any, JSON.stringify(nextProfiles));
   }
@@ -776,6 +755,52 @@ function renderProfilesUI(win: Window) {
   }
 }
 
+function pairingStatusKey(status: WebSummaryBridgeStatus | undefined): string {
+  const pending = status?.pendingPairingRequest;
+  return JSON.stringify({
+    paired: !!status?.paired,
+    pending: pending
+      ? {
+          requestId: pending.requestId,
+          status: pending.status,
+          installId: pending.installId,
+          extensionVersion: pending.extensionVersion,
+          browser: pending.browser,
+          expiresAt: pending.expiresAt,
+          rejectionReason: pending.rejectionReason,
+        }
+      : null,
+  });
+}
+
+function schedulePairingStatusRefresh(
+  win: Window,
+  status: WebSummaryBridgeStatus | undefined,
+): void {
+  const oldTimer = (win as any).__ainotePairingRefreshTimer;
+  if (oldTimer) win.clearTimeout(oldTimer);
+  const container = win.document.getElementById("ainote-web-summary-settings");
+  const bridge = addon.data.webSummaryBridge;
+  if (!container || !bridge || (win as any).closed) return;
+  const statusKey = pairingStatusKey(status);
+  (win as any).__ainotePairingStatusKey = statusKey;
+  (win as any).__ainotePairingRefreshTimer = win.setTimeout(() => {
+    const currentContainer = win.document.getElementById(
+      "ainote-web-summary-settings",
+    );
+    const currentBridge = addon.data.webSummaryBridge;
+    if (!currentContainer || !currentBridge || (win as any).closed) return;
+    const nextStatus = currentBridge.getStatus();
+    if (
+      pairingStatusKey(nextStatus) !== (win as any).__ainotePairingStatusKey
+    ) {
+      renderWebSummarySettingsUI(win);
+      return;
+    }
+    schedulePairingStatusRefresh(win, nextStatus);
+  }, 1000);
+}
+
 function renderWebSummarySettingsUI(win: Window) {
   const doc = win.document;
   const container = doc.getElementById(
@@ -793,39 +818,162 @@ function renderWebSummarySettingsUI(win: Window) {
     background: "var(--ainote-surface)",
   });
 
-  addInputRow(
+  const bridge = addon.data.webSummaryBridge;
+  const status = bridge?.getStatus();
+  const statusBox = createHtmlElement(doc, "div");
+  statusBox.textContent = status?.paired
+    ? runtimeT({
+        "en-US": `Paired: ${status.executor?.browser || "browser"} ${status.executor?.extensionVersion || ""} (${status.executor?.installId || ""})`,
+        "zh-CN": `已配对：${status.executor?.browser || "浏览器"} ${status.executor?.extensionVersion || ""}（安装 ID：${status.executor?.installId || ""}）`,
+        "zh-TW": `已配對：${status.executor?.browser || "瀏覽器"} ${status.executor?.extensionVersion || ""}（安裝 ID：${status.executor?.installId || ""}）`,
+      })
+    : runtimeT({
+        "en-US": "No browser extension is paired.",
+        "zh-CN": "尚未配对浏览器扩展。",
+        "zh-TW": "尚未配對瀏覽器擴充套件。",
+      });
+  Object.assign(statusBox.style, {
+    marginBottom: "8px",
+    padding: "10px",
+    borderRadius: "8px",
+    background: "var(--ainote-surface-2)",
+    overflowWrap: "anywhere",
+  });
+  card.appendChild(statusBox);
+
+  const pairingActions = createHtmlElement(doc, "div");
+  Object.assign(pairingActions.style, {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "8px",
+    marginBottom: "8px",
+  });
+  const pairingHint = createHtmlElement(doc, "div");
+  pairingHint.textContent = runtimeT({
+    "en-US":
+      "Open the browser extension options and click Pair with Zotero. Pairing requests are valid for 2 minutes and must be approved here.",
+    "zh-CN":
+      "请打开浏览器扩展选项并点击“与 Zotero 配对”。配对请求有效期为 2 分钟，需在此处手动批准。",
+    "zh-TW":
+      "請開啟瀏覽器擴充套件選項並點擊「與 Zotero 配對」。配對請求有效期為 2 分鐘，需在此處手動批准。",
+  });
+  Object.assign(pairingHint.style, {
+    marginBottom: "8px",
+    color: "var(--ainote-muted)",
+  });
+  card.appendChild(pairingHint);
+  if (status?.paired) {
+    const revokeButton = createActionButton(
+      doc,
+      runtimeT({
+        "en-US": "Revoke pairing",
+        "zh-CN": "撤销配对",
+        "zh-TW": "撤銷配對",
+      }),
+      false,
+      true,
+    );
+    bindButtonAction(revokeButton, () => {
+      bridge?.revokePairing();
+      renderWebSummarySettingsUI(win);
+    });
+    pairingActions.appendChild(revokeButton);
+  }
+  const diagnosticsButton = createActionButton(
     doc,
-    card,
-    getString("prefs-web-summary-bridge-port"),
-    String(getPref("webSummaryBridgePort" as any) || "23123"),
-    (value) => setPref("webSummaryBridgePort" as any, value.trim() || "23123"),
-    "number",
-    {
-      helperText: getString("prefs-web-summary-bridge-port-hint"),
-    },
+    runtimeT({
+      "en-US": "Copy redacted diagnostics",
+      "zh-CN": "复制脱敏诊断",
+      "zh-TW": "複製脫敏診斷",
+    }),
+    false,
   );
+  bindButtonAction(diagnosticsButton, async () => {
+    const installId = status?.executor?.installId || "";
+    const diagnostics = JSON.stringify(
+      {
+        bridgeRunning: !!status?.running,
+        protocolVersion: status?.protocolVersion,
+        paired: !!status?.paired,
+        browser: status?.executor?.browser,
+        extensionVersion: status?.executor?.extensionVersion,
+        installIdPrefix: installId ? `${installId.slice(0, 8)}…` : undefined,
+        lastSeenAt: status?.executor?.lastSeenAt,
+        updatedAt: status?.updatedAt,
+      },
+      null,
+      2,
+    );
+    try {
+      await win.navigator.clipboard.writeText(diagnostics);
+    } catch {
+      statusBox.textContent = runtimeT({
+        "en-US": "Could not copy diagnostics. Clipboard access is unavailable.",
+        "zh-CN": "无法复制诊断信息：当前环境未提供剪贴板权限。",
+        "zh-TW": "無法複製診斷資訊：目前環境未提供剪貼簿權限。",
+      });
+    }
+  });
+  pairingActions.appendChild(diagnosticsButton);
+  card.appendChild(pairingActions);
+
+  const pending = status?.pendingPairingRequest;
+  if (pending?.status === "pending") {
+    const pendingBox = createHtmlElement(doc, "div");
+    pendingBox.textContent = runtimeT({
+      "en-US": `Confirm ${pending.browser} extension ${pending.extensionVersion}, install ID ${pending.installId}`,
+      "zh-CN": `待确认：${pending.browser} 扩展 ${pending.extensionVersion}，安装 ID ${pending.installId}`,
+      "zh-TW": `待確認：${pending.browser} 擴充套件 ${pending.extensionVersion}，安裝 ID ${pending.installId}`,
+    });
+    pendingBox.style.marginBottom = "8px";
+    card.appendChild(pendingBox);
+    const approve = createActionButton(
+      doc,
+      runtimeT({ "en-US": "Approve", "zh-CN": "批准", "zh-TW": "批准" }),
+      true,
+    );
+    bindButtonAction(approve, () => {
+      bridge?.approvePairingRequest(pending.requestId);
+      renderWebSummarySettingsUI(win);
+    });
+    card.appendChild(approve);
+    const reject = createActionButton(
+      doc,
+      runtimeT({ "en-US": "Reject", "zh-CN": "拒绝", "zh-TW": "拒絕" }),
+      false,
+      true,
+    );
+    reject.style.marginLeft = "8px";
+    bindButtonAction(reject, () => {
+      bridge?.rejectPairingRequest(pending.requestId);
+      renderWebSummarySettingsUI(win);
+    });
+    card.appendChild(reject);
+  }
+
   addInputRow(
     doc,
     card,
-    getString("prefs-web-summary-poll-interval"),
-    String(getPref("webSummaryPollIntervalMs" as any) || "350"),
-    (value) =>
-      setPref("webSummaryPollIntervalMs" as any, value.trim() || "350"),
-    "number",
-    {
-      helperText: getString("prefs-web-summary-poll-interval-hint"),
+    runtimeT({
+      "en-US": "Maximum response wait (minutes)",
+      "zh-CN": "回复最长等待（分钟）",
+      "zh-TW": "回覆最長等待（分鐘）",
+    }),
+    String(getPref("webSummaryResponseTimeoutMinutes" as any) || "15"),
+    (value) => {
+      const parsed = Number.parseInt(value, 10);
+      const normalized = Number.isFinite(parsed)
+        ? Math.max(5, Math.min(60, parsed))
+        : 15;
+      setPref("webSummaryResponseTimeoutMinutes" as any, String(normalized));
     },
-  );
-  addInputRow(
-    doc,
-    card,
-    getString("prefs-web-summary-timeout"),
-    String(getPref("webSummaryRequestTimeoutMs" as any) || "15000"),
-    (value) =>
-      setPref("webSummaryRequestTimeoutMs" as any, value.trim() || "15000"),
     "number",
     {
-      helperText: getString("prefs-web-summary-timeout-hint"),
+      helperText: runtimeT({
+        "en-US": "Allowed range: 5–60 minutes. Default: 15.",
+        "zh-CN": "允许范围 5–60 分钟，默认 15 分钟。",
+        "zh-TW": "允許範圍 5–60 分鐘，預設 15 分鐘。",
+      }),
     },
   );
   addSelectRow(
@@ -854,7 +1002,18 @@ function renderWebSummarySettingsUI(win: Window) {
       ),
   );
   appendHelperText(doc, card, getString("prefs-web-summary-log-level-hint"));
+  appendHelperText(
+    doc,
+    card,
+    runtimeT({
+      "en-US": "Bridge address is fixed at http://127.0.0.1:23123, protocol 2.",
+      "zh-CN": "桥接地址固定为 http://127.0.0.1:23123，协议版本 2。",
+      "zh-TW": "橋接位址固定為 http://127.0.0.1:23123，協定版本 2。",
+    }),
+  );
   container.appendChild(card);
+
+  schedulePairingStatusRefresh(win, status);
 }
 
 function renderPromptTemplatesUI(win: Window) {
@@ -1435,29 +1594,6 @@ function renderChatGPTWebProfileCard(
     lineHeight: "1.6",
   });
   card.appendChild(tip);
-
-  addSelectRow(
-    doc,
-    card,
-    getString("prefs-web-summary-chatgpt-mode"),
-    normalizeWebSummaryChatGPTMode(getPref("webSummaryChatGPTMode" as any)),
-    [
-      {
-        value: "advanced",
-        label: getWebSummaryModeOptionLabel("advanced"),
-      },
-      {
-        value: "balanced",
-        label: getWebSummaryModeOptionLabel("balanced"),
-      },
-      {
-        value: "fast",
-        label: getWebSummaryModeOptionLabel("fast"),
-      },
-    ],
-    (value) => setPref("webSummaryChatGPTMode" as any, normalizeWebSummaryChatGPTMode(value)),
-  );
-  appendHelperText(doc, card, getString("prefs-web-summary-chatgpt-mode-hint"));
 
   addInputRow(
     doc,

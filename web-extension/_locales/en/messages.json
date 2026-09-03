@@ -35,6 +35,12 @@
   "saveButton": {
     "message": "Save"
   },
+  "pairButton": {
+    "message": "Pair with Zotero"
+  },
+  "forgetButton": {
+    "message": "Forget local token"
+  },
   "testButton": {
     "message": "Test Connection"
   },
@@ -55,5 +61,17 @@
   },
   "statusTestAbnormal": {
     "message": "Connection is available, but the following issues were detected:"
+  },
+  "statusPairedLocal": {
+    "message": "A local pairing token is stored."
+  },
+  "statusNotPaired": {
+    "message": "Not paired. Click Pair with Zotero, then approve the request in Zotero."
+  },
+  "statusPairing": {
+    "message": "Waiting for approval in Zotero..."
+  },
+  "statusPairSuccess": {
+    "message": "Pairing completed."
   }
 }

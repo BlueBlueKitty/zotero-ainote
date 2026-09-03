@@ -1,15 +1,32 @@
 import {
-  BridgeHealthResponse,
   CancelTaskResponse,
   CreateTaskRequest,
   CreateTaskResponse,
   RemoveTaskResponse,
+  WebSummaryBridgeStatus,
   WebSummaryTask,
 } from "./webSummaryTypes";
 
 export class WebSummaryBridgeClient {
-  public static async healthCheck(): Promise<BridgeHealthResponse> {
-    return addon.data.webSummaryBridge!.getHealth();
+  public static getStatus(): WebSummaryBridgeStatus {
+    return addon.data.webSummaryBridge!.getStatus();
+  }
+
+  public static approvePairingRequest(
+    requestId: string,
+  ): WebSummaryBridgeStatus {
+    return addon.data.webSummaryBridge!.approvePairingRequest(requestId);
+  }
+
+  public static rejectPairingRequest(
+    requestId: string,
+    reason?: string,
+  ): WebSummaryBridgeStatus {
+    return addon.data.webSummaryBridge!.rejectPairingRequest(requestId, reason);
+  }
+
+  public static revokePairing(): WebSummaryBridgeStatus {
+    return addon.data.webSummaryBridge!.revokePairing();
   }
 
   public static async createTask(
@@ -20,6 +37,10 @@ export class WebSummaryBridgeClient {
 
   public static async getTask(taskId: string): Promise<WebSummaryTask> {
     return addon.data.webSummaryBridge!.getTask(taskId);
+  }
+
+  public static hasActiveTaskForItem(itemId: number): boolean {
+    return addon.data.webSummaryBridge!.hasActiveTaskForItem(itemId);
   }
 
   public static async cancelTask(
@@ -37,7 +58,9 @@ export class WebSummaryBridgeClient {
     taskId: string,
     listener: (task: WebSummaryTask) => void,
   ): () => void {
-    return addon.data.webSummaryBridge!.getTaskStore().subscribeTask(taskId, listener);
+    return addon.data
+      .webSummaryBridge!.getTaskStore()
+      .subscribeTask(taskId, listener);
   }
 
   public static subscribeAll(

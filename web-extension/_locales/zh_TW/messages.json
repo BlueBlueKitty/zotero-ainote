@@ -35,6 +35,12 @@
   "saveButton": {
     "message": "儲存"
   },
+  "pairButton": {
+    "message": "與 Zotero 配對"
+  },
+  "forgetButton": {
+    "message": "忘記本機權杖"
+  },
   "testButton": {
     "message": "測試連線"
   },
@@ -55,5 +61,17 @@
   },
   "statusTestAbnormal": {
     "message": "連線可用，但偵測到以下異常："
+  },
+  "statusPairedLocal": {
+    "message": "本機已儲存配對權杖。"
+  },
+  "statusNotPaired": {
+    "message": "尚未配對。請點擊「與 Zotero 配對」，然後在 Zotero 中批准請求。"
+  },
+  "statusPairing": {
+    "message": "正在等待 Zotero 中的確認……"
+  },
+  "statusPairSuccess": {
+    "message": "配對完成。"
   }
 }

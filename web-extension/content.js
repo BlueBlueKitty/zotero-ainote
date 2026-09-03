@@ -1,1780 +1,826 @@
 // @ts-check
 
-(function () {
-  if (window.__ainoteContentLoaded) {
-    return;
+(function installAiNoteContentAdapter() {
+  if (globalThis.__ainoteContentV2Loaded) return;
+  globalThis.__ainoteContentV2Loaded = true;
+
+  const contract = /** @type {any} */ (globalThis).AiNotePageContract;
+  const extractor = /** @type {any} */ (globalThis).AiNoteResultExtractor;
+  const RESPONSE_START_TIMEOUT_MS = 60_000;
+  const RESPONSE_STABILITY_TIMEOUT_MS = 3_000;
+  const FILE_INPUT_TIMEOUT_MS = 15_000;
+  const UPLOAD_COMPOSER_SETTLE_MS = 2_000;
+  const ATTACHMENT_OBSERVATION_TIMEOUT_MS = 180_000;
+  const SEND_READY_TIMEOUT_MS = 30_000;
+  let contentLogLevel = "error";
+
+  function normalizeContentLogLevel(value) {
+    const text = String(value || "")
+      .trim()
+      .toLowerCase();
+    return text === "off" || text === "debug" ? text : "error";
   }
-  window.__ainoteContentLoaded = true;
 
-  let webSummaryLogLevel = "error";
+  async function refreshContentLogLevel() {
+    try {
+      const settings = await chrome.storage.local.get({ logLevel: "error" });
+      contentLogLevel = normalizeContentLogLevel(settings.logLevel);
+    } catch {
+      contentLogLevel = "error";
+    }
+  }
 
-  function shouldLog(level) {
-    if (webSummaryLogLevel === "off") {
-      return false;
+  function formatContentLogDetails(details) {
+    if (details instanceof Error) {
+      return details.stack || details.message;
     }
-    if (level === "error") {
-      return webSummaryLogLevel === "error" || webSummaryLogLevel === "debug";
+    try {
+      const serialized = JSON.stringify(details);
+      return serialized === undefined ? String(details) : serialized;
+    } catch {
+      return String(details);
     }
-    return webSummaryLogLevel === "debug";
+  }
+
+  function emitContentLog(level, scope, message, details) {
+    if (
+      contentLogLevel === "off" ||
+      (level === "debug" && contentLogLevel !== "debug")
+    ) {
+      return;
+    }
+    const prefix = `[AiNote][WebSummary${level === "debug" ? "Debug" : "Error"}][${scope}] ${message}`;
+    const output =
+      details === undefined
+        ? prefix
+        : `${prefix} ${formatContentLogDetails(details)}`;
+    if (level === "debug") {
+      console.log(output);
+    } else {
+      console.error(output);
+    }
+    void chrome.runtime
+      .sendMessage({
+        type: "ainote-debug-log",
+        level,
+        scope,
+        message,
+        details,
+      })
+      .catch(() => {});
   }
 
   function debugLog(scope, message, details) {
-    if (!shouldLog("debug")) {
-      return;
-    }
-    const prefix = `[AiNote][WebSummaryDebug][${scope}] ${message}`;
-    if (details === undefined) {
-      console.log(prefix);
-      return;
-    }
-    console.log(prefix, details);
+    emitContentLog("debug", scope, message, details);
   }
+
+  function installUploadEventTrace() {
+    if (globalThis.__ainoteUploadEventTraceInstalled) return;
+    globalThis.__ainoteUploadEventTraceInstalled = true;
+    for (const eventName of ["input", "change"]) {
+      document.addEventListener(
+        eventName,
+        (event) => {
+          const element = event.target;
+          if (
+            !(element instanceof HTMLInputElement) ||
+            element.type !== "file"
+          ) {
+            return;
+          }
+          debugLog("UploadTrace", `page ${eventName} event observed`, {
+            id: element.id,
+            accept: element.accept,
+            files: element.files?.length || 0,
+            fileNames: Array.from(element.files || []).map((file) => file.name),
+            isTrusted: event.isTrusted,
+            defaultPrevented: event.defaultPrevented,
+          });
+        },
+        true,
+      );
+    }
+  }
+
+  installUploadEventTrace();
 
   function errorLog(scope, message, details) {
-    if (!shouldLog("error")) {
-      return;
-    }
-    const prefix = `[AiNote][WebSummaryError][${scope}] ${message}`;
-    if (details === undefined) {
-      console.error(prefix);
-      return;
-    }
-    console.error(prefix, details);
+    emitContentLog("error", scope, message, details);
   }
 
-  const SELECTORS = {
-    promptInput: [
-      "#prompt-textarea",
-      'div[contenteditable="true"].ProseMirror',
-      'div[contenteditable="true"]',
-      "textarea",
-    ],
-    fileInput: [
-      'input[type="file"]',
-      'input[accept*="pdf"]',
-      'input[accept*=".pdf"]',
-    ],
-    sendButton: [
-      'button[data-testid="send-button"]',
-      "#composer-submit-button:not([data-testid='stop-button'])",
-    ],
-    stopButton: [
-      '[data-testid="stop-button"]',
-    ],
-    modelPickerButton: [
-      'button[aria-haspopup="menu"]',
-      'button[aria-haspopup="listbox"]',
-    ],
-    attachmentButton: [
-      'button[aria-label$=".pdf"]',
-      '[data-testid*="attachment"]',
-      '[data-testid*="file-preview"]',
-      '[data-testid*="uploaded-file"]',
-    ],
-    removeAttachmentButton: [
-      'button[aria-label^="移除文件"]',
-      'button[aria-label^="Remove file"]',
-    ],
-    assistantMessage: [
-      '[data-message-author-role="assistant"]',
-    ],
-  };
-
-  const MODE_LABELS = {
-    fast: ["instant", "fast", "极速", "極速", "快速", "快", "auto"],
-    balanced: ["balanced", "smart", "均衡", "平衡", "智能"],
-    advanced: [
-      "thinking",
-      "think",
-      "reasoning",
-      "reason",
-      "advanced",
-      "高级",
-      "高級",
-      "思考",
-      "深度思考",
-      "推理",
-      "进阶",
-      "extended",
-      "deep",
-      "深度",
-    ],
-  };
-
-  const MODE_PICKER_KEYWORDS = [
-    ...MODE_LABELS.fast,
-    ...MODE_LABELS.balanced,
-    ...MODE_LABELS.advanced,
-    "intelligence",
-  ];
-
-  function normalizeChatGPTMode(mode) {
-    const normalized = normalizeText(String(mode || ""));
-    if (normalized === "instant" || normalized === "fast") {
-      return "fast";
-    }
-    if (normalized === "balanced" || normalized === "smart") {
-      return "balanced";
-    }
-    if (normalized === "thinking" || normalized === "advanced") {
-      return "advanced";
-    }
-    return "advanced";
+  function createDebugStateLogger(scope, message) {
+    let previous = "";
+    return (details) => {
+      const signature = formatContentLogDetails(details);
+      if (signature === previous) return;
+      previous = signature;
+      debugLog(scope, message, details);
+    };
   }
 
-  class TaskCanceledError extends Error {
-    constructor(message = "已停止当前条目的AI总结") {
+  function summarizeElement(element) {
+    if (!(element instanceof Element)) return null;
+    return {
+      tag: element.tagName.toLowerCase(),
+      id: element.getAttribute("id") || "",
+      testId: element.getAttribute("data-testid") || "",
+      role: element.getAttribute("role") || "",
+      ariaLabel: element.getAttribute("aria-label") || "",
+      title: element.getAttribute("title") || "",
+      hidden: element.hasAttribute("hidden"),
+      disabled: element instanceof HTMLButtonElement ? element.disabled : false,
+      className: String(element.className || ""),
+    };
+  }
+
+  function summarizeComposer(resolution) {
+    return {
+      reason: resolution?.reason || "",
+      ready: Boolean(resolution?.ready),
+      prompt: summarizeElement(resolution?.promptInput),
+      promptInputCount: resolution?.promptInputCount || 0,
+      fileInput: summarizeElement(resolution?.fileInput),
+      fileInputCount: resolution?.fileInputCount || 0,
+      fileInputs: resolution?.fileInputDetails || [],
+      sendButton: summarizeElement(resolution?.sendButton),
+      sendButtonCount: resolution?.sendButtonCount || 0,
+      sendEnabled: Boolean(resolution?.sendEnabled),
+    };
+  }
+
+  class PageAdapterError extends Error {
+    constructor(message, code, sendState = "not_sent", details = undefined) {
       super(message);
-      this.name = "TaskCanceledError";
+      this.name = "PageAdapterError";
+      this.code = code;
+      this.sendState = sendState;
+      this.details = details;
     }
   }
 
-  function queryFirst(selectors) {
-    for (const selector of selectors) {
-      const node = document.querySelector(selector);
-      if (node) return node;
-    }
-    return null;
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function queryFirstVisible(selectors) {
-    for (const selector of selectors) {
-      const node = Array.from(document.querySelectorAll(selector)).find(
-        (item) => item instanceof HTMLElement && isVisibleElement(item),
-      );
-      if (node) return node;
-    }
-    return null;
-  }
-
-  async function waitFor(
-    getter,
-    timeoutMs = 15000,
-    intervalMs = 250,
-    name = "page element",
-  ) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const value = await getter();
-      if (value) {
-        return value;
-      }
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    }
-    throw new Error(`Timeout while waiting for ${name}`);
-  }
-
-  function sendRuntimeMessage(message) {
+  function waitForMutation(check, timeoutMs, timeoutMessage, onPoll = null) {
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(message, (response) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        if (!response?.ok) {
-          reject(new Error(response?.error || "Background request failed"));
-          return;
-        }
-        resolve(response);
-      });
-    });
-  }
-
-  let lastPageReadyAtMs = 0;
-  function notifyPageReady(reason = "unknown") {
-    const now = Date.now();
-    if (now - lastPageReadyAtMs < 1500) {
-      return;
-    }
-    lastPageReadyAtMs = now;
-    void sendRuntimeMessage({
-      type: "ainote-page-ready",
-      payload: {
-        reason,
-        href: location.href,
-        title: document.title || "",
-        readyState: document.readyState,
-        visibilityState: document.visibilityState,
-      },
-    }).catch(() => {});
-  }
-
-  notifyPageReady("content-load");
-  window.addEventListener("focus", () => notifyPageReady("window-focus"));
-  window.addEventListener("pageshow", () => notifyPageReady("pageshow"));
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      notifyPageReady("visibility-visible");
-    }
-  });
-
-  async function reportTaskStatus(taskId, payload) {
-    await sendRuntimeMessage({
-      type: "ainote-task-status",
-      taskId,
-      payload,
-    });
-  }
-
-  const DEFAULT_BRIDGE_URL = "http://127.0.0.1:23123";
-
-  async function getBridgeUrl() {
-    const data = await chrome.storage.local.get({ bridgeUrl: DEFAULT_BRIDGE_URL });
-    const raw = String(data?.bridgeUrl || DEFAULT_BRIDGE_URL).trim();
-    return raw.endsWith("/") ? raw.slice(0, -1) : raw;
-  }
-
-  async function fetchTaskPdf(taskId) {
-    const bridgeUrl = await getBridgeUrl();
-    const url = `${bridgeUrl}/api/ext/tasks/${encodeURIComponent(taskId)}/pdf`;
-    let response;
-    try {
-      response = await fetch(url);
-    } catch (error) {
-      throw new Error(
-        `Bridge 请求失败: GET ${url} - ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    if (!response.ok) {
-      throw new Error(`Bridge 返回错误: GET ${url} - HTTP ${response.status}`);
-    }
-    return new Uint8Array(await response.arrayBuffer());
-  }
-
-  async function reportTaskResult(taskId, payload) {
-    await sendRuntimeMessage({
-      type: "ainote-task-result",
-      taskId,
-      payload,
-    });
-  }
-
-  async function reportTaskFailure(taskId, error) {
-    await sendRuntimeMessage({
-      type: "ainote-task-failure",
-      taskId,
-      payload: {
-        errorCode: "INTERNAL_ERROR",
-        errorMessage: error instanceof Error ? error.message : String(error),
-        ...getConversationMeta(),
-      },
-    });
-  }
-
-  async function reportTaskCanceled(taskId, message) {
-    await sendRuntimeMessage({
-      type: "ainote-task-canceled",
-      taskId,
-      payload: {
-        errorMessage: message || "已停止当前条目的AI总结",
-        ...getConversationMeta(),
-      },
-    });
-  }
-
-  async function fetchTaskState(taskId) {
-    const response = await sendRuntimeMessage({
-      type: "ainote-get-task",
-      taskId,
-    });
-    return response.task;
-  }
-
-  function getConversationMeta() {
-    const match = location.pathname.match(/\/c\/([^/]+)/);
-    return {
-      conversationId: match?.[1] || "",
-      conversationUrl: location.href,
-      conversationTitle: document.title || "",
-    };
-  }
-
-  function normalizeText(value) {
-    return String(value || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toLowerCase();
-  }
-
-  function isVisibleElement(node) {
-    if (!(node instanceof HTMLElement)) return false;
-    const rect = node.getBoundingClientRect();
-    const style = getComputedStyle(node);
-    return (
-      rect.width > 0 &&
-      rect.height > 0 &&
-      style.visibility !== "hidden" &&
-      style.display !== "none"
-    );
-  }
-
-  function dispatchPointerMouseClick(node) {
-    if (!(node instanceof HTMLElement)) {
-      return;
-    }
-    node.focus?.();
-    const eventInit = {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      view: window,
-    };
-    const pointerInit = {
-      ...eventInit,
-      pointerId: 1,
-      pointerType: "mouse",
-      isPrimary: true,
-      button: 0,
-      buttons: 1,
-    };
-    if (typeof PointerEvent === "function") {
-      node.dispatchEvent(new PointerEvent("pointerdown", pointerInit));
-    }
-    node.dispatchEvent(
-      new MouseEvent("mousedown", { ...eventInit, button: 0, buttons: 1 }),
-    );
-    if (typeof PointerEvent === "function") {
-      node.dispatchEvent(
-        new PointerEvent("pointerup", { ...pointerInit, buttons: 0 }),
-      );
-    }
-    node.dispatchEvent(
-      new MouseEvent("mouseup", { ...eventInit, button: 0, buttons: 0 }),
-    );
-    node.dispatchEvent(
-      new MouseEvent("click", { ...eventInit, button: 0, buttons: 0 }),
-    );
-  }
-
-  async function fetchJson(path, options = {}) {
-    const response = await fetch(path, options);
-    if (!response.ok) {
-      throw new Error(
-        `ChatGPT API ${path} failed with HTTP ${response.status}`,
-      );
-    }
-    return response.json();
-  }
-
-  function getOaiDeviceId() {
-    try {
-      const fromLocalStorage = localStorage.getItem("oai-device-id");
-      if (fromLocalStorage) return fromLocalStorage;
-    } catch {
-      // ignore
-    }
-    try {
-      const match = document.cookie.match(/oai-did=([^;]+)/);
-      if (match?.[1]) return decodeURIComponent(match[1]);
-    } catch {
-      // ignore
-    }
-    return "";
-  }
-
-  async function getAccessToken() {
-    const session = await fetchJson("/api/auth/session?unstable_client=true");
-    return session?.accessToken || "";
-  }
-
-  function resolveWorkspaceId() {
-    const match = document.cookie.match(/(?:^|; )_account=([^;]+)/);
-    return match?.[1] ? decodeURIComponent(match[1]) : "";
-  }
-
-  async function ensureTaskActive(taskId, taskRuntime = null) {
-    if (taskRuntime) {
-      await taskRuntime.throwIfCanceled();
-    }
-    const task = await fetchTaskState(taskId);
-    if (!task) {
-      throw new TaskCanceledError("网页总结任务不存在，已停止");
-    }
-    if (task.status === "canceled" || task.cancelRequestedAt) {
-      if (taskRuntime) {
-        await taskRuntime.handleCancellation(
-          task.cancelReason || task.errorMessage || "已停止当前条目的AI总结",
-        );
-      } else {
-        const stopped = await tryStopGeneration();
-        if (!stopped) {
-          await cleanupPendingComposerState();
-        }
-      }
-      throw new TaskCanceledError(
-        task.cancelReason || task.errorMessage || "已停止当前条目的AI总结",
-      );
-    }
-    return task;
-  }
-
-  function createTaskStatusReporter(taskId) {
-    let lastPayloadKey = "";
-    let inFlightPayloadKey = "";
-    let inFlightPromise = null;
-    return async function sendStatus(payload) {
-      const nextKey = JSON.stringify(payload);
-      if (nextKey === lastPayloadKey) {
-        return;
-      }
-      if (nextKey === inFlightPayloadKey && inFlightPromise) {
-        return inFlightPromise;
-      }
-      inFlightPayloadKey = nextKey;
-      inFlightPromise = reportTaskStatus(taskId, payload)
-        .then(() => {
-          lastPayloadKey = nextKey;
-        })
-        .finally(() => {
-          if (inFlightPayloadKey === nextKey) {
-            inFlightPayloadKey = "";
-            inFlightPromise = null;
-          }
-        });
-      return inFlightPromise;
-    };
-  }
-
-  function createTaskRuntime(taskId) {
-    let disposed = false;
-    let port = null;
-    let reconnectTimer = null;
-    let cancelReason = "";
-    let cancellationPromise = null;
-    const cancelListeners = new Set();
-
-    const notifyCancel = (reason) => {
-      cancelReason = reason || "已停止当前条目的AI总结";
-      for (const listener of Array.from(cancelListeners)) {
+      let settled = false;
+      let observer = null;
+      let pollTimer = null;
+      let pollInFlight = false;
+      const finish = (callback) => {
+        if (settled) return;
+        settled = true;
+        if (observer) observer.disconnect();
+        if (pollTimer) clearInterval(pollTimer);
+        clearTimeout(timer);
+        callback();
+      };
+      const inspect = () => {
         try {
-          listener(cancelReason);
-        } catch {
-          // ignore
+          const value = check();
+          if (value) finish(() => resolve(value));
+        } catch (error) {
+          finish(() => reject(error));
         }
-      }
-    };
-
-    const connectPort = () => {
-      if (disposed) return;
-      try {
-        port = chrome.runtime.connect({ name: "ainote-task" });
-      } catch {
-        scheduleReconnect();
-        return;
-      }
-      port.onMessage.addListener((message) => {
-        if (
-          message?.type === "task-cancel-requested" &&
-          message.taskId === taskId
-        ) {
-          notifyCancel(message.reason);
-        }
-      });
-      port.onDisconnect.addListener(() => {
-        port = null;
-        if (!disposed) {
-          scheduleReconnect();
-        }
-      });
-      port.postMessage({
-        type: "task-bind",
-        taskId,
-      });
-    };
-
-    const scheduleReconnect = () => {
-      if (disposed || reconnectTimer) {
-        return;
-      }
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        connectPort();
-      }, 1000);
-    };
-
-    connectPort();
-
-    return {
-      onCancel(listener) {
-        cancelListeners.add(listener);
-        if (cancelReason) {
-          listener(cancelReason);
-        }
-        return () => {
-          cancelListeners.delete(listener);
-        };
-      },
-      async handleCancellation(reason) {
-        if (cancellationPromise) {
-          return cancellationPromise;
-        }
-        notifyCancel(reason);
-        cancellationPromise = (async () => {
-          const stopped = await tryStopGeneration();
-          if (!stopped) {
-            await cleanupPendingComposerState();
-          }
-        })();
-        return cancellationPromise;
-      },
-      async throwIfCanceled() {
-        if (!cancelReason) {
-          return;
-        }
-        await this.handleCancellation(cancelReason);
-        throw new TaskCanceledError(cancelReason);
-      },
-      dispose() {
-        disposed = true;
-        if (reconnectTimer) {
-          clearTimeout(reconnectTimer);
-          reconnectTimer = null;
-        }
-        if (port) {
-          try {
-            port.disconnect();
-          } catch {
-            // ignore
-          }
-          port = null;
-        }
-        cancelListeners.clear();
-      },
-    };
-  }
-
-  async function tryStopGeneration() {
-    const stopButton = queryFirstVisible(SELECTORS.stopButton);
-    if (stopButton instanceof HTMLElement) {
-      stopButton.click();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      return true;
-    }
-    return false;
-  }
-
-  function clearPromptInputContent(input) {
-    if (
-      input instanceof HTMLTextAreaElement ||
-      input instanceof HTMLInputElement
-    ) {
-      input.focus();
-      input.value = "";
-      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-      return;
-    }
-    if (input instanceof HTMLElement) {
-      input.focus();
-      input.textContent = "";
-      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-  }
-
-  async function clearPromptInput() {
-    const input = queryFirst(SELECTORS.promptInput);
-    if (!input) return;
-    clearPromptInputContent(input);
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    clearPromptInputContent(input);
-  }
-
-  async function removeUploadedFiles() {
-    const clicked = new Set();
-    for (let round = 0; round < 6; round++) {
-      const removeButtons = Array.from(
-        document.querySelectorAll(SELECTORS.removeAttachmentButton.join(",")),
-      ).filter(
-        (node) =>
-          node instanceof HTMLElement &&
-          isVisibleElement(node) &&
-          !clicked.has(node),
-      );
-      if (!removeButtons.length) {
-        return;
-      }
-      for (const button of removeButtons) {
-        clicked.add(button);
-        dispatchPointerMouseClick(button);
-        await new Promise((resolve) => setTimeout(resolve, 80));
-      }
-      await new Promise((resolve) => setTimeout(resolve, 180));
-    }
-  }
-
-  async function cleanupPendingComposerState() {
-    await removeUploadedFiles();
-    await clearPromptInput();
-  }
-
-  async function waitForMutationObserved(options) {
-    const {
-      checkFn,
-      timeoutMs = 30000,
-      root = document.body,
-      observerConfig = { childList: true, subtree: true },
-      debounceMs = 0,
-    } = options;
-
-    return new Promise((resolve, reject) => {
-      let debounceTimer = null;
-      let observer = null;
-      let settled = false;
-
-      const cleanup = () => {
-        if (settled) return;
-        settled = true;
-        if (observer) observer.disconnect();
-        if (debounceTimer) clearTimeout(debounceTimer);
-        clearTimeout(mainTimeout);
       };
-
-      const mainTimeout = setTimeout(() => {
-        cleanup();
-        reject(new Error("Mutation wait timeout"));
+      const timer = setTimeout(() => {
+        finish(() => {
+          const timeoutValue =
+            typeof timeoutMessage === "function"
+              ? timeoutMessage()
+              : timeoutMessage;
+          const error =
+            timeoutValue instanceof Error
+              ? timeoutValue
+              : new Error(String(timeoutValue));
+          debugLog("Wait", "condition timed out", {
+            message: error.message,
+            timeoutMs,
+          });
+          reject(error);
+        });
       }, timeoutMs);
-
-      const onResult = (success) => {
-        if (settled) return;
-        cleanup();
-        if (success) resolve(success);
-      };
-
-      const doCheck = () => {
-        if (settled) return;
-        const result = checkFn();
-        if (result) {
-          onResult(result);
-        }
-      };
-
-      const onMutation = () => {
-        if (settled) return;
-        if (debounceMs > 0) {
-          if (debounceTimer) clearTimeout(debounceTimer);
-          debounceTimer = setTimeout(doCheck, debounceMs);
-        } else {
-          doCheck();
-        }
-      };
-
-      doCheck();
-
-      observer = new MutationObserver(onMutation);
-      try {
-        observer.observe(root, observerConfig);
-      } catch (e) {
-        cleanup();
-        reject(e);
-      }
-    });
-  }
-
-  async function applyChatGPTMode(mode) {
-    const normalizedMode = normalizeChatGPTMode(mode);
-    const desiredLabels = MODE_LABELS[normalizedMode];
-
-    await waitFor(
-      () => queryFirst(SELECTORS.promptInput),
-      15000, 250, "prompt input",
-    );
-
-    const findPickerButton = () => {
-      const buttons = Array.from(
-        document.querySelectorAll(SELECTORS.modelPickerButton.join(",")),
-      );
-      for (const btn of buttons) {
-        if (!(btn instanceof HTMLElement)) continue;
-        if (!isVisibleElement(btn)) continue;
-        const label = normalizeText(btn.textContent || "");
-        const hasModeLang = MODE_PICKER_KEYWORDS.some((keyword) => label.includes(keyword));
-        if (hasModeLang) return btn;
-      }
-      return null;
-    };
-
-    let pickerButton = await waitFor(
-      () => findPickerButton(),
-      10000, 200, "ChatGPT model picker button",
-    ).catch(() => null);
-
-    if (!pickerButton) {
-      return false;
-    }
-
-    const currentText = normalizeText(pickerButton.textContent || "");
-    const alreadyOn = desiredLabels.some((l) => currentText.includes(l));
-    if (alreadyOn) {
-      return true;
-    }
-
-    const findOpenMenu = () => {
-      return document.querySelector(
-        '[data-testid="composer-intelligence-picker-content"], [role="menu"][data-state="open"], [role="listbox"][data-state="open"]',
-      );
-    };
-
-    const findMenuOption = (menuRoot) => {
-      if (!menuRoot) return null;
-      if (normalizedMode === "advanced") {
-        const exactThinking = menuRoot.querySelector(
-          '[data-model-picker-thinking-effort-menu-item="true"], [data-testid="model-switcher-gpt-5-5-thinking"]',
-        );
-        if (exactThinking instanceof HTMLElement && isVisibleElement(exactThinking)) {
-          return exactThinking;
-        }
-      }
-      if (normalizedMode === "fast") {
-        const exactInstant = menuRoot.querySelector(
-          '[data-testid="model-switcher-gpt-5-5"]',
-        );
-        if (exactInstant instanceof HTMLElement && isVisibleElement(exactInstant)) {
-          return exactInstant;
-        }
-      }
-      const options = menuRoot.querySelectorAll(
-        '[role="menuitemradio"], [role="menuitem"], [role="option"], button',
-      );
-      for (const opt of options) {
-        if (!(opt instanceof HTMLElement)) continue;
-        if (!isVisibleElement(opt)) continue;
-        const label = normalizeText(opt.textContent || "");
-        const matchesDesired = desiredLabels.some((l) => label.includes(l));
-        if (matchesDesired) return opt;
-      }
-      return null;
-    };
-
-    dispatchPointerMouseClick(pickerButton);
-
-    const menuRoot = await waitForMutationObserved({
-      checkFn: () => {
-        const menu = findOpenMenu();
-        return menu instanceof HTMLElement && findMenuOption(menu)
-          ? menu
-          : null;
-      },
-      timeoutMs: 3000,
-    }).catch(() => null);
-
-    if (!(menuRoot instanceof HTMLElement)) {
-      dispatchPointerMouseClick(pickerButton);
-      const retryMenu = await waitForMutationObserved({
-        checkFn: () => {
-          const menu = findOpenMenu();
-          return menu instanceof HTMLElement && findMenuOption(menu)
-            ? menu
-            : null;
-        },
-        timeoutMs: 3000,
-      }).catch(() => null);
-
-      if (!(retryMenu instanceof HTMLElement)) {
-        document.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-        );
-        errorLog("Content", `未找到 ChatGPT ${normalizedMode} 模式选项`);
-        return false;
-      }
-
-      const retryOption = findMenuOption(retryMenu);
-      if (!(retryOption instanceof HTMLElement)) {
-        document.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-        );
-        return false;
-      }
-
-      dispatchPointerMouseClick(retryOption);
-    } else {
-      const option = findMenuOption(menuRoot);
-      if (!(option instanceof HTMLElement)) {
-        document.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-        );
-        return false;
-      }
-      dispatchPointerMouseClick(option);
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 600));
-
-    const refreshedButton = findPickerButton();
-    const refreshedText = normalizeText(
-      (refreshedButton instanceof HTMLElement
-        ? refreshedButton.textContent
-        : "") || "",
-    );
-    let switchedOk = desiredLabels.some((l) => refreshedText.includes(l));
-    const openMenu = document.querySelector(
-      '[role="menu"][data-state="open"], [role="listbox"][data-state="open"]',
-    );
-    if (!switchedOk && openMenu instanceof HTMLElement) {
-      const activeOption = openMenu.querySelector(
-        '[role="menuitemradio"][aria-checked="true"], [role="option"][aria-selected="true"]',
-      );
-      if (activeOption instanceof HTMLElement) {
-        const activeText = normalizeText(activeOption.textContent || "");
-        if (normalizedMode === "advanced") {
-          switchedOk =
-            activeOption.getAttribute("data-model-picker-thinking-effort-menu-item") === "true" ||
-            desiredLabels.some((label) => activeText.includes(label));
-        } else if (normalizedMode === "fast") {
-          switchedOk =
-            activeOption.getAttribute("data-testid") === "model-switcher-gpt-5-5" ||
-            desiredLabels.some((label) => activeText.includes(label));
-        } else {
-          switchedOk = desiredLabels.some((label) => activeText.includes(label));
-        }
-      }
-    }
-
-    if (!switchedOk) {
-      const finalButton = findPickerButton() || pickerButton;
-      if (finalButton instanceof HTMLElement) {
-        dispatchPointerMouseClick(finalButton);
-        document.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-        );
-      }
-      return false;
-    }
-
-    return true;
-  }
-
-  async function attachFile(file) {
-    const input = await waitFor(
-      () => queryFirst(SELECTORS.fileInput),
-      15000, 250, "file input",
-    );
-    if (!(input instanceof HTMLInputElement)) {
-      throw new Error("未找到文件上传控件");
-    }
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    input.files = dt.files;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-
-  function findAttachmentElement(fileName) {
-    const normalizedName = normalizeText(fileName);
-    const buttons = Array.from(
-      document.querySelectorAll(SELECTORS.attachmentButton.join(",")),
-    );
-    for (const btn of buttons) {
-      if (!(btn instanceof HTMLElement) || !isVisibleElement(btn)) continue;
-      const ariaLabel = normalizeText(btn.getAttribute("aria-label") || "");
-      const title = normalizeText(btn.getAttribute("title") || "");
-      if (
-        ariaLabel === normalizedName ||
-        title === normalizedName ||
-        ariaLabel.includes(normalizedName) ||
-        normalizedName.includes(ariaLabel) ||
-        title.includes(normalizedName)
-      ) {
-        return btn;
-      }
-    }
-    return null;
-  }
-
-  function isAttachmentProcessing(attachmentEl) {
-    if (!(attachmentEl instanceof HTMLElement)) {
-      return false;
-    }
-    if (
-      attachmentEl.classList.contains("cursor-wait") ||
-      attachmentEl.getAttribute("aria-busy") === "true"
-    ) {
-      return true;
-    }
-    const busyEl = attachmentEl.querySelector(
-      "[role='progressbar'], [aria-busy='true'], .animate-spin, [class*='animate-spin'], [data-testid*='progress']",
-    );
-    return busyEl instanceof HTMLElement && isVisibleElement(busyEl);
-  }
-
-  function isSendButtonEnabled() {
-    const sendButton = queryFirstVisible(SELECTORS.sendButton);
-    if (!(sendButton instanceof HTMLElement)) return false;
-    return (
-      !sendButton.hasAttribute("disabled") &&
-      sendButton.getAttribute("aria-disabled") !== "true"
-    );
-  }
-
-  async function waitForAttachmentReady(fileName, taskRuntime) {
-    return new Promise((resolve, reject) => {
-      let observer = null;
-      let mainTimeout = null;
-      let debounceTimer = null;
-      let settled = false;
-      const cancelOff = taskRuntime.onCancel((reason) => {
-        if (settled) return;
-        cleanup();
-        void taskRuntime
-          .handleCancellation(reason)
-          .finally(() => reject(new TaskCanceledError(reason)));
-      });
-
-      const cleanup = () => {
-        if (settled) return;
-        settled = true;
-        if (observer) observer.disconnect();
-        if (mainTimeout) clearTimeout(mainTimeout);
-        if (debounceTimer) clearTimeout(debounceTimer);
-        cancelOff();
-      };
-
-      const finish = () => { cleanup(); resolve(); };
-      const fail = (msg) => { cleanup(); reject(new Error(msg)); };
-
-      mainTimeout = setTimeout(
-        () => fail("等待 PDF 上传并解析完成超时"),
-        3 * 60 * 1000,
-      );
-
-      const checkAttachment = () => {
-        if (settled) return;
-        const attachmentEl = findAttachmentElement(fileName);
-        if (attachmentEl && !isAttachmentProcessing(attachmentEl)) {
-          if (debounceTimer) clearTimeout(debounceTimer);
-          debounceTimer = setTimeout(() => {
-            const latestAttachment = findAttachmentElement(fileName);
-            if (
-              latestAttachment &&
-              !isAttachmentProcessing(latestAttachment) &&
-              isSendButtonEnabled()
-            ) {
-              finish();
-            }
-          }, 1500);
-        }
-      };
-
-      checkAttachment();
-      observer = new MutationObserver(checkAttachment);
-      observer.observe(document.body, {
+      observer = new MutationObserver(inspect);
+      observer.observe(document.documentElement, {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ["class"],
+        characterData: true,
       });
+      if (onPoll) {
+        pollTimer = setInterval(() => {
+          if (settled || pollInFlight) return;
+          pollInFlight = true;
+          Promise.resolve()
+            .then(() => onPoll())
+            .then(() => inspect())
+            .catch((error) => finish(() => reject(error)))
+            .finally(() => {
+              pollInFlight = false;
+            });
+        }, 1_000);
+      }
+      inspect();
     });
   }
 
-  async function fillPrompt(prompt) {
-    const input = await waitFor(
-      () => queryFirst(SELECTORS.promptInput),
-      15000, 250, "prompt input",
-    );
+  function assertRuntimeReady() {
+    if (!contract || !extractor) {
+      throw new PageAdapterError(
+        "AiNote 页面适配器未完整加载",
+        "PAGE_CONTRACT_UNAVAILABLE",
+      );
+    }
+  }
+
+  function assertUsablePage() {
+    const page = contract.classifyPage(document, location.href);
+    if (page.kind === "login") {
+      throw new PageAdapterError("ChatGPT 尚未登录", "LOGIN_REQUIRED");
+    }
+    if (page.kind === "human_intervention") {
+      throw new PageAdapterError(
+        "ChatGPT 页面需要用户完成验证或账户选择",
+        "HUMAN_INTERVENTION_REQUIRED",
+      );
+    }
+    if (!["project", "conversation", "home"].includes(page.kind)) {
+      throw new PageAdapterError(
+        `无法识别 ChatGPT 页面（${page.reason}）`,
+        "PAGE_CONTRACT_UNAVAILABLE",
+      );
+    }
+    return page;
+  }
+
+  function base64ToFile(base64, fileName) {
+    const bytes = atob(base64);
+    const data = new Uint8Array(bytes.length);
+    for (let index = 0; index < bytes.length; index += 1) {
+      data[index] = bytes.charCodeAt(index);
+    }
+    return new File([data], fileName, { type: "application/pdf" });
+  }
+
+  function setPromptValue(input, prompt) {
+    input.focus();
     if (
       input instanceof HTMLTextAreaElement ||
       input instanceof HTMLInputElement
     ) {
-      input.focus();
-      input.value = prompt;
-      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      const proto =
+        input instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+      setter?.call(input, prompt);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
       return;
     }
-    if (input instanceof HTMLElement) {
-      input.focus();
-      input.textContent = "";
-      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      input.textContent = prompt;
-      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      return;
-    }
-    throw new Error("未找到 Prompt 输入区域");
-  }
-
-  async function clickSendButton() {
-    let sendButton = null;
-    try {
-      sendButton = await waitFor(
-        () =>
-          Array.from(
-            document.querySelectorAll(SELECTORS.sendButton.join(",")),
-          ).find(
-            (node) =>
-              node instanceof HTMLElement &&
-              isVisibleElement(node) &&
-              !node.hasAttribute("disabled") &&
-              node.getAttribute("aria-disabled") !== "true",
-          ) || null,
-        10000, 200, "send button",
-      );
-    } catch {
-      throw new Error("未找到发送按钮");
-    }
-
-    if (!(sendButton instanceof HTMLElement)) {
-      throw new Error("未找到发送按钮");
-    }
-    sendButton.click();
-    await new Promise((resolve) => setTimeout(resolve, 400));
-
-    if (!queryFirstVisible(SELECTORS.stopButton)) {
-      const promptInput = queryFirst(SELECTORS.promptInput);
-      if (promptInput instanceof HTMLElement) {
-        promptInput.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-        );
-        promptInput.dispatchEvent(
-          new KeyboardEvent("keyup", { key: "Enter", bubbles: true }),
-        );
-      }
-    }
-  }
-
-  async function waitForUserSend(taskRuntime, sendTaskStatus) {
-    await sendTaskStatus({ status: "awaiting_user_send" });
-
-    return new Promise((resolve, reject) => {
-      let observer = null;
-      let mainTimeout = null;
-      let settled = false;
-      const cancelOff = taskRuntime.onCancel((reason) => {
-        if (settled) return;
-        cleanup();
-        void taskRuntime
-          .handleCancellation(reason)
-          .finally(() => reject(new TaskCanceledError(reason)));
-      });
-
-      const cleanup = () => {
-        if (settled) return;
-        settled = true;
-        if (observer) observer.disconnect();
-        if (mainTimeout) clearTimeout(mainTimeout);
-        cancelOff();
-      };
-
-      const finish = () => { cleanup(); resolve(); };
-      const fail = (msg) => { cleanup(); reject(new Error(msg)); };
-
-      mainTimeout = setTimeout(
-        () => fail("等待用户发送超时"),
-        10 * 60 * 1000,
-      );
-
-      const check = () => {
-        if (settled) return;
-        if (queryFirstVisible(SELECTORS.stopButton)) {
-          finish();
-          return;
-        }
-        if (location.pathname.includes("/c/")) {
-          finish();
-          return;
-        }
-      };
-
-      check();
-      observer = new MutationObserver(check);
-      observer.observe(document.body, { childList: true, subtree: true });
-    });
-  }
-
-  async function waitForResponseComplete(taskRuntime, sendTaskStatus) {
-    await sendTaskStatus({
-      status: "running",
-      ...getConversationMeta(),
-    });
-
-    return new Promise((resolve, reject) => {
-      let observer = null;
-      let mainTimeout = null;
-      let debounceTimer = null;
-      let settled = false;
-      const startedAt = Date.now();
-      const cancelOff = taskRuntime.onCancel((reason) => {
-        if (settled) return;
-        cleanup();
-        void taskRuntime
-          .handleCancellation(reason)
-          .finally(() => reject(new TaskCanceledError(reason)));
-      });
-
-      const cleanup = () => {
-        if (settled) return;
-        settled = true;
-        if (observer) observer.disconnect();
-        if (mainTimeout) clearTimeout(mainTimeout);
-        if (debounceTimer) clearTimeout(debounceTimer);
-        cancelOff();
-      };
-
-      const finish = () => { cleanup(); resolve(); };
-      const fail = (msg) => { cleanup(); reject(new Error(msg)); };
-
-      mainTimeout = setTimeout(
-        () => fail("等待 ChatGPT 响应完成超时"),
-        10 * 60 * 1000,
-      );
-
-      let responseHasStarted = false;
-
-      const checkComplete = () => {
-        if (settled) return;
-        if (Date.now() - startedAt > 10 * 60 * 1000) {
-          fail("等待 ChatGPT 响应完成超时");
-          return;
-        }
-
-        const stopVisible = !!queryFirstVisible(SELECTORS.stopButton);
-        const hasConv = !!getConversationMeta().conversationId;
-
-        if (!responseHasStarted) {
-          if (stopVisible || hasConv) {
-            responseHasStarted = true;
-          }
-          return;
-        }
-
-        if (!stopVisible && hasConv) {
-          finish();
-        }
-      };
-
-      const scheduleCheck = () => {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(checkComplete, 3000);
-      };
-
-      checkComplete();
-      observer = new MutationObserver(scheduleCheck);
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      });
-    });
-  }
-
-  async function waitForConversationMetaReady(timeoutMs = 12000) {
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < timeoutMs) {
-      const meta = getConversationMeta();
-      if (meta.conversationId && /\/c\//.test(meta.conversationUrl || "")) {
-        return meta;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    return getConversationMeta();
-  }
-
-  function cleanMessageContent(text) {
-    if (!text) return "";
-    return String(text)
-      .replace(/\uE200cite(?:\uE202turn\d+(?:search|view)\d+)+\uE201/gi, "")
-      .replace(/cite(?:turn\d+(?:search|view)\d+)+/gi, "")
-      .trim();
-  }
-
-  function processContentReferences(text, contentReferences) {
-    if (!text || !Array.isArray(contentReferences) || contentReferences.length === 0) {
-      return { text, footnotes: [] };
-    }
-
-    const references = contentReferences.filter(
-      (ref) => ref && typeof ref.matched_text === "string" && ref.matched_text.length > 0,
+    input.textContent = prompt;
+    input.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: prompt,
+      }),
     );
-    if (references.length === 0) {
-      return { text, footnotes: [] };
-    }
-
-    const getReferenceInfo = (ref) => {
-      const item = Array.isArray(ref.items) ? ref.items[0] : null;
-      const url = item?.url || (Array.isArray(ref.safe_urls) ? ref.safe_urls[0] : "") || "";
-      const title = item?.title || "";
-      let label = item?.attribution || "";
-      if (!label && typeof ref.alt === "string") {
-        const match = ref.alt.match(/\[([^\]]+)\]\([^)]+\)/);
-        if (match) label = match[1];
-      }
-      if (!label) label = title || url;
-      return { url, title, label };
-    };
-
-    const footnotes = [];
-    const footnoteIndexByKey = new Map();
-    const citationRefs = references
-      .filter((ref) => ref.type === "grouped_webpages")
-      .sort((a, b) => {
-        const aIdx = Number.isFinite(a.start_idx) ? a.start_idx : Number.MAX_SAFE_INTEGER;
-        const bIdx = Number.isFinite(b.start_idx) ? b.start_idx : Number.MAX_SAFE_INTEGER;
-        return aIdx - bIdx;
-      });
-
-    citationRefs.forEach((ref) => {
-      const info = getReferenceInfo(ref);
-      if (!info.url) return;
-      const key = `${info.url}|${info.title}`;
-      if (footnoteIndexByKey.has(key)) return;
-      const index = footnotes.length + 1;
-      footnoteIndexByKey.set(key, index);
-      footnotes.push({ index, url: info.url, title: info.title, label: info.label });
-    });
-
-    const sortedByReplacement = references.slice().sort((a, b) => {
-      const aIdx = Number.isFinite(a.start_idx) ? a.start_idx : -1;
-      const bIdx = Number.isFinite(b.start_idx) ? b.start_idx : -1;
-      if (aIdx !== -1 || bIdx !== -1) {
-        return bIdx - aIdx;
-      }
-      return (b.matched_text?.length || 0) - (a.matched_text?.length || 0);
-    });
-
-    let output = text;
-    sortedByReplacement.forEach((ref) => {
-      if (!ref?.matched_text || ref.type === "sources_footnote") return;
-      let replacement = "";
-      if (ref.type === "grouped_webpages") {
-        const info = getReferenceInfo(ref);
-        if (info.url) {
-          const key = `${info.url}|${info.title}`;
-          const index = footnoteIndexByKey.get(key);
-          replacement = index ? `([${info.label}][${index}])` : ref.alt || "";
-        } else {
-          replacement = ref.alt || "";
-        }
-      } else {
-        replacement = ref.alt || "";
-      }
-
-      if (Number.isFinite(ref.start_idx) && Number.isFinite(ref.end_idx)) {
-        if (output.slice(ref.start_idx, ref.end_idx) === ref.matched_text) {
-          output = output.slice(0, ref.start_idx) + replacement + output.slice(ref.end_idx);
-          return;
-        }
-      }
-      output = output.split(ref.matched_text).join(replacement);
-    });
-
-    return { text: output, footnotes };
   }
 
-  function extractConversationMessages(convData) {
-    const mapping = convData?.mapping;
-    if (!mapping) return [];
-
-    const messages = [];
-    const mappingKeys = Object.keys(mapping);
-    const rootId = mapping["client-created-root"]
-      ? "client-created-root"
-      : mappingKeys.find((id) => !mapping[id]?.parent) || mappingKeys[0];
-    const visited = new Set();
-
-    const traverse = (nodeId) => {
-      if (!nodeId || visited.has(nodeId)) return;
-      visited.add(nodeId);
-      const node = mapping[nodeId];
-      if (!node) return;
-
-      const msg = node.message;
-      if (msg) {
-        const author = msg.author?.role;
-        const isHidden =
-          msg.metadata?.is_visually_hidden_from_conversation ||
-          msg.metadata?.is_contextual_answers_system_message ||
-          msg.metadata?.is_system_message;
-        if (author && author !== "system" && author !== "tool" && !isHidden) {
-          const content = msg.content;
-          if (
-            content?.content_type === "text" &&
-            Array.isArray(content.parts)
-          ) {
-            const rawText = content.parts
-              .map((part) =>
-                typeof part === "string" ? part : (part?.text ?? ""),
-              )
-              .filter(Boolean)
-              .join("");
-            const contentReferences = msg.metadata?.content_references || [];
-            let processedText = rawText;
-            let footnotes = [];
-            if (Array.isArray(contentReferences) && contentReferences.length > 0) {
-              const processed = processContentReferences(rawText, contentReferences);
-              processedText = processed.text;
-              footnotes = processed.footnotes;
-            }
-            const cleaned = cleanMessageContent(processedText);
-            if (cleaned) {
-              let finalContent = cleaned;
-              if (footnotes.length > 0) {
-                const footnoteText = footnotes
-                  .slice()
-                  .sort((a, b) => a.index - b.index)
-                  .map((note) => {
-                    if (!note.url) return "";
-                    const title = note.title ? ` "${note.title}"` : "";
-                    return `[${note.index}]: ${note.url}${title}`;
-                  })
-                  .filter(Boolean)
-                  .join("\n");
-                finalContent = cleaned + "\n\n" + footnoteText;
-              }
-              messages.push({
-                role: author,
-                content: finalContent,
-                create_time: msg.create_time || null,
-              });
-            }
-          }
-          if (content?.content_type === "code" && typeof content.text === "string") {
-            const cleaned = cleanMessageContent(content.text);
-            if (cleaned) {
-              messages.push({
-                role: author,
-                content: cleaned,
-                create_time: msg.create_time || null,
-              });
-            }
-          }
-          if (typeof content === "string") {
-            const cleaned = cleanMessageContent(content);
-            if (cleaned) {
-              messages.push({
-                role: author,
-                content: cleaned,
-                create_time: msg.create_time || null,
-              });
-            }
-          }
-        }
-      }
-
-      if (Array.isArray(node.children)) {
-        node.children.forEach((childId) => traverse(childId));
-      }
-    };
-
-    if (rootId) {
-      traverse(rootId);
-    }
-    return messages;
+  function promptIsPresent(input, prompt) {
+    const current =
+      input instanceof HTMLTextAreaElement || input instanceof HTMLInputElement
+        ? input.value
+        : input.textContent;
+    return String(current || "").trim() === prompt.trim();
   }
 
-  async function fetchConversationDetail(conversationId) {
-    if (!conversationId) {
-      return null;
-    }
-    const token = await getAccessToken();
-    const deviceId = getOaiDeviceId();
-    if (!token || !deviceId) {
-      return null;
-    }
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      "oai-device-id": deviceId,
-    };
-    const workspaceId = resolveWorkspaceId();
-    if (workspaceId) {
-      headers["ChatGPT-Account-Id"] = workspaceId;
-    }
-    return fetchJson(`/backend-api/conversation/${conversationId}`, {
-      headers,
+  async function reportStage(taskId, stage, conversationMeta = {}) {
+    debugLog("Task", "stage requested", { taskId, stage, conversationMeta });
+    const response = await chrome.runtime.sendMessage({
+      type: "ainote-task-stage",
+      taskId,
+      stage,
+      conversationMeta,
     });
+    if (!response?.ok) {
+      throw new PageAdapterError(
+        response?.error || "任务租约已失效",
+        response?.code || "LEASE_INVALID",
+        stage === "prompt_sent" ||
+        stage === "waiting_response" ||
+        stage === "extracting_result"
+          ? "sent"
+          : "not_sent",
+      );
+    }
   }
 
-  async function fetchLatestAssistantMarkdownFromConversation() {
-    const conversationId = getConversationMeta().conversationId;
-    if (!conversationId) {
-      return "";
-    }
+  async function assertTaskActive(taskId) {
     try {
-      const convData = await fetchConversationDetail(conversationId);
-      const messages = extractConversationMessages(convData);
-      const lastAssistant = [...messages]
-        .reverse()
-        .find((msg) => msg.role === "assistant");
-      const content = lastAssistant?.content || "";
-      return content;
-    } catch (error) {
-      errorLog("Content", "Failed to fetch conversation detail for markdown extraction", {
-        error: error instanceof Error ? error.message : String(error),
+      const response = await chrome.runtime.sendMessage({
+        type: "ainote-task-assert-active",
+        taskId,
       });
-      return "";
+      if (response?.ok) return;
+      throw new PageAdapterError(
+        response?.error || "任务已取消或执行上下文已失效",
+        response?.code || "TARGET_PAGE_UNAVAILABLE",
+        "not_sent",
+      );
+    } catch (error) {
+      if (error instanceof PageAdapterError) throw error;
+      throw new PageAdapterError(
+        error instanceof Error ? error.message : String(error),
+        "TARGET_PAGE_UNAVAILABLE",
+        "not_sent",
+      );
     }
   }
 
-  function extractKatexTexFromElement(el) {
-    const annotation = el.querySelector('annotation[encoding="application/x-tex"]');
-    const fromSiblingMathMl = el
-      .closest(".katex")
-      ?.querySelector('annotation[encoding="application/x-tex"]');
-    const tex = (annotation?.textContent || fromSiblingMathMl?.textContent || "").trim();
-    if (!tex) return null;
-    const isDisplay = el.classList.contains("katex-display") || !!el.closest(".katex-display");
-    return isDisplay ? `\n\n$$\n${tex}\n$$\n\n` : `$${tex}$`;
+  function formatComposerFileInputs(resolution) {
+    const details = Array.isArray(resolution?.fileInputDetails)
+      ? resolution.fileInputDetails
+      : [];
+    if (!details.length) return "none";
+    return details
+      .map((input) => {
+        const id = input.id || "-";
+        const accept = input.accept || "-";
+        const ariaHidden = input.ariaHidden || "-";
+        const hidden = input.hidden ? "1" : "0";
+        const capture = input.capture || "-";
+        return `${id}[accept=${accept};aria-hidden=${ariaHidden};hidden=${hidden};capture=${capture}]`;
+      })
+      .join(",");
   }
 
-  function domToMarkdown(container) {
-    const blockedSelector =
-      'sup[data-footnote-id], [type="button"].relative, button.relative, [aria-haspopup="dialog"]';
+  function currentConversationMeta() {
+    return extractor.getConversationMeta();
+  }
 
-    const walk = (node) => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        return node.textContent || "";
-      }
-      if (!(node instanceof HTMLElement)) {
-        return "";
-      }
-      if (node.matches(blockedSelector)) {
-        return "";
-      }
-      if (node.classList.contains("katex") || node.classList.contains("katex-html")) {
-        return extractKatexTexFromElement(node) || (node.textContent || "");
-      }
-
-      const tag = node.tagName.toLowerCase();
-      const inner = Array.from(node.childNodes).map(walk).join("");
-      switch (tag) {
-        case "h1": return `\n\n# ${inner.trim()}\n\n`;
-        case "h2": return `\n\n## ${inner.trim()}\n\n`;
-        case "h3": return `\n\n### ${inner.trim()}\n\n`;
-        case "h4": return `\n\n#### ${inner.trim()}\n\n`;
-        case "h5": return `\n\n##### ${inner.trim()}\n\n`;
-        case "h6": return `\n\n###### ${inner.trim()}\n\n`;
-        case "p": return `\n\n${inner.trim()}\n\n`;
-        case "br": return "\n";
-        case "strong":
-        case "b": return `**${inner}**`;
-        case "em":
-        case "i": return `*${inner}*`;
-        case "code":
-          if (node.parentElement?.tagName.toLowerCase() === "pre") return inner;
-          return `\`${inner}\``;
-        case "pre": return `\n\n\`\`\`\n${inner.trim()}\n\`\`\`\n\n`;
-        case "a": {
-          const href = node.getAttribute("href") || "";
-          const text = inner.trim() || href;
-          return href ? `[${text}](${href})` : text;
+  async function waitForComposer(activeCheck) {
+    let lastResolution = null;
+    const logResolution = createDebugStateLogger("Composer", "resolution");
+    return waitForMutation(
+      () => {
+        const resolution = contract.resolveComposer(document);
+        lastResolution = resolution;
+        logResolution(summarizeComposer(resolution));
+        if (resolution.reason.startsWith("ambiguous")) {
+          throw new PageAdapterError(
+            `ChatGPT 编辑器结构不唯一（${resolution.reason}; file-inputs=${formatComposerFileInputs(resolution)}）`,
+            "PAGE_CONTRACT_UNAVAILABLE",
+          );
         }
-        case "li": return `- ${inner.trim()}\n`;
-        case "ul":
-        case "ol": return `\n${inner}\n`;
-        case "blockquote":
-          return inner
-            .split("\n")
-            .map((line) => (line.trim() ? `> ${line}` : line))
-            .join("\n");
-        default:
-          return inner;
-      }
-    };
-
-    return walk(container)
-      .replace(/\uE200cite(?:\uE202turn\d+(?:search|view)\d+)+\uE201/gi, "")
-      .replace(/cite(?:turn\d+(?:search|view)\d+)+/gi, "")
-      .replace(/[ \t]+\n/g, "\n")
-      .replace(/\n{4,}/g, "\n\n\n")
-      .trim();
-  }
-
-  function extractLatestAssistantMarkdownFromDom() {
-    const messages = document.querySelectorAll(
-      SELECTORS.assistantMessage.join(","),
+        // ChatGPT can render the voice-input control here before it renders
+        // the send button. The send button is enabled only after the prompt
+        // and/or attachment has been accepted, so requiring it at this stage
+        // would deadlock the preparation flow.
+        if (resolution.promptInput) return resolution;
+        return null;
+      },
+      30_000,
+      () =>
+        `等待 ChatGPT 编辑器超时（reason=${lastResolution?.reason || "unknown"}; file-inputs=${formatComposerFileInputs(lastResolution || {})}; send-button=${lastResolution?.sendButton ? "found" : "missing"}）`,
+      activeCheck,
     );
-    if (!messages.length) return "";
-
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (!(msg instanceof HTMLElement)) continue;
-      if (!isVisibleElement(msg)) continue;
-
-      const markdownContainer = msg.querySelector(
-        ".markdown, .prose, [data-testid='conversation-turn-content']",
-      );
-      if (markdownContainer instanceof HTMLElement) {
-        const result = domToMarkdown(markdownContainer);
-        if (result) {
-          return result;
-        }
-      }
-    }
-    return "";
   }
 
-  async function runSummarizeTask(message) {
-    const task = message.task;
-    debugLog("Content", "runSummarizeTask start", {
-      taskId: task.taskId,
-      href: location.href,
-      readyState: document.readyState,
+  async function uploadPdf(
+    composer,
+    base64,
+    fileName,
+    activeCheck,
+    onUploadObserved,
+  ) {
+    const file = base64ToFile(base64, fileName);
+    debugLog("Upload", "file prepared", {
+      fileName,
+      size: file.size,
+      type: file.type,
     });
-    const taskRuntime = createTaskRuntime(task.taskId);
-    const sendTaskStatus = createTaskStatusReporter(task.taskId);
-    try {
-      await ensureTaskActive(task.taskId, taskRuntime);
-
-      await waitFor(
-        () => queryFirst(SELECTORS.promptInput),
-        30000, 250, "prompt input",
+    const fileInput = await waitForMutation(
+      () => contract.resolveUploadFilesInput(document),
+      FILE_INPUT_TIMEOUT_MS,
+      "等待 ChatGPT #upload-files 文件上传控件超时",
+      activeCheck,
+    );
+    debugLog("Upload", "file input selected", {
+      fileName,
+      input: summarizeElement(fileInput),
+      connected: fileInput.isConnected,
+      disabled: fileInput.disabled,
+      multiple: fileInput.multiple,
+      filesBefore: fileInput.files?.length || 0,
+    });
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    fileInput.files = transfer.files;
+    debugLog("Upload", "file input files assigned", {
+      fileName,
+      filesAfterAssignment: fileInput.files?.length || 0,
+      fileNamesAfterAssignment: Array.from(fileInput.files || []).map(
+        (item) => item.name,
+      ),
+      assignedSize: fileInput.files?.[0]?.size || 0,
+      assignedType: fileInput.files?.[0]?.type || "",
+    });
+    const inputEvent = new Event("input", { bubbles: true });
+    const inputDispatchResult = fileInput.dispatchEvent(inputEvent);
+    debugLog("Upload", "input event dispatched", {
+      fileName,
+      dispatchResult: inputDispatchResult,
+      filesAfterInput: fileInput.files?.length || 0,
+      isTrusted: inputEvent.isTrusted,
+    });
+    const changeEvent = new Event("change", { bubbles: true });
+    const changeDispatchResult = fileInput.dispatchEvent(changeEvent);
+    debugLog("Upload", "change event dispatched", {
+      fileName,
+      dispatchResult: changeDispatchResult,
+      filesAfterChange: fileInput.files?.length || 0,
+      isTrusted: changeEvent.isTrusted,
+    });
+    const logProbe = createDebugStateLogger("Upload", "attachment probe");
+    let uploadStagePromise = null;
+    const markUploadObserved = () => {
+      if (!uploadStagePromise && onUploadObserved) {
+        uploadStagePromise = Promise.resolve().then(() => onUploadObserved());
+      }
+    };
+    const deadline = Date.now() + ATTACHMENT_OBSERVATION_TIMEOUT_MS;
+    let attachmentEverFound = false;
+    let lastProbe = null;
+    const createUploadTimeoutError = () => {
+      const code = !attachmentEverFound
+        ? "UPLOAD_NOT_OBSERVED"
+        : lastProbe?.busy
+          ? "UPLOAD_STUCK"
+          : "ATTACHMENT_NOT_READY";
+      const message =
+        code === "UPLOAD_NOT_OBSERVED"
+          ? "文件事件已派发，但 ChatGPT 未出现 PDF 附件控件，无法确认上传已开始"
+          : code === "UPLOAD_STUCK"
+            ? "ChatGPT 已出现 PDF 附件控件，但上传状态在限定时间内未完成"
+            : "ChatGPT 已出现 PDF 附件控件，但附件在限定时间内仍不可发送";
+      return new PageAdapterError(message, code, "not_sent", {
+        stage: "uploading_pdf",
+        fileName,
+        attachmentEverFound,
+        lastProbe,
+        composer: summarizeComposer(contract.resolveComposer(document)),
+      });
+    };
+    while (true) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw createUploadTimeoutError();
+      }
+      const candidate = await waitForMutation(
+        () => {
+          const currentComposer = contract.resolveComposer(document);
+          const probe = contract.probeAttachment(
+            currentComposer.root || composer.root,
+            fileName,
+            currentComposer.sendButton,
+          );
+          logProbe({
+            fileName,
+            ...probe,
+            composer: summarizeComposer(currentComposer),
+          });
+          lastProbe = probe;
+          if (probe.found) {
+            attachmentEverFound = true;
+            markUploadObserved();
+          }
+          if (probe.error && !probe.busy) {
+            throw new PageAdapterError(
+              "ChatGPT 报告 PDF 上传失败",
+              "UPLOAD_FAILED",
+              "not_sent",
+              {
+                stage: "uploading_pdf",
+                fileName,
+                probe,
+                composer: summarizeComposer(currentComposer),
+              },
+            );
+          }
+          return probe.ready ? { currentComposer, probe } : null;
+        },
+        remaining,
+        createUploadTimeoutError,
+        activeCheck,
       );
 
-      await sendTaskStatus({
-        status: "creating_conversation",
-        ...getConversationMeta(),
-      });
-
-      try {
-        const modeSwitched = await applyChatGPTMode(
-          message.chatgptMode || task.chatgptMode || "advanced",
-        );
-        if (!modeSwitched) {
-          await sendTaskStatus({
-            status: "creating_conversation",
-            modeSwitchFailed: true,
-            modeSwitchError: "未找到或未成功切换 ChatGPT 模型入口",
-            ...getConversationMeta(),
-          });
-        } else {
-          await sendTaskStatus({
-            status: "creating_conversation",
-            modeSwitchOk: true,
-            debugMessage: "模型切换成功",
-            ...getConversationMeta(),
-          });
-        }
-      } catch (error) {
-        errorLog("Content", "ChatGPT mode switch failed, continue with current mode", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        await sendTaskStatus({
-          status: "creating_conversation",
-          modeSwitchFailed: true,
-          modeSwitchError:
-            error instanceof Error ? error.message : String(error),
-          ...getConversationMeta(),
-        });
-      }
-
-      await sendTaskStatus({
-        status: "downloading_pdf",
-        ...getConversationMeta(),
-      });
-      const pdfBuffer = await fetchTaskPdf(task.taskId);
-      await ensureTaskActive(task.taskId, taskRuntime);
-      const pdfFile = new File(
-        [pdfBuffer],
-        task.pdfFileName || "paper.pdf",
-        { type: "application/pdf" },
+      // ChatGPT may briefly render a complete-looking attachment while its
+      // upload state is still being reconciled. Require the ready state to
+      // remain valid across a second DOM read before sending the prompt.
+      await sleep(500);
+      const settledComposer = contract.resolveComposer(document);
+      const settledProbe = contract.probeAttachment(
+        settledComposer.root || candidate.currentComposer.root || composer.root,
+        fileName,
+        settledComposer.sendButton,
       );
-      await attachFile(pdfFile);
-      await waitForAttachmentReady(pdfFile.name, taskRuntime);
-      await sendTaskStatus({
-        status: "downloading_pdf",
-        pdfUploadReady: true,
-        debugMessage: `PDF 上传完成: ${pdfFile.name}`,
-        ...getConversationMeta(),
+      logProbe({
+        fileName,
+        ...settledProbe,
+        stabilityCheck: true,
+        composer: summarizeComposer(settledComposer),
       });
-      await ensureTaskActive(task.taskId, taskRuntime);
-      await fillPrompt(task.prompt || "");
-      await ensureTaskActive(task.taskId, taskRuntime);
-
-      if (message.autoSend) {
-        await clickSendButton();
-        const metaAfterSend = await waitForConversationMetaReady();
-        await sendTaskStatus({
-          status: "running",
-          debugMessage: "已点击发送，等待模型完成",
-          ...metaAfterSend,
-        });
-      } else {
-        await waitForUserSend(taskRuntime, sendTaskStatus);
-        const metaAfterSend = await waitForConversationMetaReady();
-        await sendTaskStatus({
-          status: "running",
-          debugMessage: "用户已发送，等待模型完成",
-          ...metaAfterSend,
-        });
+      lastProbe = settledProbe;
+      if (settledProbe.found) {
+        attachmentEverFound = true;
+        markUploadObserved();
       }
-
-      await waitForResponseComplete(taskRuntime, sendTaskStatus);
-
-      let resultMarkdown = "";
-      let resultFetchSource = "none";
-      const finalFetchStartedAt = Date.now();
-      while (!resultMarkdown && Date.now() - finalFetchStartedAt < 90 * 1000) {
-        const apiResult = await fetchLatestAssistantMarkdownFromConversation();
-        if (apiResult) {
-          resultMarkdown = apiResult;
-          resultFetchSource = "API";
-          break;
-        }
-        const domResult = extractLatestAssistantMarkdownFromDom();
-        if (domResult) {
-          resultMarkdown = domResult;
-          resultFetchSource = "DOM";
-          break;
-        }
-        await ensureTaskActive(task.taskId, taskRuntime);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-      if (!resultMarkdown) {
-        throw new Error(
-          "未能获取最后一条 assistant 回复（会话 API 与页面提取均失败）",
+      if (settledProbe.error && !settledProbe.busy) {
+        throw new PageAdapterError(
+          "ChatGPT 报告 PDF 上传失败",
+          "UPLOAD_FAILED",
+          "not_sent",
+          {
+            stage: "uploading_pdf",
+            fileName,
+            probe: settledProbe,
+            composer: summarizeComposer(settledComposer),
+          },
         );
       }
-      return {
-        resultMarkdown,
-        resultSource: resultFetchSource === "API" ? "api" : resultFetchSource === "DOM" ? "dom" : undefined,
-        resultDebugInfo: `fetch-source=${resultFetchSource}; length=${resultMarkdown.length}`,
-        ...getConversationMeta(),
-      };
-    } catch (error) {
-      if (error instanceof TaskCanceledError) {
-        await reportTaskCanceled(task.taskId, error.message);
+      if (settledProbe.ready) {
+        await uploadStagePromise;
+        return settledProbe;
       }
-      throw error;
-    } finally {
-      taskRuntime.dispose();
     }
   }
 
-  async function openConversationTask(message) {
-    debugLog("Content", "openConversationTask start", {
-      taskId: message.task.taskId,
-      href: location.href,
-      readyState: document.readyState,
-      existingConversationUrl: message.task.existingConversationUrl || "",
+  async function waitForUploadComposer(activeCheck) {
+    let stablePrompt = null;
+    let stableRoot = null;
+    let stableFileInput = null;
+    let stableSince = null;
+    const logReadiness = createDebugStateLogger("Composer", "upload readiness");
+    return waitForMutation(
+      () => {
+        const resolution = contract.resolveComposer(document);
+        const fileInput = contract.resolveUploadFilesInput(document);
+        const structurallyReady = Boolean(
+          document.readyState === "complete" &&
+            resolution.promptInput?.isConnected &&
+            fileInput?.isConnected &&
+            !fileInput.disabled &&
+            resolution.root?.contains(fileInput),
+        );
+        if (!structurallyReady) {
+          stablePrompt = null;
+          stableRoot = null;
+          stableFileInput = null;
+          stableSince = null;
+          logReadiness({
+            ready: false,
+            documentReadyState: document.readyState,
+            promptConnected: Boolean(resolution.promptInput?.isConnected),
+            fileInputConnected: Boolean(fileInput?.isConnected),
+            fileInputDisabled: Boolean(fileInput?.disabled),
+            composer: summarizeComposer(resolution),
+          });
+          return null;
+        }
+
+        const sameElements =
+          stablePrompt === resolution.promptInput &&
+          stableRoot === resolution.root &&
+          stableFileInput === fileInput;
+        if (!sameElements) {
+          stablePrompt = resolution.promptInput;
+          stableRoot = resolution.root;
+          stableFileInput = fileInput;
+          stableSince = Date.now();
+          logReadiness({
+            ready: false,
+            reason: "stabilizing",
+            documentReadyState: document.readyState,
+            composer: summarizeComposer(resolution),
+          });
+          return null;
+        }
+
+        const stableForMs = Date.now() - (stableSince || Date.now());
+        const ready = stableForMs >= UPLOAD_COMPOSER_SETTLE_MS;
+        logReadiness({
+          ready,
+          reason: ready ? "stable" : "stabilizing",
+          documentReadyState: document.readyState,
+          stableForMs,
+          composer: summarizeComposer(resolution),
+        });
+        return ready ? resolution : null;
+      },
+      FILE_INPUT_TIMEOUT_MS,
+      "等待 ChatGPT 编辑器和文件上传控件初始化超时",
+      activeCheck,
+    );
+  }
+
+  async function waitForPromptAccepted(input, prompt, baseline, activeCheck) {
+    return waitForMutation(
+      () => {
+        const response = contract.probeResponse(document, baseline);
+        return response.started || !promptIsPresent(input, prompt)
+          ? response
+          : null;
+      },
+      15_000,
+      "点击发送后未检测到新消息",
+      activeCheck,
+    );
+  }
+
+  async function waitForResponse(baseline, totalTimeoutMs, activeCheck) {
+    await waitForMutation(
+      () => {
+        const probe = contract.probeResponse(document, baseline);
+        return probe.started ? probe : null;
+      },
+      Math.min(RESPONSE_START_TIMEOUT_MS, totalTimeoutMs),
+      "ChatGPT 在 60 秒内未开始回复",
+      activeCheck,
+    );
+    let stabilityState = {
+      generationObserved: false,
+      signature: "",
+      stableSince: null,
+    };
+    await waitForMutation(
+      () => {
+        const probe = contract.probeResponse(document, baseline);
+        const completion = contract.evaluateResponseCompletion(
+          probe,
+          Date.now(),
+          stabilityState,
+          RESPONSE_STABILITY_TIMEOUT_MS,
+        );
+        stabilityState = completion.state;
+        debugLog("Response", "completion stability check", {
+          ...probe,
+          generationObserved: stabilityState.generationObserved,
+          stableSince: stabilityState.stableSince,
+          completed: completion.completed,
+        });
+        return completion.completed ? probe : null;
+      },
+      totalTimeoutMs,
+      "等待 ChatGPT 完成回复超时",
+      activeCheck,
+    );
+  }
+
+  async function runSummary(task, pdfBase64) {
+    await refreshContentLogLevel();
+    debugLog("Task", "summary started", {
+      pdfFileName: task?.pdfFileName || "",
+      promptLength: String(task?.prompt || "").length,
+      pageUrl: location.href,
     });
-    const taskRuntime = createTaskRuntime(message.task.taskId);
-    const sendTaskStatus = createTaskStatusReporter(message.task.taskId);
-    const targetUrl = message.task.existingConversationUrl;
-    try {
-      if (!targetUrl) {
-        throw new Error("缺少已保存的会话 URL");
-      }
-      await ensureTaskActive(message.task.taskId, taskRuntime);
-      await waitFor(
-        () => queryFirst(SELECTORS.promptInput),
-        30000, 250, "prompt input",
-      );
-      const meta = getConversationMeta();
-      if (
-        message.task.existingConversationId &&
-        meta.conversationId &&
-        meta.conversationId !== message.task.existingConversationId &&
-        !message.recoverRunningTask
-      ) {
-        throw new Error("当前页面不是预期的历史会话");
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      await sendTaskStatus({
-        status: "running",
-        ...meta,
-      });
-
-      let resultMarkdown = "";
-      let resultFetchSource = "none";
-
-      try {
-        const apiResult = await fetchLatestAssistantMarkdownFromConversation();
-        if (apiResult) {
-          resultMarkdown = apiResult;
-          resultFetchSource = "API";
-        }
-      } catch (_e) {}
-
-      if (!resultMarkdown) {
-        const domResult = extractLatestAssistantMarkdownFromDom();
-        if (domResult) {
-          resultMarkdown = domResult;
-          resultFetchSource = "DOM";
-        }
-      }
-
-      const debugHeader =
-        `[Debug 信息]\n` +
-        `获取方式: ${resultFetchSource}\n` +
-        `会话 ID: ${meta.conversationId || "无"}\n` +
-        `内容长度: ${resultMarkdown.length} 字符\n` +
-        `获取时间: ${new Date().toISOString()}\n\n`;
-
-      return {
-        resultMarkdown: resultMarkdown ? debugHeader + resultMarkdown : "",
-        resultSource: resultFetchSource === "API" ? "api" : resultFetchSource === "DOM" ? "dom" : undefined,
-        resultDebugInfo: `debug-refetch; fetch-source=${resultFetchSource}; length=${resultMarkdown.length}`,
-        ...meta,
-      };
-    } finally {
-      taskRuntime.dispose();
+    assertRuntimeReady();
+    assertUsablePage();
+    if (!task?.prompt || !task?.pdfFileName || !pdfBase64) {
+      throw new PageAdapterError("总结任务缺少提示词或 PDF", "INVALID_REQUEST");
     }
+    const activeCheck = () => assertTaskActive(task.taskId);
+    await reportStage(task.taskId, "preparing_page", currentConversationMeta());
+    const composer = await waitForComposer(activeCheck);
+    debugLog("Composer", "initial composer ready", summarizeComposer(composer));
+    const uploadReadyComposer = await waitForUploadComposer(activeCheck);
+    await uploadPdf(
+      uploadReadyComposer,
+      pdfBase64,
+      task.pdfFileName,
+      activeCheck,
+      () =>
+        reportStage(task.taskId, "uploading_pdf", currentConversationMeta()),
+    );
+    await reportStage(task.taskId, "ready_to_send", currentConversationMeta());
+
+    const promptComposer = await waitForMutation(
+      () => {
+        const resolution = contract.resolveComposer(document);
+        if (resolution.reason.startsWith("ambiguous")) {
+          throw new PageAdapterError(
+            `ChatGPT 编辑器结构不唯一（${resolution.reason}; file-inputs=${formatComposerFileInputs(resolution)}）`,
+            "PAGE_CONTRACT_UNAVAILABLE",
+          );
+        }
+        return resolution.promptInput ? resolution : null;
+      },
+      30_000,
+      "等待 ChatGPT 编辑器准备输入提示词超时",
+      activeCheck,
+    );
+    debugLog("Composer", "prompt composer ready", {
+      composer: summarizeComposer(promptComposer),
+    });
+    const baseline = contract.captureAssistantBaseline(document);
+    setPromptValue(promptComposer.promptInput, task.prompt);
+    debugLog("Composer", "prompt value set", {
+      promptLength: task.prompt.length,
+      promptPresent: promptIsPresent(promptComposer.promptInput, task.prompt),
+    });
+    if (!promptIsPresent(promptComposer.promptInput, task.prompt)) {
+      throw new PageAdapterError(
+        "无法可靠写入 ChatGPT 提示词",
+        "PAGE_CONTRACT_UNAVAILABLE",
+      );
+    }
+
+    const refreshed = await waitForMutation(
+      () => {
+        const resolution = contract.resolveComposer(document);
+        debugLog(
+          "Composer",
+          "send readiness check",
+          summarizeComposer(resolution),
+        );
+        if (resolution.reason.startsWith("ambiguous")) {
+          throw new PageAdapterError(
+            `ChatGPT 编辑器结构不唯一（${resolution.reason}; file-inputs=${formatComposerFileInputs(resolution)}）`,
+            "PAGE_CONTRACT_UNAVAILABLE",
+          );
+        }
+        return resolution.ready && resolution.sendEnabled ? resolution : null;
+      },
+      SEND_READY_TIMEOUT_MS,
+      "等待 ChatGPT 发送按钮可用超时",
+      activeCheck,
+    );
+    debugLog("Composer", "send button ready", summarizeComposer(refreshed));
+    refreshed.sendButton.click();
+    await waitForPromptAccepted(
+      refreshed.promptInput,
+      task.prompt,
+      baseline,
+      activeCheck,
+    );
+    await reportStage(task.taskId, "prompt_sent", currentConversationMeta());
+    await reportStage(
+      task.taskId,
+      "waiting_response",
+      currentConversationMeta(),
+    );
+    const totalTimeoutMs = Math.max(
+      5 * 60_000,
+      Number(task.responseTimeoutMs) || 15 * 60_000,
+    );
+    await waitForResponse(baseline, totalTimeoutMs, activeCheck);
+    await reportStage(
+      task.taskId,
+      "extracting_result",
+      currentConversationMeta(),
+    );
+    const result = await extractor.extractFinalResult(90_000, async () => {
+      const active = await chrome.runtime.sendMessage({
+        type: "ainote-task-assert-active",
+        taskId: task.taskId,
+      });
+      if (!active?.ok) {
+        throw new PageAdapterError(
+          active?.error || "任务租约已失效",
+          active?.code || "LEASE_INVALID",
+          "sent",
+        );
+      }
+      await sleep(0);
+    });
+    return { ok: true, result };
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (typeof message?.logLevel === "string") {
-      webSummaryLogLevel = message.logLevel;
-    }
     if (message?.type === "ainote-ping") {
-      debugLog("Content", "ainote-ping", {
-        href: location.href,
-        readyState: document.readyState || "",
-        title: document.title || "",
-      });
-      sendResponse({
-        ok: true,
-        ready: true,
-        href: location.href,
-        title: document.title || "",
-        readyState: document.readyState || "",
-      });
+      sendResponse({ ok: true, version: 2 });
       return false;
     }
-    if (message?.type === "ainote-run-summarize-task") {
-      debugLog("Content", "ainote-run-summarize-task", {
-        taskId: message.task?.taskId,
-        href: location.href,
-      });
-      sendResponse({ ok: true, started: true });
-      void runSummarizeTask(message)
-        .then((result) => reportTaskResult(message.task.taskId, result))
-        .catch((error) => {
-          if (error instanceof TaskCanceledError) {
-            return;
-          }
-          reportTaskFailure(message.task.taskId, error).catch((reportErr) => {
-            errorLog("Content", "Failed to report task failure", {
-              error:
-                reportErr instanceof Error ? reportErr.message : String(reportErr),
-            });
-          });
+    if (message?.type !== "ainote-run-summary") return false;
+    void runSummary(message.task, message.pdfBase64)
+      .then(sendResponse)
+      .catch((error) => {
+        const response = {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          code: error?.code || "PAGE_OPERATION_FAILED",
+          sendState: error?.sendState || "unknown",
+          debugInfo: error?.details,
+          conversationMeta: currentConversationMeta(),
+        };
+        errorLog("Task", "summary failed", {
+          ...response,
+          stack: error instanceof Error ? error.stack : undefined,
         });
-      return false;
-    }
-    if (message?.type === "ainote-open-conversation-task") {
-      debugLog("Content", "ainote-open-conversation-task", {
-        taskId: message.task?.taskId,
-        href: location.href,
+        sendResponse(response);
       });
-      sendResponse({ ok: true, started: true });
-      void openConversationTask(message)
-        .then((result) =>
-          reportTaskResult(message.task.taskId, {
-            resultMarkdown: result.resultMarkdown || "",
-            resultSource: result.resultSource,
-            resultDebugInfo: result.resultDebugInfo,
-            ...result,
-          }),
-        )
-        .catch((error) => {
-          reportTaskFailure(message.task.taskId, error).catch((reportErr) => {
-            errorLog("Content", "Failed to report task failure", {
-              error:
-                reportErr instanceof Error ? reportErr.message : String(reportErr),
-            });
-          });
-        });
-      return false;
-    }
-    return false;
+    return true;
   });
 })();

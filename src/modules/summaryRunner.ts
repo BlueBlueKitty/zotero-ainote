@@ -8,10 +8,6 @@ import {
   WebSummaryWorkflow,
 } from "./webSummaryWorkflow";
 import { SummaryTask } from "./summaryTaskTypes";
-import {
-  normalizeWebSummaryChatGPTMode,
-  WebSummaryChatGPTMode,
-} from "./webSummaryTypes";
 
 export interface SummaryRunnerHooks {
   onStage: (stage: string, progress?: number) => void;
@@ -33,10 +29,14 @@ export interface SummaryRunnerResult {
 function getActiveProfile() {
   const profiles = parseProfiles(getPref("profiles" as any));
   const activeId = String(getPref("activeProfileId" as any) || "").trim();
-  return profiles.find((profile) => profile.id === activeId) || profiles[0] || null;
+  return (
+    profiles.find((profile) => profile.id === activeId) || profiles[0] || null
+  );
 }
 
-function getApiModelLabel(profile: ReturnType<typeof getActiveProfile>): string {
+function getApiModelLabel(
+  profile: ReturnType<typeof getActiveProfile>,
+): string {
   const model = String(profile?.model || "").trim();
   const profileName = String(profile?.name || "").trim();
   if (profileName && model) {
@@ -118,14 +118,12 @@ export class SummaryRunner {
       preferredPdfAttachment,
       templateId: task.templateId,
     };
-    const mode: WebSummaryChatGPTMode = normalizeWebSummaryChatGPTMode(
-      getPref("webSummaryChatGPTMode" as any),
-    );
     const result = await WebSummaryWorkflow.summarizeSingleTarget(target, {
       onStage: hooks.onStage,
       onContent: (content) => hooks.onChunk(content),
       onCancelReady: hooks.onCancelReady,
-      onTaskCreated: (bridgeTask) => hooks.onWebTaskCreated?.(bridgeTask.taskId),
+      onTaskCreated: (bridgeTask) =>
+        hooks.onWebTaskCreated?.(bridgeTask.taskId),
     });
 
     return {
@@ -134,7 +132,7 @@ export class SummaryRunner {
       webConversationId: result.webConversationId,
       webConversationUrl: result.webConversationUrl,
       webConversationTitle: result.webConversationTitle,
-      model: getWebSummaryModelLabel(mode),
+      model: getWebSummaryModelLabel(),
       promptVersion: String(getPref("promptTemplatesVersion" as any) || ""),
     };
   }

@@ -1,6 +1,7 @@
 import { SummaryTask } from "./summaryTaskTypes";
 import { NoteSchemaExtractor } from "./noteSchemaExtractor";
 import { WebSummaryRelationStore } from "./webSummaryRelations";
+import { ensureZoteroNoteSchema, hasZoteroNoteSchema } from "./noteHtmlBuilder";
 
 const EXTRA_BLOCK_START = "[AiNoteSummaryHistory]";
 const EXTRA_BLOCK_END = "[/AiNoteSummaryHistory]";
@@ -31,6 +32,19 @@ export interface HistoryRecord {
   features: string[];
 }
 
+export interface AiNoteHistoryNoteRef {
+  noteId?: number;
+  noteKey?: string;
+}
+
+export interface NoteSchemaMigrationReport {
+  scanned: number;
+  migrated: number;
+  alreadyValid: number;
+  missing: number;
+  failed: number;
+}
+
 function trimText(value: unknown): string {
   return String(value || "").trim();
 }
@@ -45,8 +59,8 @@ function hashText(value: string): string {
   return `h${(hash >>> 0).toString(16)}`;
 }
 
-function readEntriesFromExtra(item: Zotero.Item): AiNoteHistoryEntry[] {
-  const extra = String(item.getField("extra") || "");
+function parseEntriesFromExtra(extraValue: unknown): AiNoteHistoryEntry[] {
+  const extra = String(extraValue || "");
   const start = extra.indexOf(EXTRA_BLOCK_START);
   const end = extra.indexOf(EXTRA_BLOCK_END);
   if (start < 0 || end < 0 || end <= start) return [];
@@ -65,7 +79,9 @@ function readEntriesFromExtra(item: Zotero.Item): AiNoteHistoryEntry[] {
         model: trimText(entry.model) || undefined,
         templateId: trimText(entry.templateId) || undefined,
         titleSnapshot: trimText(entry.titleSnapshot) || "Untitled",
-        noteId: Number.isFinite(Number(entry.noteId)) ? Number(entry.noteId) : undefined,
+        noteId: Number.isFinite(Number(entry.noteId))
+          ? Number(entry.noteId)
+          : undefined,
         noteKey: trimText(entry.noteKey) || undefined,
         webConversationId: trimText(entry.webConversationId) || undefined,
         webConversationUrl: trimText(entry.webConversationUrl) || undefined,
@@ -78,7 +94,24 @@ function readEntriesFromExtra(item: Zotero.Item): AiNoteHistoryEntry[] {
   }
 }
 
-function writeEntriesToExtra(item: Zotero.Item, entries: AiNoteHistoryEntry[]): void {
+function readEntriesFromExtra(item: Zotero.Item): AiNoteHistoryEntry[] {
+  return parseEntriesFromExtra(item.getField("extra"));
+}
+
+export function extractAiNoteHistoryNoteRefs(
+  extraValue: unknown,
+): AiNoteHistoryNoteRef[] {
+  return parseEntriesFromExtra(extraValue)
+    .filter(
+      (entry) => entry.source === "ainote" && (entry.noteId || entry.noteKey),
+    )
+    .map((entry) => ({ noteId: entry.noteId, noteKey: entry.noteKey }));
+}
+
+function writeEntriesToExtra(
+  item: Zotero.Item,
+  entries: AiNoteHistoryEntry[],
+): void {
   const extra = String(item.getField("extra") || "");
   const block = `${EXTRA_BLOCK_START}\n${JSON.stringify(entries)}\n${EXTRA_BLOCK_END}`;
   const start = extra.indexOf(EXTRA_BLOCK_START);
@@ -126,9 +159,14 @@ export class HistorySyncStore {
       contentHash,
       source: "ainote",
     };
-    const previous = readEntriesFromExtra(item).filter((x) => x.taskId !== task.id);
+    const previous = readEntriesFromExtra(item).filter(
+      (x) => x.taskId !== task.id,
+    );
     const next = [entry, ...previous]
-      .sort((a, b) => b.completedAt - a.completedAt || a.taskId.localeCompare(b.taskId))
+      .sort(
+        (a, b) =>
+          b.completedAt - a.completedAt || a.taskId.localeCompare(b.taskId),
+      )
       .slice(0, PER_ITEM_HISTORY_LIMIT);
     writeEntriesToExtra(item, next);
     await item.saveTx();
@@ -168,10 +206,80 @@ export class HistorySyncStore {
     return imported;
   }
 
+  public static async migrateExistingNoteSchemas(): Promise<NoteSchemaMigrationReport> {
+    const report: NoteSchemaMigrationReport = {
+      scanned: 0,
+      migrated: 0,
+      alreadyValid: 0,
+      missing: 0,
+      failed: 0,
+    };
+    const search = new Zotero.Search();
+    search.addCondition("itemType", "isNot", "note");
+    const parentIds = await search.search();
+    const seen = new Set<string>();
+
+    for (const parentId of parentIds) {
+      const parent = await Zotero.Items.getAsync(parentId);
+      if (!parent) continue;
+      const refs = extractAiNoteHistoryNoteRefs(parent.getField("extra"));
+      for (const ref of refs) {
+        const identity = `${parent.libraryID}:${ref.noteId || ""}:${ref.noteKey || ""}`;
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        report.scanned += 1;
+        try {
+          let note: Zotero.Item | undefined;
+          if (ref.noteId) note = Zotero.Items.get(ref.noteId);
+          if (!note && ref.noteKey) {
+            const byKey = await Zotero.Items.getByLibraryAndKeyAsync(
+              parent.libraryID,
+              ref.noteKey,
+            );
+            if (byKey) note = byKey as Zotero.Item;
+          }
+          if (
+            !note ||
+            !note.isNote?.() ||
+            note.libraryID !== parent.libraryID ||
+            note.parentID !== parent.id
+          ) {
+            report.missing += 1;
+            continue;
+          }
+          const html = String(note.getNote?.() || note.note || "");
+          if (hasZoteroNoteSchema(html)) {
+            report.alreadyValid += 1;
+            continue;
+          }
+          note.setNote(ensureZoteroNoteSchema(html));
+          await note.saveTx();
+          report.migrated += 1;
+        } catch (error) {
+          report.failed += 1;
+          ztoolkit.log(
+            "[AiNote][HistorySyncStore] note schema migration failed",
+            {
+              parentId: parent.id,
+              noteId: ref.noteId,
+              noteKey: ref.noteKey,
+              error,
+            },
+          );
+        }
+      }
+    }
+    return report;
+  }
+
   public static async queryAll(): Promise<HistoryRecord[]> {
     const search = new Zotero.Search();
     try {
-      search.addCondition("libraryID", "is", String(Zotero.Libraries.userLibraryID));
+      search.addCondition(
+        "libraryID",
+        "is",
+        String(Zotero.Libraries.userLibraryID),
+      );
     } catch {
       // fallback for environments without libraryID condition support
     }
@@ -196,10 +304,16 @@ export class HistorySyncStore {
     return records;
   }
 
-  public static async resolveContent(taskId: string): Promise<HistoryRecord | null> {
+  public static async resolveContent(
+    taskId: string,
+  ): Promise<HistoryRecord | null> {
     const search = new Zotero.Search();
     try {
-      search.addCondition("libraryID", "is", String(Zotero.Libraries.userLibraryID));
+      search.addCondition(
+        "libraryID",
+        "is",
+        String(Zotero.Libraries.userLibraryID),
+      );
     } catch {
       // fallback
     }
@@ -227,14 +341,18 @@ export class HistorySyncStore {
         note = Zotero.Items.get(entry.noteId);
       }
       if (!note && entry.noteKey) {
-        const found = await Zotero.Items.getByLibraryAndKeyAsync(item.libraryID, entry.noteKey);
+        const found = await Zotero.Items.getByLibraryAndKeyAsync(
+          item.libraryID,
+          entry.noteKey,
+        );
         if (found && found.isNote?.()) {
           note = found as Zotero.Item;
         }
       }
       if (!note) {
         const guessedKind =
-          entry.kind || (String(entry.model || "").includes("ChatGPT Web") ? "web" : "api");
+          entry.kind ||
+          (String(entry.model || "").includes("ChatGPT Web") ? "web" : "api");
         const fallbackLink =
           guessedKind === "web"
             ? WebSummaryRelationStore.getLatestLink(item, "chatgpt")
@@ -245,7 +363,9 @@ export class HistorySyncStore {
             kind: guessedKind,
             itemID: item.id,
             itemKey: item.key,
-            title: entry.titleSnapshot || String(item.getField("title") || "Untitled"),
+            title:
+              entry.titleSnapshot ||
+              String(item.getField("title") || "Untitled"),
             status: "completed",
             content: "",
             createdAt: entry.completedAt,
@@ -273,7 +393,8 @@ export class HistorySyncStore {
       const noteHTML = String(note.getNote?.() || note.note || "");
       const extracted = NoteSchemaExtractor.extract(noteHTML);
       const guessedKind =
-        entry.kind || (String(entry.model || "").includes("ChatGPT Web") ? "web" : "api");
+        entry.kind ||
+        (String(entry.model || "").includes("ChatGPT Web") ? "web" : "api");
       const fallbackLink =
         guessedKind === "web"
           ? WebSummaryRelationStore.getLatestLink(item, "chatgpt")
@@ -283,7 +404,8 @@ export class HistorySyncStore {
         kind: guessedKind,
         itemID: item.id,
         itemKey: item.key,
-        title: entry.titleSnapshot || String(item.getField("title") || "Untitled"),
+        title:
+          entry.titleSnapshot || String(item.getField("title") || "Untitled"),
         status: "completed",
         content: extracted.displayContent,
         createdAt: entry.completedAt,
@@ -292,9 +414,12 @@ export class HistorySyncStore {
         model: entry.model,
         templateId: entry.templateId,
         noteID: note.id,
-        webConversationId: entry.webConversationId || fallbackLink?.conversationId,
-        webConversationUrl: entry.webConversationUrl || fallbackLink?.conversationUrl,
-        webConversationTitle: entry.webConversationTitle || fallbackLink?.conversationTitle,
+        webConversationId:
+          entry.webConversationId || fallbackLink?.conversationId,
+        webConversationUrl:
+          entry.webConversationUrl || fallbackLink?.conversationUrl,
+        webConversationTitle:
+          entry.webConversationTitle || fallbackLink?.conversationTitle,
       };
       const record: HistoryRecord = {
         task,
@@ -316,7 +441,11 @@ export class HistorySyncStore {
   public static async clearAll(): Promise<number> {
     const search = new Zotero.Search();
     try {
-      search.addCondition("libraryID", "is", String(Zotero.Libraries.userLibraryID));
+      search.addCondition(
+        "libraryID",
+        "is",
+        String(Zotero.Libraries.userLibraryID),
+      );
     } catch {
       // fallback for environments without libraryID condition support
     }
@@ -344,7 +473,11 @@ export class HistorySyncStore {
   public static async removeTask(taskId: string): Promise<boolean> {
     const search = new Zotero.Search();
     try {
-      search.addCondition("libraryID", "is", String(Zotero.Libraries.userLibraryID));
+      search.addCondition(
+        "libraryID",
+        "is",
+        String(Zotero.Libraries.userLibraryID),
+      );
     } catch {
       // fallback
     }

@@ -26,6 +26,8 @@
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
     "release": "node scripts/prepare-scaffold-run.mjs release && node scripts/run-scaffold.mjs release",
+    "extension:check": "npm --prefix web-extension run check",
+    "extension:package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-web-extension.ps1",
     "test": "node scripts/prepare-scaffold-run.mjs test && node scripts/run-scaffold.mjs test",
     "update-deps": "npm update --save"
   },

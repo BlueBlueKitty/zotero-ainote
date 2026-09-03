@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extName__",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "default_locale": "en",
   "description": "__MSG_extDescription__",
   "icons": {
@@ -9,12 +9,7 @@
     "48": "icons/favicon.png",
     "128": "icons/favicon.png"
   },
-  "permissions": [
-    "alarms",
-    "storage",
-    "tabs",
-    "scripting"
-  ],
+  "permissions": ["alarms", "storage", "tabs", "scripting", "windows"],
   "host_permissions": [
     "http://127.0.0.1/*",
     "https://chatgpt.com/*",
@@ -35,15 +30,9 @@
   "options_page": "options.html",
   "content_scripts": [
     {
-      "matches": [
-        "https://chatgpt.com/*",
-        "https://chat.openai.com/*"
-      ],
-      "js": [
-        "content.js"
-      ],
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["page-contract.js", "result-extractor.js", "content.js"],
       "run_at": "document_idle"
     }
   ]
 }
-

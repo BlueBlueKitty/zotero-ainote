@@ -1,24 +1,16 @@
 // @ts-check
 
-export const WEB_SUMMARY_PROTOCOL_VERSION = "1.0.0";
-export const WEB_SUMMARY_TASK_CONTRACT_VERSION = "1.0.0";
-
+export const BRIDGE_ORIGIN = "http://127.0.0.1:23123";
+export const WEB_SUMMARY_PROTOCOL_VERSION = 2;
 export const WEB_SUMMARY_CAPABILITIES = [
-  "task.summarize",
-  "task.open_conversation",
-  "task.status.report",
-  "task.result.report",
-  "task.cancel",
-  "task.fetch_pdf",
-  "task.mode_switch",
-  "task.streaming_result_fetch",
+  "summarize",
+  "openConversation",
+  "lease",
 ];
+export const TASK_CLAIM_WAIT_MS = 20_000;
+export const CLAIM_WAKE_ALARM_NAME = "ainote-claim-wake-v2";
+export const CLAIM_WAKE_ALARM_PERIOD_MINUTES = 0.5;
 
-export const WEB_SUMMARY_REQUIRED_PERMISSIONS = [
-  "storage",
-  "tabs",
-  "scripting",
-  "host:http://127.0.0.1/*",
-  "host:https://chatgpt.com/*",
-];
-
+export function detectBrowser() {
+  return navigator.userAgent.includes("Edg/") ? "edge" : "chrome";
+}

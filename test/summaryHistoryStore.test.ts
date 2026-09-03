@@ -1,8 +1,13 @@
 import { expect } from "chai";
 import { SummaryHistoryStore } from "../src/modules/summaryHistoryStore";
 import { SummaryTask } from "../src/modules/summaryTaskTypes";
+import { extractAiNoteHistoryNoteRefs } from "../src/modules/historySyncStore";
 
-function makeTask(id: string, status: SummaryTask["status"], updatedAt: number): SummaryTask {
+function makeTask(
+  id: string,
+  status: SummaryTask["status"],
+  updatedAt: number,
+): SummaryTask {
   return {
     id,
     kind: "api",
@@ -16,6 +21,30 @@ function makeTask(id: string, status: SummaryTask["status"], updatedAt: number):
 }
 
 describe("summaryHistoryStore", function () {
+  it("should extract only strong AiNote note references from item extra", function () {
+    const extra = [
+      "User text",
+      "[AiNoteSummaryHistory]",
+      JSON.stringify([
+        {
+          taskId: "task-1",
+          version: 1,
+          completedAt: 1,
+          titleSnapshot: "A",
+          noteId: 42,
+          noteKey: "NOTEKEY1",
+          contentHash: "h1",
+          source: "ainote",
+        },
+      ]),
+      "[/AiNoteSummaryHistory]",
+    ].join("\n");
+    expect(extractAiNoteHistoryNoteRefs(extra)).to.deep.equal([
+      { noteId: 42, noteKey: "NOTEKEY1" },
+    ]);
+    expect(extractAiNoteHistoryNoteRefs("AI-Generated")).to.deep.equal([]);
+  });
+
   it("should keep all tasks when limit=0", function () {
     const tasks = [
       makeTask("1", "completed", 1),

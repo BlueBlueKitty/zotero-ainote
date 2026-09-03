@@ -1,11 +1,19 @@
 // @ts-check
 
-import { healthCheck } from "./bridge-client.js";
-import { DEFAULT_SETTINGS, getSettings, saveSettings } from "./storage.js";
+import {
+  DEFAULT_SETTINGS,
+  clearPairingToken,
+  getPairingToken,
+  getSettings,
+  saveSettings,
+} from "./storage.js";
 
-const bridgeUrl = /** @type {HTMLInputElement} */ (document.getElementById("bridgeUrl"));
-const logLevel = /** @type {HTMLSelectElement} */ (document.getElementById("logLevel"));
-const status = /** @type {HTMLDivElement} */ (document.getElementById("status"));
+const logLevel = /** @type {HTMLSelectElement} */ (
+  document.getElementById("logLevel")
+);
+const status = /** @type {HTMLDivElement} */ (
+  document.getElementById("status")
+);
 
 function t(key) {
   return chrome.i18n.getMessage(key) || key;
@@ -16,69 +24,67 @@ function applyI18n() {
     const key = element.getAttribute("data-i18n");
     if (!key) continue;
     const text = t(key);
-    if (text) {
-      element.textContent = text;
-    }
+    if (text) element.textContent = text;
   }
-  const title = t("optionsTitle");
-  if (title) {
-    document.title = title;
-  }
+  document.title = t("optionsTitle");
 }
 
 async function load() {
   const settings = await getSettings();
-  bridgeUrl.value = settings.bridgeUrl;
   logLevel.value = settings.logLevel || DEFAULT_SETTINGS.logLevel;
+  const token = await getPairingToken();
+  status.textContent = token ? t("statusPairedLocal") : t("statusNotPaired");
 }
 
 async function onSave() {
+  const value = String(logLevel.value || "error");
   await saveSettings({
-    bridgeUrl: bridgeUrl.value.trim() || DEFAULT_SETTINGS.bridgeUrl,
-    logLevel: logLevel.value === "off" || logLevel.value === "debug" ? logLevel.value : "error",
+    logLevel: value === "off" || value === "debug" ? value : "error",
   });
   status.textContent = t("statusSaved");
+}
+
+async function onPair() {
+  status.textContent = t("statusPairing");
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: "ainote-start-pairing",
+    });
+    if (!result?.ok) throw new Error(result?.error || "Pairing failed");
+    status.textContent = t("statusPairSuccess");
+  } catch (error) {
+    status.textContent = `${t("statusTestFailed")}: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+  }
 }
 
 async function onTest() {
   status.textContent = t("statusTesting");
   try {
-    const heartbeatResult = await chrome.runtime.sendMessage({
-      type: "ainote-force-heartbeat",
+    const result = await chrome.runtime.sendMessage({
+      type: "ainote-test-session",
     });
-    if (!heartbeatResult?.ok) {
-      throw new Error(heartbeatResult?.error || "扩展后台未能完成握手");
-    }
-    const result = await healthCheck();
-    const checks = Array.isArray(result?.checks) ? result.checks : [];
-    const relevantChecks = checks.filter((entry) => entry?.scope === "basic");
-    const abnormalChecks = relevantChecks.filter(
-      (entry) => entry?.status === "warn" || entry?.status === "fail",
-    );
-
-    if (!checks.length || abnormalChecks.length === 0) {
-      status.textContent = t("statusTestSuccessBasic");
-      return;
-    }
-
-    const detailLines = abnormalChecks.map((entry) => {
-      const level = entry.status === "fail" ? "FAIL" : "WARN";
-      const title = entry.title || entry.key || "unknown";
-      const message = entry.message || "";
-      return `- [${level}] ${title}: ${message}`;
-    });
-    status.textContent = `${t("statusTestAbnormal")}\n${detailLines.join("\n")}`;
+    if (!result?.ok) throw new Error(result?.error || "Session failed");
+    status.textContent = `${t("statusTestSuccessBasic")}\n${result.summary || ""}`;
   } catch (error) {
-    status.textContent = `${t("statusTestFailed")}: ${error instanceof Error ? error.message : String(error)}`;
+    status.textContent = `${t("statusTestFailed")}: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
   }
 }
 
-document.getElementById("save")?.addEventListener("click", () => {
-  void onSave();
-});
-document.getElementById("test")?.addEventListener("click", () => {
-  void onTest();
-});
+async function onForget() {
+  await clearPairingToken();
+  status.textContent = t("statusNotPaired");
+}
+
+document.getElementById("save")?.addEventListener("click", () => void onSave());
+document.getElementById("pair")?.addEventListener("click", () => void onPair());
+document.getElementById("test")?.addEventListener("click", () => void onTest());
+document
+  .getElementById("forget")
+  ?.addEventListener("click", () => void onForget());
 
 applyI18n();
 void load();

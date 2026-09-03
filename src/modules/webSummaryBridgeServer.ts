@@ -1,32 +1,42 @@
-import { getPref } from "../utils/prefs";
+import { clearPref, getPref, setPref } from "../utils/prefs";
 import {
-  BridgeHealthResponse,
   BridgeEnvelope,
   BridgeErrorCode,
+  BridgeSessionResponse,
   CancelTaskResponse,
   ClaimNextTaskResponse,
-  CompatibilityReport,
+  CreatePairingRequest,
+  CreatePairingResponse,
   CreateTaskRequest,
   CreateTaskResponse,
-  ExtensionHandshakePayload,
+  PairingStatusResponse,
+  RemoveTaskResponse,
+  ReportTaskEventRequest,
   ReportTaskFailureRequest,
   ReportTaskResultRequest,
-  ReportTaskStatusRequest,
-  RemoveTaskResponse,
+  WebSummaryBridgeStatus,
+  WebSummaryPairedExecutor,
   WebSummaryTask,
+  WEB_SUMMARY_BRIDGE_PORT,
+  WEB_SUMMARY_LONG_POLL_MS,
+  WEB_SUMMARY_PROTOCOL_VERSION,
+  WEB_SUMMARY_REQUIRED_CAPABILITIES,
 } from "./webSummaryTypes";
-import { WebSummaryCompatibilityManager } from "./webSummaryCompat";
+import {
+  PairingPersistence,
+  StoredPairing,
+  WebSummaryPairingStore,
+} from "./webSummaryPairingStore";
 import { debugWebSummaryLog, errorWebSummaryLog } from "./webSummaryDebug";
 import { WebSummaryTaskStore } from "./webSummaryTaskStore";
 
-const LOG_PREFIX = "[AiNote][WebSummaryBridge]";
 const JSON_MIME = "application/json; charset=utf-8";
-const MAX_REQUEST_SIZE = 10 * 1024 * 1024;
+const MAX_REQUEST_SIZE = 1024 * 1024;
 const READ_WAIT_LIMIT = 60;
+const PAIRING_PREF = "webSummaryPairingV2";
+const API_PREFIX = "/bridge/v2";
 const OPEN_BLOCKING =
   ((Components.interfaces.nsITransport as any)?.OPEN_BLOCKING as number) || 1;
-
-declare let ztoolkit: ZToolkit;
 
 interface ParsedHttpRequest {
   method: string;
@@ -43,36 +53,15 @@ interface HttpResponse {
   body?: string | Uint8Array;
 }
 
-function shouldLogBridgeRequest(request: ParsedHttpRequest): boolean {
-  if (request.pathname === "/api/health" && request.method === "GET") {
-    return false;
-  }
-  if (request.pathname === "/api/ext/tasks/next" && request.method === "GET") {
-    return false;
-  }
-  if (request.pathname === "/api/ext/handshake" && request.method === "POST") {
-    return false;
-  }
-  return true;
-}
-
-function getByteLength(str: string): number {
-  try {
-    return new TextEncoder().encode(str).length;
-  } catch {
-    let bytes = 0;
-    for (let index = 0; index < str.length; index += 1) {
-      const code = str.charCodeAt(index);
-      if (code < 0x80) bytes += 1;
-      else if (code < 0x800) bytes += 2;
-      else if (code < 0xd800 || code >= 0xe000) bytes += 3;
-      else {
-        index += 1;
-        bytes += 4;
-      }
-    }
-    return bytes;
-  }
+function bridgeError(
+  code: BridgeErrorCode,
+  message: string,
+): Error & {
+  bridgeCode?: BridgeErrorCode;
+} {
+  const error = new Error(message) as Error & { bridgeCode?: BridgeErrorCode };
+  error.bridgeCode = code;
+  return error;
 }
 
 function jsonEnvelope<T>(data: T): BridgeEnvelope<T> {
@@ -87,39 +76,62 @@ function jsonError(
 }
 
 function normalizeErrorCode(value: unknown): BridgeErrorCode | "UNKNOWN_ERROR" {
-  return typeof value === "string" ? (value as BridgeErrorCode) : "UNKNOWN_ERROR";
+  return typeof value === "string"
+    ? (value as BridgeErrorCode)
+    : "UNKNOWN_ERROR";
 }
 
-function isTaskNotFoundError(error: unknown): boolean {
-  const bridgeCode = String((error as any)?.bridgeCode || "");
-  const message = String((error as any)?.message || error || "");
-  return (
-    bridgeCode === "TASK_NOT_FOUND" ||
-    message.includes("Task not found") ||
-    message.includes("TASK_NOT_FOUND")
-  );
+function statusForError(code: BridgeErrorCode | "UNKNOWN_ERROR"): number {
+  switch (code) {
+    case "UNAUTHORIZED":
+      return 401;
+    case "TASK_NOT_FOUND":
+    case "PAIRING_REQUEST_NOT_FOUND":
+    case "PDF_NOT_FOUND":
+      return 404;
+    case "PROTOCOL_MISMATCH":
+    case "REQUIRED_CAPABILITY_MISSING":
+    case "LEASE_MISMATCH":
+    case "LEASE_EXPIRED":
+    case "INVALID_STATUS_TRANSITION":
+      return 409;
+    case "INVALID_REQUEST":
+      return 400;
+    default:
+      return 500;
+  }
 }
 
-function buildCorsHeaders(): Record<string, string> {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
+function isAllowedExtensionOrigin(origin: string): boolean {
+  return /^chrome-extension:\/\/[a-z]{32}$/i.test(origin);
+}
+
+function buildCorsHeaders(origin = ""): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Headers":
+      "Authorization, Content-Type, X-AiNote-Install-ID, X-AiNote-Lease-ID, X-AiNote-Protocol",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Private-Network": "true",
     "Cache-Control": "no-store",
+    Vary: "Origin",
   };
+  if (isAllowedExtensionOrigin(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin;
+  }
+  return headers;
 }
 
-function buildJsonResponse(status: number, payload: unknown): HttpResponse {
+function buildJsonResponse(
+  status: number,
+  payload: unknown,
+  origin = "",
+): HttpResponse {
   const statusText =
     (Zotero.Server.responseCodes as Record<number, string>)[status] || "OK";
   return {
     status,
     statusText,
-    headers: {
-      "Content-Type": JSON_MIME,
-      ...buildCorsHeaders(),
-    },
+    headers: { "Content-Type": JSON_MIME, ...buildCorsHeaders(origin) },
     body: JSON.stringify(payload),
   };
 }
@@ -128,18 +140,20 @@ function buildBinaryResponse(
   status: number,
   contentType: string,
   body: Uint8Array,
+  origin = "",
 ): HttpResponse {
   const statusText =
     (Zotero.Server.responseCodes as Record<number, string>)[status] || "OK";
   return {
     status,
     statusText,
-    headers: {
-      "Content-Type": contentType,
-      ...buildCorsHeaders(),
-    },
+    headers: { "Content-Type": contentType, ...buildCorsHeaders(origin) },
     body,
   };
+}
+
+function getByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
 }
 
 function getResponseBodyLength(body: string | Uint8Array): number {
@@ -147,16 +161,15 @@ function getResponseBodyLength(body: string | Uint8Array): number {
 }
 
 function writeBytesToStream(output: nsIOutputStream, bytes: Uint8Array): void {
-  const binaryOutputFactory = Components.classes[
+  const factory = Components.classes[
     "@mozilla.org/binaryoutputstream;1" as keyof typeof Components.classes
   ] as any;
-  const binaryOutput = binaryOutputFactory.createInstance(
+  const binaryOutput = factory.createInstance(
     Components.interfaces.nsIBinaryOutputStream,
   ) as any;
   binaryOutput.setOutputStream(output);
-  const chunkSize = 0x8000;
-  for (let index = 0; index < bytes.byteLength; index += chunkSize) {
-    const chunk = bytes.subarray(index, index + chunkSize);
+  for (let index = 0; index < bytes.byteLength; index += 0x8000) {
+    const chunk = bytes.subarray(index, index + 0x8000);
     binaryOutput.writeByteArray(Array.from(chunk), chunk.byteLength);
   }
 }
@@ -165,16 +178,14 @@ function writeBodyToStream(
   output: nsIOutputStream,
   body: string | Uint8Array,
 ): void {
-  if (typeof body === "string") {
-    writeBytesToStream(output, new TextEncoder().encode(body));
-    return;
-  }
-  writeBytesToStream(output, body);
+  writeBytesToStream(
+    output,
+    typeof body === "string" ? new TextEncoder().encode(body) : body,
+  );
 }
 
 function parseQueryString(queryString: string): Record<string, string> {
-  const params = new URLSearchParams(queryString);
-  return Object.fromEntries(params.entries());
+  return Object.fromEntries(new URLSearchParams(queryString).entries());
 }
 
 function findHeaderEnd(bytes: Uint8Array): number {
@@ -205,7 +216,10 @@ function parseHttpRequest(requestText: string): ParsedHttpRequest {
   const [headerText, bodyText = ""] = requestText.split("\r\n\r\n");
   const [requestLine = "", ...headerLines] = headerText.split("\r\n");
   const [method = "GET", rawTarget = "/"] = requestLine.split(" ");
-  const [pathname, queryString = ""] = rawTarget.split("?");
+  const queryOffset = rawTarget.indexOf("?");
+  const pathname =
+    queryOffset >= 0 ? rawTarget.slice(0, queryOffset) : rawTarget;
+  const queryString = queryOffset >= 0 ? rawTarget.slice(queryOffset + 1) : "";
   const headers: Record<string, string> = {};
   for (const line of headerLines) {
     const separator = line.indexOf(":");
@@ -215,7 +229,7 @@ function parseHttpRequest(requestText: string): ParsedHttpRequest {
       .trim();
   }
   return {
-    method,
+    method: method.toUpperCase(),
     pathname,
     query: parseQueryString(queryString),
     headers,
@@ -224,146 +238,125 @@ function parseHttpRequest(requestText: string): ParsedHttpRequest {
 }
 
 function parseJsonBody<T>(request: ParsedHttpRequest): T {
-  if (!request.bodyText.trim()) {
-    return {} as T;
+  if (!request.bodyText.trim()) return {} as T;
+  try {
+    return JSON.parse(request.bodyText) as T;
+  } catch {
+    throw bridgeError("INVALID_REQUEST", "Invalid JSON request body");
   }
-  return JSON.parse(request.bodyText) as T;
 }
 
-function extractTaskId(pathname: string, suffix: string): string {
-  return pathname
-    .replace("/api/ext/tasks/", "")
-    .replace("/api/tasks/", "")
-    .replace(suffix, "")
-    .replace(/^\/+|\/+$/g, "");
+function extractPathId(pathname: string, prefix: string, suffix = ""): string {
+  let value = pathname.slice(prefix.length);
+  if (suffix && value.endsWith(suffix)) value = value.slice(0, -suffix.length);
+  return decodeURIComponent(value.replace(/^\/+|\/+$/g, ""));
 }
 
-function getPort(): number {
-  const raw = parseInt(String(getPref("webSummaryBridgePort" as any) || "23123"), 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : 23123;
+function pairingPersistence(): PairingPersistence {
+  return {
+    load(): StoredPairing | null {
+      try {
+        const raw = String(getPref(PAIRING_PREF as any) || "").trim();
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as StoredPairing;
+        return parsed?.token && parsed?.executor?.installId ? parsed : null;
+      } catch {
+        return null;
+      }
+    },
+    save(value: StoredPairing): void {
+      setPref(PAIRING_PREF as any, JSON.stringify(value) as any);
+    },
+    clear(): void {
+      clearPref(PAIRING_PREF);
+    },
+  };
 }
 
 export class WebSummaryBridgeServer {
   private readonly taskStore = new WebSummaryTaskStore();
-  private readonly compatibilityManager = new WebSummaryCompatibilityManager();
+  private readonly pairingStore = new WebSummaryPairingStore(
+    pairingPersistence(),
+  );
   private serverSocket: nsIServerSocket | null = null;
   private isRunning = false;
   private readonly activeTransports = new Set<nsISocketTransport>();
-
-  constructor() {
-  }
 
   public getTaskStore(): WebSummaryTaskStore {
     return this.taskStore;
   }
 
   public createTask(request: CreateTaskRequest): CreateTaskResponse {
-    if (request.actionType === "summarize") {
-      void this.refreshVersionInfo();
-      const report = this.compatibilityManager.evaluate("summarize");
-      if (!report.allowCreateSummarize) {
-        errorWebSummaryLog("Bridge", "createTask blocked by compatibility gate", {
-          blockingReasons: report.blockingReasons,
-          warnings: report.warnings,
-          runtimeStatus: report.details.runtimeStatus,
-          environment: report.details.environment,
-          extensionVersion: report.details.extensionVersion,
-          extensionProtocolVersion: report.details.extensionProtocolVersion,
-          extensionTaskContractVersion: report.details.extensionTaskContractVersion,
-          requiredCapabilities: report.details.requiredCapabilities,
-          extensionCapabilities: report.details.extensionCapabilities,
-          requiredPermissions: report.details.requiredPermissions,
-          extensionPermissions: report.details.extensionPermissions,
-        });
-        const primaryReason = report.blockingReasons[0];
-        const error = new Error(
-          this.buildCompatibilityErrorMessage(report),
-        ) as Error & {
-          bridgeCode?: BridgeErrorCode;
-        };
-        error.bridgeCode = primaryReason?.code || "INTERNAL_ERROR";
-        throw error;
-      }
+    if (!this.pairingStore.getStatus(this.isRunning).paired) {
+      throw bridgeError(
+        "EXTENSION_OFFLINE",
+        "浏览器扩展尚未与 AiNote 配对，请先在设置中完成配对",
+      );
     }
-    const task = this.taskStore.createTask(request);
-    debugWebSummaryLog("Bridge", "createTask accepted", {
-      taskId: task.taskId,
-      itemId: task.itemId,
-      actionType: task.actionType,
-      projectUrl: task.projectUrl,
-      existingConversationUrl: task.existingConversationUrl,
-    });
-    return { task };
-  }
-
-  public getHealth(): BridgeHealthResponse {
-    return this.compatibilityManager.buildHealth();
-  }
-
-  public async refreshVersionInfo(): Promise<void> {
-    await this.compatibilityManager.refreshRemoteVersionInfo();
-  }
-
-  public reportHandshake(payload: ExtensionHandshakePayload): CompatibilityReport {
-    return this.compatibilityManager.recordHandshake(payload);
-  }
-
-  public recordRuntimeActivity(source: string): void {
-    this.compatibilityManager.recordRuntimeActivity(source);
-  }
-
-  private buildCompatibilityErrorMessage(report: CompatibilityReport): string {
-    const reasons = report.blockingReasons
-      .map((entry, index) => `${index + 1}. ${entry.message}`)
-      .join(" ");
-    const warnings = report.warnings
-      .map((entry) => entry.message)
-      .filter(Boolean);
-    if (warnings.length) {
-      return `${reasons} 建议：${warnings.join("；")}`;
-    }
-    return reasons || "网页总结任务创建被兼容性门禁阻止";
+    return { task: this.taskStore.createTask(request) };
   }
 
   public getTask(taskId: string): WebSummaryTask {
     const task = this.taskStore.getTask(taskId);
-    if (!task) {
-      const error = new Error("Task not found") as Error & {
-        bridgeCode?: BridgeErrorCode;
-      };
-      error.bridgeCode = "TASK_NOT_FOUND";
-      throw error;
-    }
+    if (!task) throw bridgeError("TASK_NOT_FOUND", "Task not found");
     return task;
   }
 
+  public hasActiveTaskForItem(itemId: number): boolean {
+    return this.taskStore.hasActiveTaskForItem(itemId);
+  }
+
   public cancelTask(taskId: string, reason?: string): CancelTaskResponse {
-    return {
-      task: this.taskStore.requestCancel(taskId, reason),
-    };
+    return { task: this.taskStore.requestCancel(taskId, reason) };
   }
 
   public removeTask(taskId: string): RemoveTaskResponse {
     const task = this.taskStore.removeTask(taskId);
-    return {
-      removed: !!task,
-      task: task || undefined,
-    };
+    return { removed: !!task, task: task || undefined };
+  }
+
+  public getStatus(): WebSummaryBridgeStatus {
+    return this.pairingStore.getStatus(this.isRunning);
+  }
+
+  public approvePairingRequest(requestId: string): WebSummaryBridgeStatus {
+    return this.pairingStore.approvePairingRequest(requestId);
+  }
+
+  public rejectPairingRequest(
+    requestId: string,
+    reason?: string,
+  ): WebSummaryBridgeStatus {
+    return this.pairingStore.rejectPairingRequest(requestId, reason);
+  }
+
+  public revokePairing(): WebSummaryBridgeStatus {
+    return this.pairingStore.revoke();
   }
 
   public start(): void {
-    if (this.isRunning) {
-      return;
-    }
-    const port = getPort();
+    if (this.isRunning) return;
     const socketFactory = Components.classes[
       "@mozilla.org/network/server-socket;1" as keyof typeof Components.classes
     ] as any;
-    this.serverSocket = socketFactory.createInstance(
+    const socket = socketFactory.createInstance(
       Components.interfaces.nsIServerSocket,
     ) as nsIServerSocket;
-    this.serverSocket.init(port, true, -1);
-    this.serverSocket.asyncListen(this.listener);
+    try {
+      socket.init(WEB_SUMMARY_BRIDGE_PORT, true, -1);
+      socket.asyncListen(this.listener);
+    } catch (error) {
+      try {
+        socket.close();
+      } catch {
+        // Ignore cleanup failures after a bind error.
+      }
+      throw bridgeError(
+        "BRIDGE_PORT_IN_USE",
+        `无法启动网页总结桥接：127.0.0.1:${WEB_SUMMARY_BRIDGE_PORT} 已被占用`,
+      );
+    }
+    this.serverSocket = socket;
     this.isRunning = true;
   }
 
@@ -372,30 +365,162 @@ export class WebSummaryBridgeServer {
       try {
         transport.close(0);
       } catch {
-        // ignore
+        // Ignore shutdown races.
       }
     }
     this.activeTransports.clear();
-    if (this.serverSocket) {
-      try {
-        this.serverSocket.close();
-      } catch {
-        // ignore
-      }
+    try {
+      this.serverSocket?.close();
+    } catch {
+      // Ignore shutdown races.
     }
     this.serverSocket = null;
     this.isRunning = false;
   }
 
+  private authenticate(request: ParsedHttpRequest): WebSummaryPairedExecutor {
+    const authorization = request.headers.authorization || "";
+    const token = authorization.replace(/^Bearer\s+/i, "").trim();
+    const installId = request.headers["x-ainote-install-id"] || "";
+    const protocolVersion = Number(request.headers["x-ainote-protocol"] || NaN);
+    return this.pairingStore.authenticate(token, installId, protocolVersion);
+  }
+
+  private async routeRequest(
+    request: ParsedHttpRequest,
+  ): Promise<HttpResponse> {
+    const origin = request.headers.origin || "";
+    if (request.method === "OPTIONS") {
+      return {
+        status: 204,
+        statusText: "No Content",
+        headers: buildCorsHeaders(origin),
+        body: "",
+      };
+    }
+
+    if (
+      request.pathname === `${API_PREFIX}/pair/requests` &&
+      request.method === "POST"
+    ) {
+      const payload = parseJsonBody<CreatePairingRequest>(request);
+      const response: CreatePairingResponse = {
+        request: this.pairingStore.createPairingRequest(payload),
+      };
+      return buildJsonResponse(201, jsonEnvelope(response), origin);
+    }
+
+    if (
+      request.pathname.startsWith(`${API_PREFIX}/pair/requests/`) &&
+      request.method === "GET"
+    ) {
+      const requestId = extractPathId(
+        request.pathname,
+        `${API_PREFIX}/pair/requests/`,
+      );
+      const response: PairingStatusResponse =
+        this.pairingStore.getPairingStatus(requestId);
+      return buildJsonResponse(200, jsonEnvelope(response), origin);
+    }
+
+    const executor = this.authenticate(request);
+
+    if (
+      request.pathname === `${API_PREFIX}/session` &&
+      request.method === "GET"
+    ) {
+      const response: BridgeSessionResponse = {
+        protocolVersion: WEB_SUMMARY_PROTOCOL_VERSION,
+        executor,
+        requiredCapabilities: [...WEB_SUMMARY_REQUIRED_CAPABILITIES],
+        updatedAt: new Date().toISOString(),
+      };
+      return buildJsonResponse(200, jsonEnvelope(response), origin);
+    }
+
+    if (
+      request.pathname === `${API_PREFIX}/tasks/next` &&
+      request.method === "GET"
+    ) {
+      const waitMs = Math.max(
+        0,
+        Math.min(
+          WEB_SUMMARY_LONG_POLL_MS,
+          Number.parseInt(request.query.waitMs || "0", 10) || 0,
+        ),
+      );
+      const task = await this.taskStore.claimNextTaskOrWait(
+        waitMs,
+        executor.installId,
+      );
+      const response: ClaimNextTaskResponse = { task };
+      return buildJsonResponse(200, jsonEnvelope(response), origin);
+    }
+
+    const taskPrefix = `${API_PREFIX}/tasks/`;
+    if (request.pathname.startsWith(taskPrefix)) {
+      if (request.pathname.endsWith("/events") && request.method === "POST") {
+        const taskId = extractPathId(request.pathname, taskPrefix, "/events");
+        const payload = parseJsonBody<ReportTaskEventRequest>(request);
+        return buildJsonResponse(
+          200,
+          jsonEnvelope(
+            this.taskStore.reportEvent(taskId, payload, executor.installId),
+          ),
+          origin,
+        );
+      }
+      if (request.pathname.endsWith("/result") && request.method === "POST") {
+        const taskId = extractPathId(request.pathname, taskPrefix, "/result");
+        const payload = parseJsonBody<ReportTaskResultRequest>(request);
+        return buildJsonResponse(
+          200,
+          jsonEnvelope(
+            this.taskStore.completeTask(taskId, payload, executor.installId),
+          ),
+          origin,
+        );
+      }
+      if (request.pathname.endsWith("/failure") && request.method === "POST") {
+        const taskId = extractPathId(request.pathname, taskPrefix, "/failure");
+        const payload = parseJsonBody<ReportTaskFailureRequest>(request);
+        return buildJsonResponse(
+          200,
+          jsonEnvelope(
+            this.taskStore.failTask(taskId, payload, executor.installId),
+          ),
+          origin,
+        );
+      }
+      if (request.pathname.endsWith("/pdf") && request.method === "GET") {
+        const taskId = extractPathId(request.pathname, taskPrefix, "/pdf");
+        const leaseId = request.headers["x-ainote-lease-id"] || "";
+        const task = this.taskStore.validateLease(
+          taskId,
+          leaseId,
+          executor.installId,
+        );
+        if (!task.pdfPath || !(await IOUtils.exists(task.pdfPath))) {
+          throw bridgeError("PDF_NOT_FOUND", "PDF not found");
+        }
+        const bytes = new Uint8Array(await IOUtils.read(task.pdfPath));
+        if (!bytes.byteLength)
+          throw bridgeError("PDF_NOT_FOUND", "PDF is empty");
+        return buildBinaryResponse(200, "application/pdf", bytes, origin);
+      }
+    }
+
+    throw bridgeError("INVALID_REQUEST", "Endpoint not found");
+  }
+
   private async readRequestText(input: nsIInputStream): Promise<string> {
-    const binaryInputFactory = Components.classes[
+    const factory = Components.classes[
       "@mozilla.org/binaryinputstream;1" as keyof typeof Components.classes
     ] as any;
-    const binaryInput = binaryInputFactory.createInstance(
+    const binaryInput = factory.createInstance(
       Components.interfaces.nsIBinaryInputStream,
     ) as any;
     binaryInput.setInputStream(input);
-
     const chunks: Uint8Array[] = [];
     let totalLength = 0;
     let waitAttempts = 0;
@@ -405,55 +530,57 @@ export class WebSummaryBridgeServer {
 
     while (totalLength < MAX_REQUEST_SIZE && !headersComplete) {
       const available = input.available();
-      if (available === 0) {
-        waitAttempts += 1;
-        if (waitAttempts > READ_WAIT_LIMIT) break;
+      if (!available) {
+        if (++waitAttempts > READ_WAIT_LIMIT) break;
         await Zotero.Promise.delay(10);
         continue;
       }
-      const readSize = Math.min(available, 4096);
-      const chunk = Uint8Array.from(binaryInput.readByteArray(readSize));
+      const chunk = Uint8Array.from(
+        binaryInput.readByteArray(Math.min(available, 4096)),
+      );
       if (!chunk.byteLength) break;
       chunks.push(chunk);
       totalLength += chunk.byteLength;
       const merged = concatBytes(chunks, totalLength);
       headerEndIndex = findHeaderEnd(merged);
-      if (headerEndIndex !== -1) {
+      if (headerEndIndex >= 0) {
         headersComplete = true;
         const headerSection = new TextDecoder().decode(
           merged.subarray(0, headerEndIndex),
         );
-        const match = headerSection.match(/Content-Length:\s*(\d+)/i);
-        if (match) {
-          contentLength = parseInt(match[1], 10) || 0;
-        }
+        contentLength = Number.parseInt(
+          headerSection.match(/Content-Length:\s*(\d+)/i)?.[1] || "0",
+          10,
+        );
       }
     }
 
     if (headersComplete && contentLength > 0) {
       const bodyStart = headerEndIndex + 4;
       waitAttempts = 0;
-      while (totalLength - bodyStart < contentLength && totalLength < MAX_REQUEST_SIZE) {
+      while (
+        totalLength - bodyStart < contentLength &&
+        totalLength < MAX_REQUEST_SIZE
+      ) {
         const available = input.available();
-        if (available === 0) {
-          waitAttempts += 1;
-          if (waitAttempts > READ_WAIT_LIMIT) break;
+        if (!available) {
+          if (++waitAttempts > READ_WAIT_LIMIT) break;
           await Zotero.Promise.delay(10);
           continue;
         }
         const remaining = contentLength - (totalLength - bodyStart);
-        const readSize = Math.min(available, remaining, 4096);
-        const chunk = Uint8Array.from(binaryInput.readByteArray(readSize));
+        const chunk = Uint8Array.from(
+          binaryInput.readByteArray(Math.min(available, remaining, 4096)),
+        );
         if (!chunk.byteLength) break;
         chunks.push(chunk);
         totalLength += chunk.byteLength;
       }
     }
-
     try {
       binaryInput.close();
     } catch {
-      // ignore
+      // Ignore input cleanup races.
     }
     return new TextDecoder().decode(concatBytes(chunks, totalLength));
   }
@@ -469,261 +596,65 @@ export class WebSummaryBridgeServer {
         .join("\r\n") +
       `\r\nContent-Length: ${getResponseBodyLength(body)}\r\n\r\n`;
     output.write(headerText, headerText.length);
-    if (getResponseBodyLength(body) > 0) {
-      writeBodyToStream(output, body);
-    }
+    if (getResponseBodyLength(body)) writeBodyToStream(output, body);
     try {
       output.flush();
     } catch {
-      // ignore
+      // Ignore output cleanup races.
     }
-  }
-
-  private async routeRequest(request: ParsedHttpRequest): Promise<HttpResponse> {
-    if (shouldLogBridgeRequest(request)) {
-      debugWebSummaryLog("Bridge", "routeRequest", {
-        method: request.method,
-        pathname: request.pathname,
-        query: request.query,
-      });
-    }
-    if (request.method === "OPTIONS") {
-      return {
-        status: 204,
-        statusText: "No Content",
-        headers: buildCorsHeaders(),
-        body: "",
-      };
-    }
-
-    if (request.pathname === "/api/health" && request.method === "GET") {
-      void this.refreshVersionInfo();
-      return buildJsonResponse(200, jsonEnvelope(this.getHealth()));
-    }
-
-    if (request.pathname === "/api/ext/handshake" && request.method === "POST") {
-      const payload = parseJsonBody<ExtensionHandshakePayload>(request);
-      return buildJsonResponse(200, jsonEnvelope(this.reportHandshake(payload)));
-    }
-
-    if (request.pathname === "/api/tasks" && request.method === "POST") {
-      const payload = parseJsonBody<CreateTaskRequest>(request);
-      return buildJsonResponse(201, jsonEnvelope(this.createTask(payload)));
-    }
-
-    if (request.pathname.startsWith("/api/tasks/") && request.method === "GET") {
-      this.recordRuntimeActivity("task-get");
-      const taskId = extractTaskId(request.pathname, "");
-      return buildJsonResponse(200, jsonEnvelope(this.getTask(taskId)));
-    }
-
-    if (
-      request.pathname.startsWith("/api/tasks/") &&
-      request.pathname.endsWith("/cancel") &&
-      request.method === "POST"
-    ) {
-      const taskId = extractTaskId(request.pathname, "/cancel");
-      const payload = parseJsonBody<{ reason?: string }>(request);
-      return buildJsonResponse(200, jsonEnvelope(this.cancelTask(taskId, payload.reason)));
-    }
-
-    if (
-      request.pathname.startsWith("/api/tasks/") &&
-      request.method === "DELETE"
-    ) {
-      const taskId = extractTaskId(request.pathname, "");
-      return buildJsonResponse(200, jsonEnvelope(this.removeTask(taskId)));
-    }
-
-    if (request.pathname === "/api/ext/tasks/next" && request.method === "GET") {
-      this.recordRuntimeActivity("claim-next");
-      const waitMs = Math.max(
-        0,
-        Math.min(
-          30000,
-          parseInt(String(request.query.waitMs || "0"), 10) || 0,
-        ),
-      );
-      const task = await this.taskStore.claimNextTaskOrWait(waitMs);
-      if (task) {
-        debugWebSummaryLog("Bridge", "claimNextTaskOrWait", {
-          waitMs,
-          taskId: task.taskId,
-          status: task.status,
-        });
-      }
-      const payload: ClaimNextTaskResponse = {
-        task,
-      };
-      return buildJsonResponse(200, jsonEnvelope(payload));
-    }
-
-    if (
-      request.pathname.startsWith("/api/ext/tasks/") &&
-      request.pathname.endsWith("/status") &&
-      request.method === "POST"
-    ) {
-      this.recordRuntimeActivity("task-status");
-      const taskId = extractTaskId(request.pathname, "/status");
-      const payload = parseJsonBody<ReportTaskStatusRequest>(request);
-      debugWebSummaryLog("Bridge", "task status report", {
-        taskId,
-        status: payload.status,
-        debugMessage: payload.debugMessage,
-        errorMessage: payload.errorMessage,
-      });
-      try {
-        return buildJsonResponse(
-          200,
-          jsonEnvelope(this.taskStore.updateStatus(taskId, payload)),
-        );
-      } catch (error) {
-        if (isTaskNotFoundError(error)) {
-          return buildJsonResponse(
-            200,
-            jsonEnvelope({ removed: true, taskId }),
-          );
-        }
-        throw error;
-      }
-    }
-
-    if (
-      request.pathname.startsWith("/api/ext/tasks/") &&
-      request.pathname.endsWith("/result") &&
-      request.method === "POST"
-    ) {
-      this.recordRuntimeActivity("task-result");
-      const taskId = extractTaskId(request.pathname, "/result");
-      const payload = parseJsonBody<ReportTaskResultRequest>(request);
-      debugWebSummaryLog("Bridge", "task result report", {
-        taskId,
-        resultSource: payload.resultSource,
-        resultLength: payload.resultMarkdown?.length || 0,
-        resultDebugInfo: payload.resultDebugInfo,
-      });
-      try {
-        return buildJsonResponse(
-          200,
-          jsonEnvelope(this.taskStore.completeTask(taskId, payload)),
-        );
-      } catch (error) {
-        if (isTaskNotFoundError(error)) {
-          return buildJsonResponse(
-            200,
-            jsonEnvelope({ removed: true, taskId }),
-          );
-        }
-        throw error;
-      }
-    }
-
-    if (
-      request.pathname.startsWith("/api/ext/tasks/") &&
-      request.pathname.endsWith("/fail") &&
-      request.method === "POST"
-    ) {
-      this.recordRuntimeActivity("task-fail");
-      const taskId = extractTaskId(request.pathname, "/fail");
-      const payload = parseJsonBody<ReportTaskFailureRequest>(request);
-      debugWebSummaryLog("Bridge", "task failure report", {
-        taskId,
-        errorCode: payload.errorCode,
-        errorMessage: payload.errorMessage,
-      });
-      try {
-        return buildJsonResponse(
-          200,
-          jsonEnvelope(this.taskStore.failTask(taskId, payload)),
-        );
-      } catch (error) {
-        if (isTaskNotFoundError(error)) {
-          return buildJsonResponse(
-            200,
-            jsonEnvelope({ removed: true, taskId }),
-          );
-        }
-        throw error;
-      }
-    }
-
-    if (
-      request.pathname.startsWith("/api/ext/tasks/") &&
-      request.pathname.endsWith("/pdf") &&
-      request.method === "GET"
-    ) {
-      this.recordRuntimeActivity("task-pdf");
-      const taskId = extractTaskId(request.pathname, "/pdf");
-      const task = this.getTask(taskId);
-      if (!task.pdfPath) {
-        return buildJsonResponse(
-          404,
-          jsonError("PDF_NOT_FOUND", "PDF not found"),
-        );
-      }
-      const bytes = new Uint8Array(await IOUtils.read(task.pdfPath));
-      return buildBinaryResponse(200, "application/pdf", bytes);
-    }
-
-    return buildJsonResponse(
-      404,
-      jsonError("INVALID_REQUEST", "Endpoint not found"),
-    );
   }
 
   private readonly listener = {
-    onSocketAccepted: async (_socket: nsIServerSocket, transport: nsISocketTransport) => {
+    onSocketAccepted: async (
+      _socket: nsIServerSocket,
+      transport: nsISocketTransport,
+    ) => {
       this.activeTransports.add(transport);
       let input: nsIInputStream | null = null;
       let output: nsIOutputStream | null = null;
+      let requestOrigin = "";
       try {
         input = transport.openInputStream(0, 0, 0);
         output = transport.openOutputStream(OPEN_BLOCKING, 0, 0);
         const requestText = await this.readRequestText(input);
-        if (!requestText.trim()) {
-          return;
-        }
+        if (!requestText.trim()) return;
         const request = parseHttpRequest(requestText);
+        requestOrigin = request.headers.origin || "";
         const response = await this.routeRequest(request);
-        if (shouldLogBridgeRequest(request)) {
-          debugWebSummaryLog("Bridge", "sendResponse", {
-            method: request.method,
-            pathname: request.pathname,
-            status: response.status,
-          });
-        }
         this.sendResponse(output, response);
       } catch (error: any) {
-        errorWebSummaryLog("Bridge", "request failed", {
-          error: error?.message || String(error),
-        });
+        const code = normalizeErrorCode(error?.bridgeCode);
+        if (code !== "UNAUTHORIZED") {
+          errorWebSummaryLog("Bridge", "request failed", {
+            code,
+            error: error?.message || String(error),
+          });
+        }
         if (output) {
-          try {
-            this.sendResponse(
-              output,
-              buildJsonResponse(
-                500,
-                jsonError(
-                  normalizeErrorCode(error?.bridgeCode),
-                  error?.message || "Internal error",
-                ),
-              ),
-            );
-          } catch {
-            // ignore
-          }
+          const publicMessage =
+            code === "UNAUTHORIZED"
+              ? "Unauthorized"
+              : error?.message || "Internal error";
+          this.sendResponse(
+            output,
+            buildJsonResponse(
+              statusForError(code),
+              jsonError(code, publicMessage),
+              requestOrigin,
+            ),
+          );
         }
       } finally {
         this.activeTransports.delete(transport);
         try {
           output?.close();
         } catch {
-          // ignore
+          // Ignore cleanup races.
         }
         try {
           input?.close();
         } catch {
-          // ignore
+          // Ignore cleanup races.
         }
       }
     },

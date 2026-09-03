@@ -48,8 +48,8 @@
     <h1 data-i18n="optionsHeading">AiNote Web Summary Settings</h1>
 
     <div class="row">
-      <label for="bridgeUrl" data-i18n="bridgeUrlLabel">Bridge URL</label>
-      <input id="bridgeUrl" type="text" />
+      <label data-i18n="bridgeUrlLabel">Bridge</label>
+      <div class="hint">http://127.0.0.1:23123 · Protocol 2</div>
     </div>
 
     <div class="row">
@@ -59,12 +59,18 @@
         <option value="error" data-i18n="logLevelError">Errors only</option>
         <option value="debug" data-i18n="logLevelDebug">Debug</option>
       </select>
-      <div class="hint" data-i18n="logLevelHint">Default is errors only. Switch to debug only when diagnosing issues.</div>
+      <div class="hint" data-i18n="logLevelHint">
+        Default is errors only. Switch to debug only when diagnosing issues.
+      </div>
     </div>
 
     <div class="row">
       <button id="save" data-i18n="saveButton">Save</button>
-      <button id="test" data-i18n="testButton">Test Connection</button>
+      <button id="pair" data-i18n="pairButton">Pair with Zotero</button>
+      <button id="test" data-i18n="testButton">
+        Test authenticated connection
+      </button>
+      <button id="forget" data-i18n="forgetButton">Forget local token</button>
     </div>
 
     <div id="status"></div>

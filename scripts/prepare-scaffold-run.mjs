@@ -2,11 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { getScaffoldLayout, repoRoot } from "./scaffold-paths.mjs";
+import { assertBridgePortAvailable } from "./bridge-port.mjs";
 
 const command = process.argv[2];
 
 if (!command) {
-  console.error("Usage: node scripts/prepare-scaffold-run.mjs <serve|build|test|release>");
+  console.error(
+    "Usage: node scripts/prepare-scaffold-run.mjs <serve|build|test|release>",
+  );
   process.exit(1);
 }
 
@@ -60,7 +63,11 @@ function getRepoOwnedZoteroProcesses(markerPaths) {
   const output = execFileSync(
     "powershell",
     ["-NoProfile", "-Command", psScript],
-    { cwd: repoRoot, encoding: "utf8" },
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    },
   ).trim();
 
   if (!output) {
@@ -94,7 +101,9 @@ async function ensureDirUnlocked(targetDir) {
 }
 
 async function main() {
-  const repoOwnedProcesses = getRepoOwnedZoteroProcesses(layout.killMarkers ?? []);
+  const repoOwnedProcesses = getRepoOwnedZoteroProcesses(
+    layout.killMarkers ?? [],
+  );
 
   for (const proc of repoOwnedProcesses) {
     try {
@@ -104,6 +113,10 @@ async function main() {
         `[prepare-scaffold-run] Failed to stop Zotero PID ${proc.ProcessId}: ${error}`,
       );
     }
+  }
+
+  if (command === "serve") {
+    assertBridgePortAvailable();
   }
 
   if (layout.distDir) {

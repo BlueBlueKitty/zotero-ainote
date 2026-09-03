@@ -16,9 +16,12 @@ function isWindowAlive(win?: Window) {
  */
 export function showToast(
   message: string,
-  type: "error" | "warning" | "success" | "info" = "info"
+  type: "error" | "warning" | "success" | "info" = "info",
 ) {
-  const Zotero = (typeof (globalThis as any).Zotero !== 'undefined' ? (globalThis as any).Zotero : undefined);
+  const Zotero =
+    typeof (globalThis as any).Zotero !== "undefined"
+      ? (globalThis as any).Zotero
+      : undefined;
   if (Zotero) {
     const iconMap = {
       error: "chrome://zotero/skin/cross.png",
@@ -26,17 +29,31 @@ export function showToast(
       success: "chrome://zotero/skin/tick.png",
       info: "chrome://zotero/skin/note.png",
     };
-    Zotero.Notifier.showNotification(
-      message,
-      iconMap[type],
-      "AiNote",
-      () => {
-        // onclick
+    if (typeof Zotero.Notifier?.showNotification === "function") {
+      try {
+        Zotero.Notifier.showNotification(
+          message,
+          iconMap[type],
+          "AiNote",
+          () => {
+            // onclick
+          },
+        );
+        return;
+      } catch {
+        // Fall through to a native modal if Zotero's optional notifier fails.
       }
-    );
-  } else {
-    console.log(`[${type}] ${message}`);
+    }
+    const mainWindow =
+      typeof Zotero.getMainWindow === "function"
+        ? Zotero.getMainWindow()
+        : undefined;
+    if (typeof mainWindow?.alert === "function") {
+      mainWindow.alert(message);
+      return;
+    }
   }
+  console.log(`[${type}] ${message}`);
 }
 
 export function getWindow() {

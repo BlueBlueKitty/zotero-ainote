@@ -10,7 +10,9 @@ let currentLogLevel = "error";
  * @returns {WebSummaryLogLevel}
  */
 export function normalizeLogLevel(value) {
-  const text = String(value || "").trim().toLowerCase();
+  const text = String(value || "")
+    .trim()
+    .toLowerCase();
   if (text === "off" || text === "debug") {
     return text;
   }
@@ -45,6 +47,22 @@ export function shouldLog(level) {
 }
 
 /**
+ * @param {unknown} details
+ * @returns {string}
+ */
+export function formatLogDetails(details) {
+  if (details instanceof Error) {
+    return details.stack || details.message;
+  }
+  try {
+    const serialized = JSON.stringify(details);
+    return serialized === undefined ? String(details) : serialized;
+  } catch {
+    return String(details);
+  }
+}
+
+/**
  * @param {string} scope
  * @param {string} message
  * @param {unknown} [details]
@@ -58,7 +76,7 @@ export function debugLog(scope, message, details) {
     console.log(prefix);
     return;
   }
-  console.log(prefix, details);
+  console.log(prefix, formatLogDetails(details));
 }
 
 /**
@@ -75,5 +93,5 @@ export function errorLog(scope, message, details) {
     console.error(prefix);
     return;
   }
-  console.error(prefix, details);
+  console.error(prefix, formatLogDetails(details));
 }

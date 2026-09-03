@@ -1,6 +1,21 @@
 import { OutputWindow } from "./outputWindow";
 import { runtimeT } from "../utils/runtimeLocale";
-import { normalizeMathInHtmlDom, normalizeMathInMarkdown } from "./mathFormulaKernel";
+import {
+  normalizeMathInHtmlDom,
+  normalizeMathInMarkdown,
+} from "./mathFormulaKernel";
+
+export const ZOTERO_NOTE_SCHEMA_VERSION = 9;
+
+export function hasZoteroNoteSchema(html: string): boolean {
+  return /\bdata-schema-version\s*=\s*["'][^"']+["']/i.test(String(html || ""));
+}
+
+export function ensureZoteroNoteSchema(html: string): string {
+  const value = String(html || "");
+  if (hasZoteroNoteSchema(value)) return value;
+  return `<div data-schema-version="${ZOTERO_NOTE_SCHEMA_VERSION}">${value}</div>`;
+}
 
 /**
  * 统一处理 Markdown -> Zotero Note HTML 的转换逻辑，供 API 总结与网页总结共用。
@@ -18,10 +33,10 @@ export function buildNoteHtmlFromMarkdown(
     "zh-TW": "總結完成時間",
     "en-US": "Summary Completed At",
   });
-  return `<h2>${escapeHtml(summaryHeading)}</h2>
+  return ensureZoteroNoteSchema(`<h2>${escapeHtml(summaryHeading)}</h2>
 <p><strong>模型：</strong>${escapeHtml(modelLabel)}</p>
 <p><strong>${escapeHtml(completedAtLabel)}：</strong>${escapeHtml(completedAtText)}</p>
-<div>${htmlContent}</div>`;
+<div>${htmlContent}</div>`);
 }
 
 function formatCompletedAt(date: Date): string {
@@ -37,7 +52,9 @@ function formatCompletedAt(date: Date): string {
  * 将 Markdown 转换为适合 Zotero 笔记的 HTML 格式。
  */
 export function convertMarkdownToNoteHTML(markdown: string): string {
-  let html = OutputWindow.convertMarkdownToHTMLCore(normalizeMathInMarkdown(markdown));
+  let html = OutputWindow.convertMarkdownToHTMLCore(
+    normalizeMathInMarkdown(markdown),
+  );
 
   html = html.replace(/\s+style="[^"]*"/g, "");
 

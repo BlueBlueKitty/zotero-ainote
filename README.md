@@ -62,13 +62,17 @@ AiNote 是一款 Zotero 插件，用于在 Zotero 中调用大模型生成与处
 2. 在 Zotero 中进入 `工具 > 插件`，安装 AiNote 插件。
 3. 如有需要，重启 Zotero。
 
-### 安装并启用 ChatGPT 网页版 Chrome 扩展
+### 安装并配对 ChatGPT 网页版扩展
+
 1. 打开系统默认浏览器，进入扩展管理界面。
 2. 开启 `开发者模式`。
 3. 点击 `加载已解压的扩展程序`。
-4. 下载[扩展 ZIP 文件](https://raw.githubusercontent.com/BlueBlueKitty/zotero-ainote/main/dist/ainote-web-extension-v0.1.2-edge.zip)，并解压到本地目录。
-5. 在 `加载已解压的扩展程序` 中选择刚解压后的目录，即可成功安装扩展。
-6. 打开扩展选项页，确认 `Bridge URL` 为 `http://127.0.0.1:23123`（默认即为此值）。点击“测试连接”，如果连接成功，便可使用ainote插件的ChatGPT网页总结功能了。
+4. 下载 [Chrome/Edge 通用扩展 ZIP 文件](https://raw.githubusercontent.com/BlueBlueKitty/zotero-ainote/main/dist/ainote-web-extension-v0.2.0.zip)，并解压到本地目录。
+5. 在 `加载已解压的扩展程序` 中选择刚解压后的目录。
+6. 在 Zotero 的 AiNote 偏好设置中启用网页总结并填写完整的 ChatGPT 项目链接。
+7. 打开扩展选项页并点击“与 Zotero 配对”，回到 Zotero 确认该扩展。配对请求两分钟内有效，完成后可点击“测试连接”。
+
+桥接地址固定为 `http://127.0.0.1:23123`，不再需要两端分别配置。扩展只使用自己的后台执行标签页，不会接管用户已有的 ChatGPT 标签页。ChatGPT 登录、验证码或账户选择仍需用户手动完成；失败任务保留在原总结任务窗口中，只能从头重试。
 
 **如果出现ChatGPT网页总结无法正常工作的情况，请及时更新zotero-ainote插件以及浏览器扩展。**
 

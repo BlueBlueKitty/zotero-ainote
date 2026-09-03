@@ -1,220 +1,279 @@
 import { assert } from "chai";
 import { WebSummaryTaskStore } from "../src/modules/webSummaryTaskStore";
-import {
-  shouldFallbackToNewConversation,
-  throwIfWebSummaryCanceled,
-} from "../src/modules/webSummaryWorkflow";
+import { CreateTaskRequest } from "../src/modules/webSummaryTypes";
+
+function makeRequest(
+  itemId: number,
+  actionType: CreateTaskRequest["actionType"] = "summarize",
+): CreateTaskRequest {
+  return {
+    itemId,
+    libraryId: 1,
+    title: `Paper ${itemId}`,
+    platform: "chatgpt",
+    actionType,
+    pdfFileName: `paper-${itemId}.pdf`,
+    prompt: "summarize",
+    projectUrl: "https://chatgpt.com/g/g-p-project/project",
+  };
+}
 
 describe("webSummaryTaskStore", function () {
-  it("should create and claim queued tasks in order", function () {
-    const store = new WebSummaryTaskStore();
-    const first = store.createTask({
-      itemId: 1,
-      libraryId: 1,
-      title: "Paper A",
-      platform: "chatgpt",
-      actionType: "summarize",
-      conversationMode: "new-per-item",
-    });
-    store.createTask({
-      itemId: 2,
-      libraryId: 1,
-      title: "Paper B",
-      platform: "chatgpt",
-      actionType: "summarize",
-      conversationMode: "new-per-item",
-    });
+  let now: number;
+  let sequence: number;
+  let store: WebSummaryTaskStore;
 
-    const claimed = store.claimNextTask();
+  beforeEach(function () {
+    now = Date.parse("2026-09-02T00:00:00.000Z");
+    sequence = 0;
+    store = new WebSummaryTaskStore({
+      now: () => now,
+      randomId: () => `id-${++sequence}`,
+      leaseDurationMs: 1_000,
+    });
+  });
+
+  it("leases queued tasks serially in creation order", function () {
+    const first = store.createTask(makeRequest(1));
+    store.createTask(makeRequest(2));
+
+    const claimed = store.claimNextTask("install-a");
+
     assert.equal(claimed?.taskId, first.taskId);
-    assert.equal(claimed?.status, "opening_chat");
+    assert.equal(claimed?.status, "leased");
+    assert.equal(claimed?.stage, "claimed");
+    assert.equal(claimed?.lease?.executorInstallId, "install-a");
+    assert.isNull(store.claimNextTask("install-a"));
   });
 
-  it("should reject invalid status transitions", function () {
-    const store = new WebSummaryTaskStore();
-    const task = store.createTask({
-      itemId: 1,
-      libraryId: 1,
-      title: "Paper A",
-      platform: "chatgpt",
-      actionType: "summarize",
-      conversationMode: "new-per-item",
-    });
+  it("rejects a lease owned by another executor", function () {
+    store.createTask(makeRequest(1));
+    const claimed = store.claimNextTask("install-a")!;
 
-    assert.throws(() => {
-      store.completeTask(task.taskId, {
-        clientId: "client-a",
-        resultMarkdown: "done",
-      });
-    }, "Invalid task status transition");
+    assert.throws(
+      () =>
+        store.reportEvent(
+          claimed.taskId,
+          {
+            requestId: "request-1",
+            leaseId: claimed.lease!.leaseId,
+            stage: "preparing_page",
+          },
+          "install-b",
+        ),
+      "Task lease does not match",
+    );
   });
 
-  it("should persist conversation metadata on success", function () {
-    const store = new WebSummaryTaskStore();
-    const task = store.createTask({
-      itemId: 1,
-      libraryId: 1,
-      title: "Paper A",
-      platform: "chatgpt",
-      actionType: "summarize",
-      conversationMode: "new-per-item",
-    });
+  it("accepts monotonic stages and rejects stage regression", function () {
+    store.createTask(makeRequest(1));
+    const claimed = store.claimNextTask("install-a")!;
+    const leaseId = claimed.lease!.leaseId;
+    store.reportEvent(
+      claimed.taskId,
+      { requestId: "request-1", leaseId, stage: "uploading_pdf" },
+      "install-a",
+    );
 
-    store.claimNextTask();
-    store.updateStatus(task.taskId, { status: "running" });
-    const completed = store.completeTask(task.taskId, {
-      resultMarkdown: "# Summary",
-      conversationId: "cid-1",
-      conversationUrl: "https://chatgpt.com/c/cid-1",
-      conversationTitle: "Author-2024-Paper A",
-      folderName: "文献总结",
-      folderResolved: true,
-    });
+    assert.throws(
+      () =>
+        store.reportEvent(
+          claimed.taskId,
+          { requestId: "request-2", leaseId, stage: "preparing_page" },
+          "install-a",
+        ),
+      "Invalid task stage transition",
+    );
+  });
+
+  it("does not turn a pre-send page URL into the retry target", function () {
+    store.createTask(makeRequest(1));
+    const claimed = store.claimNextTask("install-a")!;
+    const leaseId = claimed.lease!.leaseId;
+
+    store.reportEvent(
+      claimed.taskId,
+      {
+        requestId: "request-page",
+        leaseId,
+        stage: "preparing_page",
+        conversationUrl: "https://chatgpt.com/c/old-conversation",
+      },
+      "install-a",
+    );
+
+    assert.isUndefined(store.getTask(claimed.taskId)?.existingConversationUrl);
+
+    const sent = store.reportEvent(
+      claimed.taskId,
+      {
+        requestId: "request-sent",
+        leaseId,
+        stage: "prompt_sent",
+        conversationUrl: "https://chatgpt.com/c/new-conversation",
+      },
+      "install-a",
+    );
+
+    assert.equal(
+      sent.existingConversationUrl,
+      "https://chatgpt.com/c/new-conversation",
+    );
+  });
+
+  it("treats repeated request IDs as idempotent", function () {
+    store.createTask(makeRequest(1));
+    const claimed = store.claimNextTask("install-a")!;
+    const request = {
+      requestId: "request-1",
+      leaseId: claimed.lease!.leaseId,
+      stage: "preparing_page" as const,
+    };
+
+    const first = store.reportEvent(claimed.taskId, request, "install-a");
+    now += 500;
+    const repeated = store.reportEvent(claimed.taskId, request, "install-a");
+
+    assert.deepEqual(repeated, first);
+  });
+
+  it("requeues an expired lease before prompt submission", function () {
+    const task = store.createTask(makeRequest(1));
+    const firstLease = store.claimNextTask("install-a")!;
+    now += 1_001;
+
+    const reclaimed = store.claimNextTask("install-a");
+
+    assert.equal(reclaimed?.taskId, task.taskId);
+    assert.notEqual(reclaimed?.lease?.leaseId, firstLease.lease?.leaseId);
+    assert.equal(reclaimed?.sendState, "not_sent");
+  });
+
+  it("fails an expired lease after prompt submission without replaying", function () {
+    store.createTask(makeRequest(1));
+    const claimed = store.claimNextTask("install-a")!;
+    store.reportEvent(
+      claimed.taskId,
+      {
+        requestId: "request-sent",
+        leaseId: claimed.lease!.leaseId,
+        stage: "prompt_sent",
+      },
+      "install-a",
+    );
+    now += 1_001;
+
+    store.expireLeases();
+    const failed = store.getTask(claimed.taskId)!;
+
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.sendState, "unknown");
+    assert.equal(failed.errorCode, "SEND_STATE_UNKNOWN");
+    assert.isNull(store.claimNextTask("install-a"));
+  });
+
+  it("does not accept a summary result before prompt submission", function () {
+    store.createTask(makeRequest(1));
+    const claimed = store.claimNextTask("install-a")!;
+
+    assert.throws(
+      () =>
+        store.completeTask(
+          claimed.taskId,
+          {
+            requestId: "request-result",
+            leaseId: claimed.lease!.leaseId,
+            resultMarkdown: "done",
+          },
+          "install-a",
+        ),
+      "before the prompt is sent",
+    );
+  });
+
+  it("persists result and conversation metadata after prompt submission", function () {
+    store.createTask(makeRequest(1));
+    const claimed = store.claimNextTask("install-a")!;
+    const leaseId = claimed.lease!.leaseId;
+    store.reportEvent(
+      claimed.taskId,
+      { requestId: "request-sent", leaseId, stage: "prompt_sent" },
+      "install-a",
+    );
+    const completed = store.completeTask(
+      claimed.taskId,
+      {
+        requestId: "request-result",
+        leaseId,
+        resultMarkdown: "# Summary",
+        conversationId: "cid-1",
+        conversationUrl: "https://chatgpt.com/c/cid-1",
+        conversationTitle: "Paper 1",
+      },
+      "install-a",
+    );
 
     assert.equal(completed.status, "succeeded");
-    assert.equal(completed.conversationMeta?.conversationId, "cid-1");
     assert.equal(completed.resultMarkdown, "# Summary");
+    assert.equal(completed.conversationMeta?.conversationId, "cid-1");
+    assert.isUndefined(completed.lease);
   });
 
-  it("should allow status update after claim under new contract", function () {
-    const store = new WebSummaryTaskStore();
-    const task = store.createTask({
-      itemId: 1,
-      libraryId: 1,
-      title: "Paper A",
-      platform: "chatgpt",
-      actionType: "summarize",
-      conversationMode: "new-per-item",
-    });
-    store.claimNextTask();
-    const updated = store.updateStatus(task.taskId, { status: "running" });
-    assert.equal(updated.status, "running");
-  });
-
-  it("should detect recoverable conversation errors for fallback", function () {
-    assert.isTrue(
-      shouldFallbackToNewConversation(
-        new Error("当前页面不是预期的历史会话"),
-      ),
+  it("allows an open-conversation command to complete without sending", function () {
+    store.createTask(makeRequest(1, "open_conversation"));
+    const claimed = store.claimNextTask("install-a")!;
+    const completed = store.completeTask(
+      claimed.taskId,
+      {
+        requestId: "request-result",
+        leaseId: claimed.lease!.leaseId,
+        resultMarkdown: "",
+      },
+      "install-a",
     );
-    assert.isFalse(
-      shouldFallbackToNewConversation(new Error("Bridge 离线，请检查端口")),
-    );
+
+    assert.equal(completed.status, "succeeded");
   });
 
-  it("should notify task listeners on status changes", function () {
-    const store = new WebSummaryTaskStore();
-    const task = store.createTask({
-      itemId: 1,
-      libraryId: 1,
-      title: "Paper A",
-      platform: "chatgpt",
-      actionType: "summarize",
-      conversationMode: "new-per-item",
-    });
-    const updates: string[] = [];
-    const unsubscribe = store.subscribeTask(task.taskId, (nextTask) => {
-      updates.push(nextTask.status);
-    });
+  it("wakes a long-poll waiter when a task is created", async function () {
+    const waiting = store.claimNextTaskOrWait(200, "install-a");
+    setTimeout(() => store.createTask(makeRequest(3)), 20);
 
-    store.claimNextTask();
-    store.updateStatus(task.taskId, { status: "running" });
-    unsubscribe();
-    store.completeTask(task.taskId, { resultMarkdown: "done" });
+    const claimed = await waiting;
 
-    assert.deepEqual(updates, ["opening_chat", "running"]);
+    assert.equal(claimed?.status, "leased");
+    assert.equal(claimed?.itemId, 3);
   });
 
-  it("should wake long-poll waiters when tasks are created", async function () {
-    const store = new WebSummaryTaskStore();
-    const waitingTask = store.claimNextTaskOrWait(200);
-    setTimeout(() => {
-      store.createTask({
-        itemId: 3,
-        libraryId: 1,
-        title: "Paper C",
-        platform: "chatgpt",
-        actionType: "summarize",
-        conversationMode: "new-per-item",
-      });
-    }, 20);
+  it("cancels an active task immediately and invalidates its lease", function () {
+    store.createTask(makeRequest(1));
+    const claimed = store.claimNextTask("install-a")!;
 
-    const claimed = await waitingTask;
-    assert.isOk(claimed);
-    assert.equal(claimed?.status, "opening_chat");
-  });
-
-  it("should remove tasks from the store completely", function () {
-    const store = new WebSummaryTaskStore();
-    const task = store.createTask({
-      itemId: 9,
-      libraryId: 1,
-      title: "Paper Z",
-      platform: "chatgpt",
-      actionType: "summarize",
-      conversationMode: "new-per-item",
-    });
-
-    const removed = store.removeTask(task.taskId);
-
-    assert.equal(removed?.taskId, task.taskId);
-    assert.isNull(store.getTask(task.taskId));
-    assert.isNull(store.claimNextTask());
-  });
-
-  it("should emit a canceled snapshot when removing an active task", function () {
-    const store = new WebSummaryTaskStore();
-    const task = store.createTask({
-      itemId: 10,
-      libraryId: 1,
-      title: "Paper Remove",
-      platform: "chatgpt",
-      actionType: "summarize",
-      conversationMode: "new-per-item",
-    });
-
-    store.claimNextTask();
-    const removed = store.removeTask(task.taskId);
-
-    assert.equal(removed?.status, "canceled");
-    assert.equal(removed?.errorMessage, "网页总结任务已从活动列表移除");
-    assert.isNull(store.getTask(task.taskId));
-  });
-
-  it("should immediately cancel tasks that are still opening chat", function () {
-    const store = new WebSummaryTaskStore();
-    const task = store.createTask({
-      itemId: 11,
-      libraryId: 1,
-      title: "Paper Cancel",
-      platform: "chatgpt",
-      actionType: "summarize",
-      conversationMode: "new-per-item",
-    });
-
-    store.claimNextTask();
-    const canceled = store.requestCancel(task.taskId, "用户停止");
+    const canceled = store.requestCancel(claimed.taskId, "用户停止");
 
     assert.equal(canceled.status, "canceled");
     assert.equal(canceled.errorMessage, "用户停止");
-    assert.equal(store.getTask(task.taskId)?.status, "canceled");
+    assert.isUndefined(canceled.lease);
   });
 
-  it("should throw a canceled error before a bridge task exists", function () {
-    assert.throws(() => {
-      throwIfWebSummaryCanceled(true);
-    }, "已停止当前条目的AI总结");
-  });
-
-  it("should not throw when submit-stage cancellation is not requested", function () {
-    assert.doesNotThrow(() => {
-      throwIfWebSummaryCanceled(false);
+  it("notifies task listeners for lease and stage changes", function () {
+    const task = store.createTask(makeRequest(1));
+    const updates: string[] = [];
+    const unsubscribe = store.subscribeTask(task.taskId, (next) => {
+      updates.push(`${next.status}:${next.stage || "none"}`);
     });
-  });
+    const claimed = store.claimNextTask("install-a")!;
+    store.reportEvent(
+      task.taskId,
+      {
+        requestId: "request-1",
+        leaseId: claimed.lease!.leaseId,
+        stage: "preparing_page",
+      },
+      "install-a",
+    );
+    unsubscribe();
 
-  it("should preserve a user-facing canceled message when wrapping submit-stage errors", function () {
-    assert.throws(() => {
-      throwIfWebSummaryCanceled(true);
-    }, "已停止当前条目的AI总结");
+    assert.deepEqual(updates, ["leased:claimed", "leased:preparing_page"]);
   });
 });

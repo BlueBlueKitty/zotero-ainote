@@ -35,6 +35,12 @@
   "saveButton": {
     "message": "保存"
   },
+  "pairButton": {
+    "message": "与 Zotero 配对"
+  },
+  "forgetButton": {
+    "message": "忘记本地令牌"
+  },
   "testButton": {
     "message": "测试连接"
   },
@@ -55,5 +61,17 @@
   },
   "statusTestAbnormal": {
     "message": "连接可用，但检测到以下异常："
+  },
+  "statusPairedLocal": {
+    "message": "本地已保存配对令牌。"
+  },
+  "statusNotPaired": {
+    "message": "尚未配对。请点击“与 Zotero 配对”，然后在 Zotero 中批准请求。"
+  },
+  "statusPairing": {
+    "message": "正在等待 Zotero 中的确认……"
+  },
+  "statusPairSuccess": {
+    "message": "配对完成。"
   }
 }

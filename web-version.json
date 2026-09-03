@@ -3,8 +3,7 @@
     "latestVersion": "1.1.0"
   },
   "extension": {
-    "latestVersion": "0.1.2"
+    "latestVersion": "0.2.0"
   },
-  "extensionDownloadUrl": "https://raw.githubusercontent.com/BlueBlueKitty/zotero-ainote/main/dist/ainote-web-extension-v0.1.2-edge.zip"
+  "extensionDownloadUrl": "https://raw.githubusercontent.com/BlueBlueKitty/zotero-ainote/main/dist/ainote-web-extension-v0.2.0.zip"
 }
-

@@ -1,5 +1,9 @@
 import { assert } from "chai";
-import { buildNoteHtmlFromMarkdown } from "../src/modules/noteHtmlBuilder";
+import {
+  buildNoteHtmlFromMarkdown,
+  ensureZoteroNoteSchema,
+  hasZoteroNoteSchema,
+} from "../src/modules/noteHtmlBuilder";
 import { NoteSchemaExtractor } from "../src/modules/noteSchemaExtractor";
 
 describe("noteHtmlBuilder", function () {
@@ -11,9 +15,23 @@ describe("noteHtmlBuilder", function () {
     );
 
     assert.include(html, "<h2>AI全文总结：示例论文</h2>");
+    assert.match(html, /^<div data-schema-version="9">/);
     assert.include(html, "<strong>模型：</strong>ChatGPT Web");
     assert.include(html, "<li>要点一</li>");
     assert.include(html, '<span class="math">$E=mc^2$</span>');
+  });
+
+  it("should add the Zotero schema wrapper exactly once", function () {
+    const original = "<h2>Legacy summary</h2><p>Body</p>";
+    const wrapped = ensureZoteroNoteSchema(original);
+    assert.equal(
+      wrapped,
+      '<div data-schema-version="9"><h2>Legacy summary</h2><p>Body</p></div>',
+    );
+    assert.equal(ensureZoteroNoteSchema(wrapped), wrapped);
+    assert.equal((wrapped.match(/data-schema-version/g) || []).length, 1);
+    assert.isTrue(hasZoteroNoteSchema(wrapped));
+    assert.isFalse(hasZoteroNoteSchema(original));
   });
 
   it("should unwrap backtick-wrapped pure block formula in markdown", function () {
@@ -106,7 +124,10 @@ describe("noteHtmlBuilder", function () {
     assert.include(html, '<span class="math">$(i,j)$</span>');
     assert.include(html, '<span class="math">$2x$</span>');
     assert.include(html, '<span class="math">$10^{-3}$</span>');
-    assert.include(html, "金额 $100、USD $100、$1,234.56 与普通文本 $OK$ 不应转换。");
+    assert.include(
+      html,
+      "金额 $100、USD $100、$1,234.56 与普通文本 $OK$ 不应转换。",
+    );
   });
 
   it("should extract math-aware display and search text from note html", function () {

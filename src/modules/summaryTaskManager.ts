@@ -220,9 +220,10 @@ export class SummaryTaskManager {
     if (task.status === "running") {
       const runtime = this.runtimes.get(task.id);
       runtime?.cancel?.();
-      if (this.runningTaskId === task.id) {
-        this.runningTaskId = undefined;
-      }
+      // Keep the scheduler occupied until the canceled run has unwound. The
+      // web workflow may still be cleaning up its bridge task and the browser
+      // worker may still be releasing its lease. Starting the retry here
+      // would let the old and new attempts overlap on the same execution tab.
     }
 
     void removeLinkedWebTask(task);

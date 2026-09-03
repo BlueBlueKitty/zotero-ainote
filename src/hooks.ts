@@ -31,6 +31,7 @@ import { WebSummaryRelationStore } from "./modules/webSummaryRelations";
 import { SummaryTaskManager } from "./modules/summaryTaskManager";
 import { SummaryManagerWindow } from "./modules/summaryManagerWindow";
 import { getZoteroRuntimeInfo } from "./modules/zoteroCompat";
+import { HistorySyncStore } from "./modules/historySyncStore";
 
 const GENERATE_SUMMARY_MENU_ID = "ainote-generate-summary-menu";
 const WEB_CONTINUE_CHAT_MENU_ID = "ainote-web-continue-chat-menu";
@@ -59,6 +60,7 @@ async function onStartup() {
       error,
     );
   });
+  void migrateExistingAiNoteSchemasOnUpgrade();
 
   // Register preferences pane
   registerPrefsPane();
@@ -132,14 +134,12 @@ function initializeDefaultPrefsOnStartup() {
     pinCurrentPromptTemplate: false,
     promptTemplatesVersion: PROMPT_TEMPLATES_VERSION,
     enableWebSummary: true,
-    webSummaryBridgePort: "23123",
-    webSummaryPollIntervalMs: "350",
-    webSummaryRequestTimeoutMs: "15000",
-    webSummaryAutoStartBridge: true,
-    webSummaryChatGPTProjectUrl: "https://chatgpt.com",
-    webSummaryChatGPTMode: "advanced",
+    webSummaryChatGPTProjectUrl: "",
+    webSummaryResponseTimeoutMinutes: "15",
     webSummaryLogLevel: "error",
     webSummaryEnableContinueChatMenu: true,
+    webSummaryPrefsV2Migrated: false,
+    noteSchemaMigrationV1Completed: false,
     summaryListSplitRatioV2: "0.3",
     summaryMainPaneSplitRatioV1: "0.35",
   };
@@ -177,6 +177,29 @@ function initializeDefaultPrefsOnStartup() {
         ztoolkit.log(`[AiNote] 启动时强制设置配置失败: ${key}`, e);
       }
     }
+  }
+
+  if (!getPref("webSummaryPrefsV2Migrated" as any)) {
+    const obsoleteKeys = [
+      "webSummaryBridgePort",
+      "webSummaryPollIntervalMs",
+      "webSummaryRequestTimeoutMs",
+      "webSummaryAutoStartBridge",
+      "webSummaryChatGPTMode",
+    ];
+    for (const key of obsoleteKeys) {
+      Zotero.Prefs.clear(`${config.prefsPrefix}.${key}`, true);
+    }
+    const projectUrl = String(
+      getPref("webSummaryChatGPTProjectUrl" as any) || "",
+    ).replace(/\/$/, "");
+    if (
+      projectUrl === "https://chatgpt.com" ||
+      projectUrl === "https://chat.openai.com"
+    ) {
+      setPref("webSummaryChatGPTProjectUrl" as any, "");
+    }
+    setPref("webSummaryPrefsV2Migrated" as any, true);
   }
 
   const profiles = parseProfiles(getPref("profiles"));
@@ -695,12 +718,46 @@ export default {
 };
 
 function startWebSummaryBridgeIfNeeded() {
-  if (!getPref("webSummaryAutoStartBridge" as any)) {
+  if (!getPref("enableWebSummary" as any)) {
     return;
   }
   try {
     addon.data.webSummaryBridge?.start();
   } catch (error) {
     ztoolkit.log("[AiNote] Failed to start web summary bridge:", error);
+    new ztoolkit.ProgressWindow("AiNote", {
+      closeOnClick: true,
+      closeTime: 12000,
+    })
+      .createLine({
+        text: String((error as Error)?.message || "网页总结桥接启动失败"),
+        type: "error",
+      })
+      .show();
+  }
+}
+
+async function migrateExistingAiNoteSchemasOnUpgrade(): Promise<void> {
+  if (getPref("noteSchemaMigrationV1Completed" as any)) return;
+  try {
+    const report = await HistorySyncStore.migrateExistingNoteSchemas();
+    ztoolkit.log("[AiNote] Existing note schema migration completed", report);
+    if (report.failed === 0) {
+      setPref("noteSchemaMigrationV1Completed" as any, true);
+    }
+    if (report.migrated > 0) {
+      new ztoolkit.ProgressWindow("AiNote", {
+        closeOnClick: true,
+        closeTime: 6000,
+      })
+        .createLine({
+          text: `已为 ${report.migrated} 条旧 AiNote 总结笔记补充 Zotero schema 标记`,
+          type: "success",
+          progress: 100,
+        })
+        .show();
+    }
+  } catch (error) {
+    ztoolkit.log("[AiNote] Existing note schema migration failed", error);
   }
 }

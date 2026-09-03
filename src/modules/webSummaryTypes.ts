@@ -2,194 +2,110 @@ export type WebSummaryPlatform = "chatgpt";
 
 export type WebSummaryActionType = "summarize" | "open_conversation";
 
-export type WebSummaryConversationMode = "new-per-item";
+export const WEB_SUMMARY_PROTOCOL_VERSION = 2;
+export const WEB_SUMMARY_BRIDGE_PORT = 23123;
+export const WEB_SUMMARY_BRIDGE_ORIGIN = `http://127.0.0.1:${WEB_SUMMARY_BRIDGE_PORT}`;
+export const WEB_SUMMARY_LONG_POLL_MS = 20_000;
+export const WEB_SUMMARY_LEASE_DURATION_MS = 45_000;
+export const WEB_SUMMARY_PAIRING_REQUEST_TTL_MS = 120_000;
+export const WEB_SUMMARY_PAIRING_REQUEST_COOLDOWN_MS = 5_000;
+export const WEB_SUMMARY_RESPONSE_START_TIMEOUT_MS = 60_000;
+export const WEB_SUMMARY_DEFAULT_RESPONSE_TIMEOUT_MINUTES = 15;
 
-export type WebSummaryChatGPTMode = "fast" | "balanced" | "advanced";
+export const WEB_SUMMARY_REQUIRED_CAPABILITIES = [
+  "summarize",
+  "openConversation",
+  "lease",
+] as const;
 
-export function normalizeWebSummaryChatGPTMode(value: unknown): WebSummaryChatGPTMode {
-  const normalized = String(value || "").trim().toLowerCase();
-  switch (normalized) {
-    case "instant":
-    case "fast":
-      return "fast";
-    case "balanced":
-    case "smart":
-      return "balanced";
-    case "thinking":
-    case "advanced":
-      return "advanced";
-    default:
-      return "advanced";
-  }
-}
+export type WebSummaryCapability =
+  (typeof WEB_SUMMARY_REQUIRED_CAPABILITIES)[number];
 
-export function getWebSummaryChatGPTModeLabel(mode: WebSummaryChatGPTMode): string {
-  switch (mode) {
-    case "fast":
-      return "Fast";
-    case "balanced":
-      return "Balanced";
-    case "advanced":
-    default:
-      return "Advanced";
-  }
-}
+export type WebSummaryBrowser = "chrome" | "edge";
 
 export type WebSummaryTaskStatus =
   | "queued"
-  | "claimed"
-  | "opening_chat"
-  | "locating_folder"
-  | "creating_conversation"
-  | "downloading_pdf"
-  | "awaiting_user_send"
-  | "running"
+  | "leased"
   | "succeeded"
   | "failed"
   | "canceled";
 
+export const WEB_SUMMARY_TASK_STAGES = [
+  "claimed",
+  "preparing_page",
+  "uploading_pdf",
+  "ready_to_send",
+  "prompt_sent",
+  "waiting_response",
+  "extracting_result",
+] as const;
+
+export type WebSummaryTaskStage = (typeof WEB_SUMMARY_TASK_STAGES)[number];
+export type WebSummarySendState = "not_sent" | "sent" | "unknown";
+
 export type BridgeErrorCode =
   | "UNAUTHORIZED"
+  | "PAIRING_REQUEST_NOT_FOUND"
+  | "PAIRING_REJECTED"
   | "INVALID_REQUEST"
   | "TASK_NOT_FOUND"
   | "INVALID_STATUS_TRANSITION"
+  | "LEASE_MISMATCH"
+  | "LEASE_EXPIRED"
+  | "SEND_STATE_UNKNOWN"
   | "PDF_NOT_FOUND"
-  | "FOLDER_REQUIRED"
-  | "UNSUPPORTED_PLATFORM"
+  | "PROJECT_REQUIRED"
+  | "PROJECT_UNAVAILABLE"
+  | "CONVERSATION_UNAVAILABLE"
   | "PROTOCOL_MISMATCH"
   | "REQUIRED_CAPABILITY_MISSING"
-  | "PERMISSION_MISSING"
   | "TARGET_PAGE_UNAVAILABLE"
+  | "HUMAN_INTERVENTION_REQUIRED"
+  | "RESPONSE_START_TIMEOUT"
+  | "RESPONSE_TIMEOUT"
   | "EXTENSION_OFFLINE"
+  | "BRIDGE_PORT_IN_USE"
   | "INTERNAL_ERROR";
 
-export const WEB_SUMMARY_PROTOCOL_VERSION = "1.0.0";
-export const WEB_SUMMARY_TASK_CONTRACT_VERSION = "1.0.0";
-export const WEB_SUMMARY_EXTENSION_HEARTBEAT_TTL_MS = 180_000;
-export const WEB_SUMMARY_UPDATE_CHECK_TTL_MS = 12 * 60 * 60 * 1000;
-export const WEB_SUMMARY_VERSION_INFO_URL =
-  "https://raw.githubusercontent.com/BlueBlueKitty/zotero-ainote/main/web-version.json";
-
-export const WEB_SUMMARY_REQUIRED_CAPABILITIES = [
-  "task.summarize",
-  "task.open_conversation",
-  "task.status.report",
-  "task.result.report",
-  "task.cancel",
-  "task.fetch_pdf",
-  "task.mode_switch",
-  "task.streaming_result_fetch",
-] as const;
-
-export type WebSummaryCapability = (typeof WEB_SUMMARY_REQUIRED_CAPABILITIES)[number];
-
-export const WEB_SUMMARY_REQUIRED_PERMISSIONS = [
-  "storage",
-  "tabs",
-  "scripting",
-  "host:http://127.0.0.1/*",
-  "host:https://chatgpt.com/*",
-] as const;
-
-export type WebSummaryPermission = (typeof WEB_SUMMARY_REQUIRED_PERMISSIONS)[number];
-
-export interface CompatibilityWarning {
-  code: string;
-  message: string;
-}
-
-export interface CompatibilityBlockReason {
-  code: BridgeErrorCode;
-  message: string;
-}
-
-export interface ExtensionRuntimeStatus {
-  online: boolean;
-  lastHeartbeatAt?: string;
-  lastActivityAt?: string;
-}
-
-export interface ExtensionEnvironmentStatus {
-  targetReachable: boolean;
-  contentScriptReady: boolean;
-  chatgptTabReady: boolean;
-}
-
-export interface ExtensionPermissionStatus {
-  permission: string;
-  granted: boolean;
-}
-
-export interface ExtensionHandshakePayload {
+export interface WebSummaryExtensionIdentity {
+  installId: string;
   extensionVersion: string;
-  protocolVersion: string;
-  taskContractVersion: string;
+  protocolVersion: number;
+  browser: WebSummaryBrowser;
   capabilities: string[];
-  permissions: ExtensionPermissionStatus[];
-  environment: ExtensionEnvironmentStatus;
-  heartbeatAt: string;
 }
 
-export interface UpdateVersionInfo {
-  latestVersion?: string;
-  minCompatibleProtocol?: string;
+export interface WebSummaryPairedExecutor extends WebSummaryExtensionIdentity {
+  pairedAt: string;
+  lastSeenAt?: string;
 }
 
-export interface WebSummaryVersionInfoFile {
-  plugin?: UpdateVersionInfo;
-  extension?: UpdateVersionInfo;
+export interface PairingRequest extends WebSummaryExtensionIdentity {
+  requestId: string;
+  requestedAt: string;
+  expiresAt: string;
+  status: "pending" | "approved" | "rejected" | "expired" | "delivered";
+  rejectionReason?: string;
 }
 
-export interface CompatibilityDetails {
-  pluginVersion: string;
-  extensionVersion?: string;
-  protocolVersion: string;
-  extensionProtocolVersion?: string;
-  taskContractVersion: string;
-  extensionTaskContractVersion?: string;
-  requiredCapabilities: string[];
-  extensionCapabilities: string[];
-  requiredPermissions: string[];
-  extensionPermissions: ExtensionPermissionStatus[];
-  environment?: ExtensionEnvironmentStatus;
-  runtimeStatus: ExtensionRuntimeStatus;
+export type CreatePairingRequest = WebSummaryExtensionIdentity;
+
+export interface CreatePairingResponse {
+  request: PairingRequest;
 }
 
-export interface CompatibilityReport {
-  allowCreateSummarize: boolean;
-  blockingReasons: CompatibilityBlockReason[];
-  warnings: CompatibilityWarning[];
-  details: CompatibilityDetails;
+export interface PairingStatusResponse {
+  request: PairingRequest;
+  token?: string;
 }
 
-export interface BridgeHealthResponse {
-  status: string;
-  pluginVersion: string;
-  protocolVersion: string;
-  taskContractVersion: string;
-  requiredCapabilities: string[];
-  requiredPermissions: string[];
-  runtimeStatus: ExtensionRuntimeStatus;
-  compatibilityWarnings?: CompatibilityWarning[];
-  checks?: BridgeHealthCheckItem[];
+export interface WebSummaryBridgeStatus {
+  running: boolean;
+  protocolVersion: number;
+  paired: boolean;
+  executor?: WebSummaryPairedExecutor;
+  pendingPairingRequest?: PairingRequest;
   updatedAt: string;
-}
-
-export interface BridgeHealthCheckItem {
-  key:
-    | "runtime_online"
-    | "protocol_compatible"
-    | "task_contract_compatible"
-    | "required_capabilities"
-    | "required_permissions"
-    | "target_page_environment"
-    | "plugin_update"
-    | "extension_update";
-  scope: "basic" | "runtime";
-  title: string;
-  status: "pass" | "warn" | "fail";
-  message: string;
-  details?: Record<string, unknown>;
 }
 
 export interface WebSummaryConversationMeta {
@@ -206,6 +122,13 @@ export interface WebSummaryItemChatLink extends WebSummaryConversationMeta {
   platform: WebSummaryPlatform;
 }
 
+export interface WebSummaryTaskLease {
+  leaseId: string;
+  executorInstallId: string;
+  claimedAt: string;
+  expiresAt: string;
+}
+
 export interface WebSummaryTask {
   taskId: string;
   itemId: number;
@@ -214,24 +137,23 @@ export interface WebSummaryTask {
   pdfPath?: string;
   pdfFileName?: string;
   prompt?: string;
+  responseTimeoutMs?: number;
   createdAt: string;
   updatedAt: string;
   status: WebSummaryTaskStatus;
+  stage?: WebSummaryTaskStage;
+  sendState: WebSummarySendState;
+  sentAt?: string;
   platform: WebSummaryPlatform;
   actionType: WebSummaryActionType;
-  conversationMode: WebSummaryConversationMode;
   projectUrl?: string;
-  chatgptMode?: WebSummaryChatGPTMode;
   conversationTitle?: string;
   existingConversationId?: string;
   existingConversationUrl?: string;
+  lease?: WebSummaryTaskLease;
   resultMarkdown?: string;
   resultSource?: "api" | "dom";
   resultDebugInfo?: string;
-  modeSwitchOk?: boolean;
-  modeSwitchFailed?: boolean;
-  modeSwitchError?: string;
-  pdfUploadReady?: boolean;
   debugMessage?: string;
   errorCode?: BridgeErrorCode;
   errorMessage?: string;
@@ -247,11 +169,10 @@ export interface CreateTaskRequest {
   pdfPath?: string;
   pdfFileName?: string;
   prompt?: string;
+  responseTimeoutMs?: number;
   platform: WebSummaryPlatform;
   actionType: WebSummaryActionType;
-  conversationMode: WebSummaryConversationMode;
   projectUrl?: string;
-  chatgptMode?: WebSummaryChatGPTMode;
   conversationTitle?: string;
   existingConversationId?: string;
   existingConversationUrl?: string;
@@ -274,31 +195,35 @@ export interface ClaimNextTaskResponse {
   task: WebSummaryTask | null;
 }
 
-export interface ReportTaskStatusRequest {
-  status: WebSummaryTaskStatus;
-  conversationId?: string;
-  conversationUrl?: string;
-  conversationTitle?: string;
-  folderName?: string;
-  folderResolved?: boolean;
-  errorCode?: BridgeErrorCode;
-  errorMessage?: string;
-  modeSwitchOk?: boolean;
-  modeSwitchFailed?: boolean;
-  modeSwitchError?: string;
-  pdfUploadReady?: boolean;
+export interface ReportTaskEventRequest extends WebSummaryConversationMeta {
+  requestId: string;
+  leaseId: string;
+  stage: WebSummaryTaskStage;
   debugMessage?: string;
 }
 
 export interface ReportTaskResultRequest extends WebSummaryConversationMeta {
+  requestId: string;
+  leaseId: string;
   resultMarkdown: string;
   resultSource?: "api" | "dom";
   resultDebugInfo?: string;
 }
 
 export interface ReportTaskFailureRequest extends WebSummaryConversationMeta {
+  requestId: string;
+  leaseId: string;
   errorCode: BridgeErrorCode;
   errorMessage: string;
+  sendState?: WebSummarySendState;
+  debugMessage?: string;
+}
+
+export interface BridgeSessionResponse {
+  protocolVersion: number;
+  executor: WebSummaryPairedExecutor;
+  requiredCapabilities: string[];
+  updatedAt: string;
 }
 
 export interface BridgeEnvelope<T> {
@@ -308,4 +233,8 @@ export interface BridgeEnvelope<T> {
     code: BridgeErrorCode | "UNKNOWN_ERROR";
     message: string;
   };
+}
+
+export interface AuthenticatedExtensionContext {
+  installId: string;
 }
