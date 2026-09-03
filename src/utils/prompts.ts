@@ -5,7 +5,7 @@
 
 import { RuntimeLocale, getRuntimeLocale, runtimeT } from "./runtimeLocale";
 
-export const PROMPT_TEMPLATES_VERSION = 2;
+export const PROMPT_TEMPLATES_VERSION = 4;
 
 type BuiltInTemplateDefinition = {
   id: string;
@@ -22,15 +22,16 @@ const BUILT_IN_TEMPLATE_DEFINITIONS: Record<
     {
       id: "builtin-ai-full-summary",
       name: "AI全文总结",
-      description: "适合想完整理解论文，不限制输出结构，但要求讲得详细。",
-      content: `请你用中文详细讲解下面这篇论文。
-输出要求：
-1. 开始时先用一段话总结这篇论文的核心内容；
-2. 后续围绕论文内容展开详细讲解；
-3. 不限制总结结构，但要逻辑清晰、层次分明；
-4. 对关键术语、方法和结论进行必要解释；
-5. 只输出关于论文内容的讲解，不要包含寒暄、客套话或无关内容；
-6. 不要编造原文没有明确说明的信息，如果信息缺失，请说明“原文未明确说明”。`,
+      description: "适合按照论文原有结构进行总结",
+      content: `请你用中文总结下面这篇论文。
+要求：
+1、开头用一段话概括论文的研究问题或主题、主要方法或论述、核心结果和结论；
+2、后续严格按照论文原有的章节、标题和论述顺序进行总结，不要自行设计结构或拆分出大量小标题；
+3、根据论文实际类型灵活总结，例如研究论文、综述、方法论文或理论论文，不要强行套用“数据—方法—实验—结论”等固定栏目；
+4、对关键术语、公式和机制作必要解释，但不要展开过多基础科普或重复说明；
+5、合并重复内容，保持简洁、准确、信息密度高；
+6、严格依据原文，不补充未明确说明的内容；信息缺失时写“原文未明确说明”；
+7、只输出论文内容，不要包含寒暄或无关内容。`,
     },
     {
       id: "builtin-ai-abstract-summary",
@@ -108,15 +109,16 @@ const BUILT_IN_TEMPLATE_DEFINITIONS: Record<
     {
       id: "builtin-ai-full-summary",
       name: "AI全文總結",
-      description: "適合想完整理解論文，不限制輸出結構，但要求講解詳細。",
-      content: `請你用中文詳細講解下面這篇論文。
-輸出要求：
-1. 開始時先用一段話總結這篇論文的核心內容；
-2. 後續圍繞論文內容展開詳細講解；
-3. 不限制總結結構，但要邏輯清晰、層次分明；
-4. 對關鍵術語、方法和結論進行必要解釋；
-5. 只輸出關於論文內容的講解，不要包含寒暄、客套話或無關內容；
-6. 不要編造原文沒有明確說明的資訊，如果資訊缺失，請說明「原文未明確說明」。`,
+      description: "適合按照論文原有結構進行總結",
+      content: `請用中文總結下面這篇論文。
+要求：
+1、開頭用一段話概括論文的研究問題或主題、主要方法或論述、核心結果和結論；
+2、後續嚴格按照論文原有的章節、標題和論述順序進行總結，不要自行設計結構或拆分出大量小標題；
+3、根據論文實際類型靈活總結，例如研究論文、綜述、方法論文或理論論文，不要強行套用「數據—方法—實驗—結論」等固定欄目；
+4、對關鍵術語、公式和機制做必要解釋，但不要展開過多基礎科普或重複說明；
+5、合併重複內容，保持簡潔、準確、資訊密度高；
+6、嚴格依據原文，不補充未明確說明的內容；資訊缺失時寫「原文未明確說明」；
+7、只輸出論文內容，不要包含寒暄或無關內容。`,
     },
     {
       id: "builtin-ai-abstract-summary",
@@ -194,15 +196,17 @@ const BUILT_IN_TEMPLATE_DEFINITIONS: Record<
     {
       id: "builtin-ai-full-summary",
       name: "AI Full Summary",
-      description: "Good for understanding the whole paper in detail without forcing a rigid output structure.",
-      content: `Please explain the following paper in detail in English.
-Output requirements:
-1. Start with one paragraph summarizing the core content of the paper.
-2. Then provide a detailed explanation based on the paper.
-3. The summary structure is flexible, but it must be clear and well organized.
-4. Explain key terms, methods, and conclusions when necessary.
-5. Output only the explanation of the paper itself, without greetings or unrelated text.
-6. Do not fabricate information not explicitly stated in the paper. If something is missing, say "The original paper does not explicitly state this."`,
+      description:
+        "Suitable for summaries that follow the paper's original structure.",
+      content: `Please summarize the following paper in English.
+Requirements:
+1. Start with one paragraph summarizing the research question or topic, main methods or arguments, core results, and conclusion.
+2. Follow the paper's original sections, headings, and order. Do not impose your own structure or split the content into many small headings.
+3. Adapt the summary to the paper's actual type, such as a research article, review, methods paper, or theoretical paper. Do not force it into fixed categories such as data, methods, experiments, and conclusion.
+4. Explain key terms, formulas, and mechanisms when necessary, without excessive basic background or repetition.
+5. Merge repetitive content and keep the summary concise, accurate, and information-dense.
+6. Rely strictly on the original paper. Do not add unstated information; if information is missing, write "The original paper does not explicitly state this."
+7. Output only the paper's content, without greetings or unrelated text.`,
     },
     {
       id: "builtin-ai-abstract-summary",
@@ -255,7 +259,8 @@ Output requirements:
     {
       id: "builtin-ai-innovation-summary",
       name: "AI Innovation Summary",
-      description: "Good for extracting contributions, innovations, and differences from prior work.",
+      description:
+        "Good for extracting contributions, innovations, and differences from prior work.",
       content: `Please summarize the innovations of the following paper in English.
 Requirements:
 1. Focus only on the innovations, main contributions, and differences from prior studies.
@@ -277,6 +282,65 @@ Judge whether the innovations are theoretical, methodological, data-related, app
     },
   ],
 };
+
+// Keep the previous zh-CN default so an unmodified built-in template can be
+// migrated without overwriting a user's customized template.
+const LEGACY_BUILT_IN_TEMPLATE_SNAPSHOTS: BuiltInTemplateDefinition[] = [
+  {
+    id: "builtin-ai-full-summary",
+    name: "AI全文总结",
+    description: "适合想完整理解论文，不限制输出结构，但要求讲得详细。",
+    content: `请你用中文详细讲解下面这篇论文。
+输出要求：
+1. 开始时先用一段话总结这篇论文的核心内容；
+2. 后续围绕论文内容展开详细讲解；
+3. 不限制总结结构，但要逻辑清晰、层次分明；
+4. 对关键术语、方法和结论进行必要解释；
+5. 只输出关于论文内容的讲解，不要包含寒暄、客套话或无关内容；
+6. 不要编造原文没有明确说明的信息，如果信息缺失，请说明“原文未明确说明”。`,
+  },
+  {
+    id: "builtin-ai-full-summary",
+    name: "AI全文总结",
+    description: "适合按照论文原本结构进行总结",
+    content: `请你用中文总结下面这篇论文。
+要求：
+1、开头先用一段话概括论文的研究问题、核心方法、主要结果和结论；
+2、后续尽量按照论文原有章节结构和论述顺序进行总结，不要自行拆成大量小标题；
+3、重点讲清研究背景、数据、方法流程、实验结果、结论与局限，其中方法部分可适当详细；
+4、对关键术语、公式和物理机制做必要解释，但不要展开过多基础科普，也不要重复解释；
+5、合并相近内容，避免使用大量“为什么……”“如何……”式小节，整体保持简洁、信息密度高；
+6、严格依据原文，不要补充论文未明确说明的内容；如信息缺失，请写“原文未明确说明”；
+7、只输出论文内容，不要包含寒暄或无关内容。`,
+  },
+  {
+    id: "builtin-ai-full-summary",
+    name: "AI全文總結",
+    description: "適合想完整理解論文，不限制輸出結構，但要求講解詳細。",
+    content: `請你用中文詳細講解下面這篇論文。
+輸出要求：
+1. 開始時先用一段話總結這篇論文的核心內容；
+2. 後續圍繞論文內容展開詳細講解；
+3. 不限制總結結構，但要邏輯清晰、層次分明；
+4. 對關鍵術語、方法和結論進行必要解釋；
+5. 只輸出關於論文內容的講解，不要包含寒暄、客套話或無關內容；
+6. 不要編造原文沒有明確說明的資訊，如果資訊缺失，請說明「原文未明確說明」。`,
+  },
+  {
+    id: "builtin-ai-full-summary",
+    name: "AI Full Summary",
+    description:
+      "Good for understanding the whole paper in detail without forcing a rigid output structure.",
+    content: `Please explain the following paper in detail in English.
+Output requirements:
+1. Start with one paragraph summarizing the core content of the paper.
+2. Then provide a detailed explanation based on the paper.
+3. The summary structure is flexible, but it must be clear and well organized.
+4. Explain key terms, methods, and conclusions when necessary.
+5. Output only the explanation of the paper itself, without greetings or unrelated text.
+6. Do not fabricate information not explicitly stated in the paper. If something is missing, say "The original paper does not explicitly state this."`,
+  },
+];
 
 export type PromptTemplate = {
   id: string;
@@ -318,10 +382,17 @@ function getBuiltInTemplateSnapshotsById() {
       });
     },
   );
+  LEGACY_BUILT_IN_TEMPLATE_SNAPSHOTS.forEach((definition) => {
+    const list = snapshots.get(definition.id) || [];
+    list.push(definition);
+    snapshots.set(definition.id, list);
+  });
   return snapshots;
 }
 
-function normalizePromptTemplate(template: Partial<PromptTemplate>): PromptTemplate | null {
+function normalizePromptTemplate(
+  template: Partial<PromptTemplate>,
+): PromptTemplate | null {
   const id = String(template.id || "").trim();
   const name = String(template.name || "").trim();
   const content = typeof template.content === "string" ? template.content : "";
@@ -401,7 +472,8 @@ export function isPromptTemplateNameUnique(
   }
   return !templates.some(
     (template) =>
-      template.id !== currentId && template.name.trim().toLowerCase() === normalized,
+      template.id !== currentId &&
+      template.name.trim().toLowerCase() === normalized,
   );
 }
 
@@ -411,7 +483,9 @@ export function ensurePromptTemplateState(
   rawVersion?: unknown,
 ): PromptTemplateState {
   const defaults = createDefaultPromptTemplates();
-  const defaultById = new Map(defaults.map((template) => [template.id, template]));
+  const defaultById = new Map(
+    defaults.map((template) => [template.id, template]),
+  );
   const snapshotById = getBuiltInTemplateSnapshotsById();
   const parsedTemplates = parsePromptTemplates(rawTemplates);
   const activeTemplateId = String(rawActiveTemplateId || "").trim();
@@ -439,14 +513,17 @@ export function ensurePromptTemplateState(
   }
 
   const validActiveTemplateId =
-    activeTemplateId && templates.some((template) => template.id === activeTemplateId)
+    activeTemplateId &&
+    templates.some((template) => template.id === activeTemplateId)
       ? activeTemplateId
       : "";
 
   let nextActiveTemplateId = validActiveTemplateId;
   if (!nextActiveTemplateId) {
     nextActiveTemplateId =
-      templates.find((template) => template.id === getDefaultActivePromptTemplateId())?.id ||
+      templates.find(
+        (template) => template.id === getDefaultActivePromptTemplateId(),
+      )?.id ||
       templates[0]?.id ||
       getDefaultActivePromptTemplateId();
     changed = true;
@@ -465,11 +542,16 @@ export function ensurePromptTemplateState(
 
     const knownSnapshots = snapshotById.get(template.id) || [];
     if (
-      shouldRefreshBuiltInTemplate(nextTemplate, builtInTemplate, knownSnapshots)
+      shouldRefreshBuiltInTemplate(
+        nextTemplate,
+        builtInTemplate,
+        knownSnapshots,
+      )
     ) {
       if (
         nextTemplate.name !== builtInTemplate.name ||
-        (nextTemplate.description || "") !== (builtInTemplate.description || "") ||
+        (nextTemplate.description || "") !==
+          (builtInTemplate.description || "") ||
         nextTemplate.content !== builtInTemplate.content
       ) {
         changed = true;
@@ -498,7 +580,11 @@ export function getActivePromptTemplate(
   rawActiveTemplateId: unknown,
   rawVersion?: unknown,
 ): PromptTemplate {
-  const state = ensurePromptTemplateState(rawTemplates, rawActiveTemplateId, rawVersion);
+  const state = ensurePromptTemplateState(
+    rawTemplates,
+    rawActiveTemplateId,
+    rawVersion,
+  );
   return (
     findPromptTemplateById(state.templates, state.activeTemplateId) ||
     state.templates[0] ||
@@ -550,7 +636,10 @@ export function buildUserMessage(prompt: string, text: string): string {
   return `${prompt}\n\n<Paper>\n${text}\n</Paper>`;
 }
 
-export function buildSummaryHeading(templateName: string, itemTitle: string): string {
+export function buildSummaryHeading(
+  templateName: string,
+  itemTitle: string,
+): string {
   return `${templateName.trim()} - ${itemTitle.trim()}`;
 }
 
@@ -570,7 +659,10 @@ export function ensureSummaryHeading(content: string, heading: string): string {
   return `${trimmedHeading}\n\n${trimmedContent}`;
 }
 
-export function stripLeadingSummaryHeading(content: string, heading: string): string {
+export function stripLeadingSummaryHeading(
+  content: string,
+  heading: string,
+): string {
   const normalizedContent = String(content || "").replace(/^\uFEFF/, "");
   const lines = normalizedContent.split(/\r?\n/);
   if (!lines.length) {
