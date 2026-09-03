@@ -27,7 +27,7 @@ try {
   foreach ($name in @("_locales", "icons")) {
     Copy-Item -LiteralPath (Join-Path $extensionDirectory $name) -Destination $temporaryDirectory -Recurse
   }
-  foreach ($name in @("background.js", "bridge-client.js", "compat.js", "content.js", "debug.js", "manifest.json", "options.html", "options.js", "page-contract.js", "result-extractor.js", "storage.js")) {
+  foreach ($name in @("background.js", "bridge-client.js", "compat.js", "content.js", "debug.js", "manifest.json", "options.html", "options.js", "page-contract.js", "pairing.js", "result-extractor.js", "storage.js")) {
     Copy-Item -LiteralPath (Join-Path $extensionDirectory $name) -Destination $temporaryDirectory
   }
   if (Test-Path -LiteralPath $outputFile) {
