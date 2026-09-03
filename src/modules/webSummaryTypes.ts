@@ -7,6 +7,7 @@ export const WEB_SUMMARY_BRIDGE_PORT = 23123;
 export const WEB_SUMMARY_BRIDGE_ORIGIN = `http://127.0.0.1:${WEB_SUMMARY_BRIDGE_PORT}`;
 export const WEB_SUMMARY_LONG_POLL_MS = 20_000;
 export const WEB_SUMMARY_LEASE_DURATION_MS = 45_000;
+export const WEB_SUMMARY_EXTENSION_ONLINE_TTL_MS = 60_000;
 export const WEB_SUMMARY_PAIRING_REQUEST_TTL_MS = 120_000;
 export const WEB_SUMMARY_PAIRING_REQUEST_COOLDOWN_MS = 5_000;
 export const WEB_SUMMARY_RESPONSE_START_TIMEOUT_MS = 60_000;
@@ -103,6 +104,7 @@ export interface WebSummaryBridgeStatus {
   running: boolean;
   protocolVersion: number;
   paired: boolean;
+  extensionOnline: boolean;
   executor?: WebSummaryPairedExecutor;
   pendingPairingRequest?: PairingRequest;
   updatedAt: string;

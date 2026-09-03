@@ -37,6 +37,88 @@ const GENERATE_SUMMARY_MENU_ID = "ainote-generate-summary-menu";
 const WEB_CONTINUE_CHAT_MENU_ID = "ainote-web-continue-chat-menu";
 const NOTE_FORMAT_MENU_ID = "ainote-note-format-menu";
 const REOPEN_OUTPUT_WINDOW_MENU_ID = "ainote-reopen-output-window";
+const PAIRING_STATUS_CHECK_INTERVAL_MS = 1_000;
+
+let pairingStatusCheckTimer: ReturnType<typeof setTimeout> | undefined;
+let pairingPromptRequestId = "";
+let pairingPromptShowing = false;
+
+function showPairingApprovalPrompt(request: any): void {
+  const bridge = addon.data.webSummaryBridge;
+  if (!bridge) return;
+  const status = bridge.getStatus();
+  const currentPairing = status.executor;
+  const currentText = currentPairing
+    ? getString("web-summary-pairing-prompt-current" as any, {
+        args: {
+          browser: currentPairing.browser,
+          version: currentPairing.extensionVersion,
+          installId: currentPairing.installId,
+        },
+      })
+    : getString("web-summary-pairing-prompt-none" as any);
+  const requestText = getString("web-summary-pairing-prompt-request" as any, {
+    args: {
+      browser: request.browser,
+      version: request.extensionVersion,
+      installId: request.installId,
+    },
+  });
+  const message = [
+    currentText,
+    requestText,
+    getString("web-summary-pairing-prompt-question" as any),
+  ].join("\n\n");
+  const mainWindow = Zotero.getMainWindow();
+  let approved = false;
+  try {
+    if (typeof Services !== "undefined" && Services.prompt) {
+      approved = Services.prompt.confirm(
+        mainWindow as any,
+        getString("web-summary-pairing-prompt-title" as any),
+        message,
+      );
+    } else if (typeof mainWindow?.confirm === "function") {
+      approved = mainWindow.confirm(message);
+    }
+  } catch (error) {
+    ztoolkit.log("[AiNote] Pairing approval prompt failed:", error);
+  }
+
+  try {
+    if (approved) {
+      bridge.approvePairingRequest(request.requestId);
+    } else {
+      bridge.rejectPairingRequest(request.requestId);
+    }
+  } catch (error) {
+    ztoolkit.log("[AiNote] Pairing request decision failed:", error);
+  }
+}
+
+function schedulePairingApprovalCheck(): void {
+  if (pairingStatusCheckTimer) return;
+  pairingStatusCheckTimer = setTimeout(() => {
+    pairingStatusCheckTimer = undefined;
+    if (!addon.data.alive) return;
+    const status = addon.data.webSummaryBridge?.getStatus();
+    const request = status?.pendingPairingRequest;
+    if (
+      request?.status === "pending" &&
+      request.requestId !== pairingPromptRequestId &&
+      !pairingPromptShowing
+    ) {
+      pairingPromptRequestId = request.requestId;
+      pairingPromptShowing = true;
+      try {
+        showPairingApprovalPrompt(request);
+      } finally {
+        pairingPromptShowing = false;
+      }
+    }
+    schedulePairingApprovalCheck();
+  }, PAIRING_STATUS_CHECK_INTERVAL_MS);
+}
 
 async function onStartup() {
   await Promise.all([
@@ -663,6 +745,10 @@ async function onMainWindowUnload(win: Window): Promise<void> {
 }
 
 function onShutdown(): void {
+  if (pairingStatusCheckTimer) clearTimeout(pairingStatusCheckTimer);
+  pairingStatusCheckTimer = undefined;
+  pairingPromptRequestId = "";
+  pairingPromptShowing = false;
   addon.data.webSummaryBridge?.stop();
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
@@ -723,6 +809,7 @@ function startWebSummaryBridgeIfNeeded() {
   }
   try {
     addon.data.webSummaryBridge?.start();
+    schedulePairingApprovalCheck();
   } catch (error) {
     ztoolkit.log("[AiNote] Failed to start web summary bridge:", error);
     new ztoolkit.ProgressWindow("AiNote", {

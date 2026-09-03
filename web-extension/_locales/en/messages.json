@@ -39,7 +39,7 @@
     "message": "Pair with Zotero"
   },
   "forgetButton": {
-    "message": "Forget local token"
+    "message": "Unpair from Zotero"
   },
   "testButton": {
     "message": "Test Connection"
@@ -73,5 +73,8 @@
   },
   "statusPairSuccess": {
     "message": "Pairing completed."
+  },
+  "statusAlreadyPaired": {
+    "message": "Already paired with Zotero."
   }
 }

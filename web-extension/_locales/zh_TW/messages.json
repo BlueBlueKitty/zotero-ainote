@@ -39,7 +39,7 @@
     "message": "與 Zotero 配對"
   },
   "forgetButton": {
-    "message": "忘記本機權杖"
+    "message": "取消與 Zotero 的配對"
   },
   "testButton": {
     "message": "測試連線"
@@ -73,5 +73,8 @@
   },
   "statusPairSuccess": {
     "message": "配對完成。"
+  },
+  "statusAlreadyPaired": {
+    "message": "已與 Zotero 配對，無需重複操作。"
   }
 }

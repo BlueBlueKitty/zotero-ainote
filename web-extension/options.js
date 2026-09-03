@@ -7,6 +7,7 @@ import {
   getSettings,
   saveSettings,
 } from "./storage.js";
+import { revokePairing } from "./bridge-client.js";
 
 const logLevel = /** @type {HTMLSelectElement} */ (
   document.getElementById("logLevel")
@@ -51,7 +52,9 @@ async function onPair() {
       type: "ainote-start-pairing",
     });
     if (!result?.ok) throw new Error(result?.error || "Pairing failed");
-    status.textContent = t("statusPairSuccess");
+    status.textContent = result.alreadyPaired
+      ? t("statusAlreadyPaired")
+      : t("statusPairSuccess");
   } catch (error) {
     status.textContent = `${t("statusTestFailed")}: ${
       error instanceof Error ? error.message : String(error)
@@ -75,6 +78,16 @@ async function onTest() {
 }
 
 async function onForget() {
+  try {
+    await revokePairing();
+  } catch (error) {
+    if (error?.code !== "UNAUTHORIZED") {
+      status.textContent = `${t("statusTestFailed")}: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      return;
+    }
+  }
   await clearPairingToken();
   status.textContent = t("statusNotPaired");
 }

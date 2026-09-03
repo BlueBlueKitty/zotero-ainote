@@ -287,7 +287,8 @@ export class WebSummaryBridgeServer {
   }
 
   public createTask(request: CreateTaskRequest): CreateTaskResponse {
-    if (!this.pairingStore.getStatus(this.isRunning).paired) {
+    const pairingStatus = this.pairingStore.getStatus(this.isRunning);
+    if (!pairingStatus.paired) {
       throw bridgeError(
         "EXTENSION_OFFLINE",
         "浏览器扩展尚未与 AiNote 配对，请先在设置中完成配对",
@@ -436,6 +437,14 @@ export class WebSummaryBridgeServer {
         updatedAt: new Date().toISOString(),
       };
       return buildJsonResponse(200, jsonEnvelope(response), origin);
+    }
+
+    if (
+      request.pathname === `${API_PREFIX}/pairing/revoke` &&
+      request.method === "POST"
+    ) {
+      this.pairingStore.revoke();
+      return buildJsonResponse(200, jsonEnvelope({ revoked: true }), origin);
     }
 
     if (

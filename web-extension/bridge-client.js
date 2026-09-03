@@ -137,6 +137,10 @@ export async function getSession() {
   return request("/bridge/v2/session");
 }
 
+export async function revokePairing() {
+  return request("/bridge/v2/pairing/revoke", { method: "POST" });
+}
+
 export async function claimNextTask(waitMs = 20_000) {
   return request(
     `/bridge/v2/tasks/next?waitMs=${encodeURIComponent(String(waitMs))}`,

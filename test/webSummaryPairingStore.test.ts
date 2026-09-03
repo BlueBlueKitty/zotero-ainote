@@ -99,6 +99,28 @@ describe("webSummaryPairingStore", function () {
     assert.equal(persistence.value?.executor.installId, "install-a");
   });
 
+  it("reports an approved extension offline after its last heartbeat expires without losing pairing", function () {
+    store = new WebSummaryPairingStore(persistence, {
+      now: () => now,
+      randomId: () => `request-${++sequence}`,
+      randomToken: () => `token-${"a".repeat(64)}-${sequence}`,
+      requestTtlMs: 2_000,
+      requestCooldownMs: 1_000,
+      executorOnlineTtlMs: 5_000,
+    });
+    const request = store.createPairingRequest(identity());
+    store.approvePairingRequest(request.requestId);
+    const token = store.getPairingStatus(request.requestId).token!;
+
+    assert.isFalse(store.getStatus().extensionOnline);
+    store.authenticate(token, "install-a", WEB_SUMMARY_PROTOCOL_VERSION);
+    assert.isTrue(store.getStatus().extensionOnline);
+
+    now += 5_001;
+    assert.isTrue(store.getStatus().paired);
+    assert.isFalse(store.getStatus().extensionOnline);
+  });
+
   it("revokes the previous executor when a new install is approved", function () {
     const first = store.createPairingRequest(identity("install-a"));
     store.approvePairingRequest(first.requestId);

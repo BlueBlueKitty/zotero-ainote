@@ -156,18 +156,40 @@ function getModelCapabilityHint(
 function bindButtonAction(
   element: HTMLElement,
   handler: (event: Event) => void | Promise<void>,
+  options: { pendingText?: string } = {},
 ) {
   let pending = false;
+  const control = element as HTMLButtonElement;
+  const originalText = element.textContent || "";
   const wrapped = (event: Event) => {
     event.preventDefault?.();
     event.stopPropagation?.();
     if (pending) return;
     pending = true;
-    Promise.resolve(handler(event)).finally(() => {
-      setTimeout(() => {
-        pending = false;
-      }, 0);
-    });
+    const wasDisabled = control.disabled;
+    control.disabled = true;
+    element.setAttribute("aria-busy", "true");
+    if (options.pendingText) element.textContent = options.pendingText;
+    void Promise.resolve()
+      .then(() => handler(event))
+      .catch((error: unknown) => {
+        const detail =
+          error instanceof Error ? error.message : String(error || "");
+        const message = runtimeT({
+          "en-US": "Action failed",
+          "zh-CN": "操作失败",
+          "zh-TW": "操作失敗",
+        });
+        showToast(detail ? `${message}：${detail}` : message, "error");
+      })
+      .finally(() => {
+        control.disabled = wasDisabled;
+        element.removeAttribute("aria-busy");
+        if (options.pendingText) element.textContent = originalText;
+        setTimeout(() => {
+          pending = false;
+        }, 0);
+      });
   };
   element.addEventListener("click", wrapped);
   element.addEventListener("command", wrapped as EventListener);
@@ -578,6 +600,14 @@ function openAddProfileDialog(win: Window) {
     setCurrentProfile(profile.id);
     close();
     renderProfilesUI(win);
+    showToast(
+      runtimeT({
+        "en-US": "Profile created.",
+        "zh-CN": "配置已创建。",
+        "zh-TW": "設定檔已建立。",
+      }),
+      "success",
+    );
   });
 
   actions.appendChild(cancelBtn);
@@ -714,6 +744,14 @@ function openAddPromptTemplateDialog(win: Window) {
     close();
     renderPromptTemplatesUI(win);
     notifyPromptTemplateMenuChanged(win);
+    showToast(
+      runtimeT({
+        "en-US": "Template created.",
+        "zh-CN": "模板已创建。",
+        "zh-TW": "範本已建立。",
+      }),
+      "success",
+    );
   });
 
   actions.appendChild(cancelBtn);
@@ -759,6 +797,7 @@ function pairingStatusKey(status: WebSummaryBridgeStatus | undefined): string {
   const pending = status?.pendingPairingRequest;
   return JSON.stringify({
     paired: !!status?.paired,
+    extensionOnline: !!status?.extensionOnline,
     pending: pending
       ? {
           requestId: pending.requestId,
@@ -822,11 +861,20 @@ function renderWebSummarySettingsUI(win: Window) {
   const status = bridge?.getStatus();
   const statusBox = createHtmlElement(doc, "div");
   statusBox.textContent = status?.paired
-    ? runtimeT({
-        "en-US": `Paired: ${status.executor?.browser || "browser"} ${status.executor?.extensionVersion || ""} (${status.executor?.installId || ""})`,
-        "zh-CN": `已配对：${status.executor?.browser || "浏览器"} ${status.executor?.extensionVersion || ""}（安装 ID：${status.executor?.installId || ""}）`,
-        "zh-TW": `已配對：${status.executor?.browser || "瀏覽器"} ${status.executor?.extensionVersion || ""}（安裝 ID：${status.executor?.installId || ""}）`,
-      })
+    ? status.extensionOnline
+      ? runtimeT({
+          "en-US": `Paired: ${status.executor?.browser || "browser"} ${status.executor?.extensionVersion || ""} (${status.executor?.installId || ""})`,
+          "zh-CN": `已配对：${status.executor?.browser || "浏览器"} ${status.executor?.extensionVersion || ""}（安装 ID：${status.executor?.installId || ""}）`,
+          "zh-TW": `已配對：${status.executor?.browser || "瀏覽器"} ${status.executor?.extensionVersion || ""}（安裝 ID：${status.executor?.installId || ""}）`,
+        })
+      : runtimeT({
+          "en-US":
+            "Paired, but the browser extension is not currently connected. Please check that it is installed and enabled.",
+          "zh-CN":
+            "已配对，但浏览器扩展当前未连接，请检查扩展是否仍已安装并启用。",
+          "zh-TW":
+            "已配對，但瀏覽器擴充套件目前未連線，請檢查擴充套件是否仍已安裝並啟用。",
+        })
     : runtimeT({
         "en-US": "No browser extension is paired.",
         "zh-CN": "尚未配对浏览器扩展。",
@@ -851,11 +899,11 @@ function renderWebSummarySettingsUI(win: Window) {
   const pairingHint = createHtmlElement(doc, "div");
   pairingHint.textContent = runtimeT({
     "en-US":
-      "Open the browser extension options and click Pair with Zotero. Pairing requests are valid for 2 minutes and must be approved here.",
+      "Open the browser extension options and click Pair with Zotero. A confirmation prompt will appear in Zotero.",
     "zh-CN":
-      "请打开浏览器扩展选项并点击“与 Zotero 配对”。配对请求有效期为 2 分钟，需在此处手动批准。",
+      "请打开浏览器扩展选项并点击“与 Zotero 配对”。Zotero 会弹出确认窗口。",
     "zh-TW":
-      "請開啟瀏覽器擴充套件選項並點擊「與 Zotero 配對」。配對請求有效期為 2 分鐘，需在此處手動批准。",
+      "請開啟瀏覽器擴充套件選項並點擊「與 Zotero 配對」。Zotero 會彈出確認視窗。",
   });
   Object.assign(pairingHint.style, {
     marginBottom: "8px",
@@ -876,44 +924,132 @@ function renderWebSummarySettingsUI(win: Window) {
     bindButtonAction(revokeButton, () => {
       bridge?.revokePairing();
       renderWebSummarySettingsUI(win);
+      showToast(
+        runtimeT({
+          "en-US": "Pairing revoked.",
+          "zh-CN": "已取消与 Zotero 的配对。",
+          "zh-TW": "已取消與 Zotero 的配對。",
+        }),
+        "success",
+      );
     });
     pairingActions.appendChild(revokeButton);
   }
+  const connectionButton = createActionButton(
+    doc,
+    runtimeT({
+      "en-US": "Check extension connection",
+      "zh-CN": "检测扩展连接状态",
+      "zh-TW": "檢測擴充套件連線狀態",
+    }),
+    true,
+  );
+  bindButtonAction(
+    connectionButton,
+    () => {
+      const latestStatus = bridge?.getStatus();
+      const message = !latestStatus?.running
+        ? runtimeT({
+            "en-US": "The Zotero bridge is not running.",
+            "zh-CN": "Zotero 桥接服务未运行。",
+            "zh-TW": "Zotero 橋接服務未執行。",
+          })
+        : !latestStatus.paired
+          ? runtimeT({
+              "en-US": "No browser extension is paired.",
+              "zh-CN": "尚未配对浏览器扩展。",
+              "zh-TW": "尚未配對瀏覽器擴充套件。",
+            })
+          : latestStatus.extensionOnline
+            ? runtimeT({
+                "en-US":
+                  "Connection is healthy: the paired extension is online.",
+                "zh-CN": "连接正常：已配对扩展当前在线。",
+                "zh-TW": "連線正常：已配對擴充套件目前在線。",
+              })
+            : runtimeT({
+                "en-US":
+                  "The extension is paired but is not currently connected.",
+                "zh-CN": "扩展已配对，但当前未连接。",
+                "zh-TW": "擴充套件已配對，但目前未連線。",
+              });
+      const type =
+        latestStatus?.running &&
+        latestStatus.paired &&
+        latestStatus.extensionOnline
+          ? "success"
+          : latestStatus?.running && latestStatus.paired
+            ? "warning"
+            : "error";
+      renderWebSummarySettingsUI(win);
+      showToast(message, type);
+    },
+    {
+      pendingText: runtimeT({
+        "en-US": "Checking…",
+        "zh-CN": "正在检测…",
+        "zh-TW": "正在檢測…",
+      }),
+    },
+  );
+  pairingActions.appendChild(connectionButton);
+
   const diagnosticsButton = createActionButton(
     doc,
     runtimeT({
-      "en-US": "Copy redacted diagnostics",
-      "zh-CN": "复制脱敏诊断",
-      "zh-TW": "複製脫敏診斷",
+      "en-US": "Copy diagnostic information",
+      "zh-CN": "复制诊断信息",
+      "zh-TW": "複製診斷資訊",
     }),
     false,
   );
-  bindButtonAction(diagnosticsButton, async () => {
-    const installId = status?.executor?.installId || "";
-    const diagnostics = JSON.stringify(
-      {
-        bridgeRunning: !!status?.running,
-        protocolVersion: status?.protocolVersion,
-        paired: !!status?.paired,
-        browser: status?.executor?.browser,
-        extensionVersion: status?.executor?.extensionVersion,
-        installIdPrefix: installId ? `${installId.slice(0, 8)}…` : undefined,
-        lastSeenAt: status?.executor?.lastSeenAt,
-        updatedAt: status?.updatedAt,
-      },
-      null,
-      2,
-    );
-    try {
-      await win.navigator.clipboard.writeText(diagnostics);
-    } catch {
-      statusBox.textContent = runtimeT({
-        "en-US": "Could not copy diagnostics. Clipboard access is unavailable.",
-        "zh-CN": "无法复制诊断信息：当前环境未提供剪贴板权限。",
-        "zh-TW": "無法複製診斷資訊：目前環境未提供剪貼簿權限。",
-      });
-    }
-  });
+  bindButtonAction(
+    diagnosticsButton,
+    async () => {
+      const installId = status?.executor?.installId || "";
+      const diagnostics = JSON.stringify(
+        {
+          bridgeRunning: !!status?.running,
+          protocolVersion: status?.protocolVersion,
+          paired: !!status?.paired,
+          extensionOnline: !!status?.extensionOnline,
+          browser: status?.executor?.browser,
+          extensionVersion: status?.executor?.extensionVersion,
+          installIdPrefix: installId ? `${installId.slice(0, 8)}…` : undefined,
+          lastSeenAt: status?.executor?.lastSeenAt,
+          updatedAt: status?.updatedAt,
+        },
+        null,
+        2,
+      );
+      try {
+        await win.navigator.clipboard.writeText(diagnostics);
+        showToast(
+          runtimeT({
+            "en-US": "Redacted diagnostics copied.",
+            "zh-CN": "脱敏诊断信息已复制。",
+            "zh-TW": "脫敏診斷資訊已複製。",
+          }),
+          "success",
+        );
+      } catch {
+        statusBox.textContent = runtimeT({
+          "en-US":
+            "Could not copy diagnostics. Clipboard access is unavailable.",
+          "zh-CN": "无法复制诊断信息：当前环境未提供剪贴板权限。",
+          "zh-TW": "無法複製診斷資訊：目前環境未提供剪貼簿權限。",
+        });
+        showToast(statusBox.textContent, "error");
+      }
+    },
+    {
+      pendingText: runtimeT({
+        "en-US": "Copying…",
+        "zh-CN": "正在复制…",
+        "zh-TW": "正在複製…",
+      }),
+    },
+  );
   pairingActions.appendChild(diagnosticsButton);
   card.appendChild(pairingActions);
 
@@ -921,34 +1057,12 @@ function renderWebSummarySettingsUI(win: Window) {
   if (pending?.status === "pending") {
     const pendingBox = createHtmlElement(doc, "div");
     pendingBox.textContent = runtimeT({
-      "en-US": `Confirm ${pending.browser} extension ${pending.extensionVersion}, install ID ${pending.installId}`,
-      "zh-CN": `待确认：${pending.browser} 扩展 ${pending.extensionVersion}，安装 ID ${pending.installId}`,
-      "zh-TW": `待確認：${pending.browser} 擴充套件 ${pending.extensionVersion}，安裝 ID ${pending.installId}`,
+      "en-US": `Pairing request pending: ${pending.browser} extension ${pending.extensionVersion}`,
+      "zh-CN": `配对请求等待确认：${pending.browser} 扩展 ${pending.extensionVersion}`,
+      "zh-TW": `配對請求等待確認：${pending.browser} 擴充套件 ${pending.extensionVersion}`,
     });
     pendingBox.style.marginBottom = "8px";
     card.appendChild(pendingBox);
-    const approve = createActionButton(
-      doc,
-      runtimeT({ "en-US": "Approve", "zh-CN": "批准", "zh-TW": "批准" }),
-      true,
-    );
-    bindButtonAction(approve, () => {
-      bridge?.approvePairingRequest(pending.requestId);
-      renderWebSummarySettingsUI(win);
-    });
-    card.appendChild(approve);
-    const reject = createActionButton(
-      doc,
-      runtimeT({ "en-US": "Reject", "zh-CN": "拒绝", "zh-TW": "拒絕" }),
-      false,
-      true,
-    );
-    reject.style.marginLeft = "8px";
-    bindButtonAction(reject, () => {
-      bridge?.rejectPairingRequest(pending.requestId);
-      renderWebSummarySettingsUI(win);
-    });
-    card.appendChild(reject);
   }
 
   addInputRow(
@@ -1171,6 +1285,7 @@ function renderPromptTemplateCard(
     status.style.color = "var(--ainote-success)";
     renderPromptTemplatesUI(win);
     notifyPromptTemplateMenuChanged(win);
+    showToast(getString("prefs-template-saved"), "success");
   });
   actions.appendChild(saveBtn);
 
@@ -1186,6 +1301,14 @@ function renderPromptTemplateCard(
     savePromptTemplateState([...templates, clone], clone.id);
     renderPromptTemplatesUI(win);
     notifyPromptTemplateMenuChanged(win);
+    showToast(
+      runtimeT({
+        "en-US": `Template copied as “${clone.name}”.`,
+        "zh-CN": `已复制为新模板“${clone.name}”。`,
+        "zh-TW": `已複製為新範本「${clone.name}」。`,
+      }),
+      "success",
+    );
   });
   actions.appendChild(cloneBtn);
 
@@ -1210,6 +1333,14 @@ function renderPromptTemplateCard(
       savePromptTemplateState(nextTemplates, fallbackActiveId);
       renderPromptTemplatesUI(win);
       notifyPromptTemplateMenuChanged(win);
+      showToast(
+        runtimeT({
+          "en-US": "Template deleted.",
+          "zh-CN": "模板已删除。",
+          "zh-TW": "範本已刪除。",
+        }),
+        "success",
+      );
     });
   }
   actions.appendChild(deleteBtn);
@@ -1512,6 +1643,14 @@ function actionsForProfile(
   bindButtonAction(activeBtn, () => {
     setCurrentProfile(profile.id);
     renderProfilesUI(win);
+    showToast(
+      runtimeT({
+        "en-US": "Active profile changed.",
+        "zh-CN": "当前配置已切换。",
+        "zh-TW": "目前設定檔已切換。",
+      }),
+      "success",
+    );
   });
   actions.appendChild(activeBtn);
 
@@ -1522,9 +1661,23 @@ function actionsForProfile(
       : getString("prefs-profile-enable"),
     false,
   );
-  bindButtonAction(enableBtn, () =>
-    patchProfile({ enabled: !profile.enabled }),
-  );
+  bindButtonAction(enableBtn, () => {
+    patchProfile({ enabled: !profile.enabled });
+    showToast(
+      profile.enabled
+        ? runtimeT({
+            "en-US": "Profile disabled.",
+            "zh-CN": "配置已停用。",
+            "zh-TW": "設定檔已停用。",
+          })
+        : runtimeT({
+            "en-US": "Profile enabled.",
+            "zh-CN": "配置已启用。",
+            "zh-TW": "設定檔已啟用。",
+          }),
+      "success",
+    );
+  });
   actions.appendChild(enableBtn);
 
   const cloneBtn = createActionButton(
@@ -1542,6 +1695,14 @@ function actionsForProfile(
     profiles.push(clone);
     saveProfiles(profiles);
     renderProfilesUI(win);
+    showToast(
+      runtimeT({
+        "en-US": `Profile copied as “${clone.name}”.`,
+        "zh-CN": `配置已复制为“${clone.name}”。`,
+        "zh-TW": `設定檔已複製為「${clone.name}」。`,
+      }),
+      "success",
+    );
   });
   actions.appendChild(cloneBtn);
 
@@ -1568,6 +1729,14 @@ function actionsForProfile(
       }
     }
     renderProfilesUI(win);
+    showToast(
+      runtimeT({
+        "en-US": "Profile deleted.",
+        "zh-CN": "配置已删除。",
+        "zh-TW": "設定檔已刪除。",
+      }),
+      "success",
+    );
   });
   actions.appendChild(deleteBtn);
   return actions;
@@ -1705,46 +1874,73 @@ function renderModelRow(
   });
   row.appendChild(modelList);
 
-  bindButtonAction(fetchButton, async () => {
-    status.textContent = getString("prefs-model-fetching");
-    modelList.style.display = "none";
-    modelList.innerHTML = "";
-    try {
-      const latest = getProfiles().find((item) => item.id === profile.id);
-      if (!latest) throw new Error(getString("error-profile-not-found" as any));
-      const models = await AIService.listModels(latest);
-      status.textContent = models.length
-        ? getString("prefs-model-fetch-success", {
-            args: { count: String(models.length) },
-          })
-        : getString("prefs-model-fetch-empty");
-      renderModelList(doc, modelList, models, (modelId) => {
-        input.value = modelId;
-        patchProfile({ model: modelId });
-        status.textContent = getString("prefs-model-selected", {
-          args: { model: modelId },
+  bindButtonAction(
+    fetchButton,
+    async () => {
+      status.textContent = getString("prefs-model-fetching");
+      modelList.style.display = "none";
+      modelList.innerHTML = "";
+      try {
+        const latest = getProfiles().find((item) => item.id === profile.id);
+        if (!latest)
+          throw new Error(getString("error-profile-not-found" as any));
+        const models = await AIService.listModels(latest);
+        status.textContent = models.length
+          ? getString("prefs-model-fetch-success", {
+              args: { count: String(models.length) },
+            })
+          : getString("prefs-model-fetch-empty");
+        status.style.color = "var(--ainote-success)";
+        renderModelList(doc, modelList, models, (modelId) => {
+          input.value = modelId;
+          patchProfile({ model: modelId });
+          status.textContent = getString("prefs-model-selected", {
+            args: { model: modelId },
+          });
         });
-      });
-    } catch (error: any) {
-      status.textContent = error?.message || String(error);
-      status.style.color = "var(--ainote-danger)";
-    }
-  });
+        showToast(status.textContent || "", "success");
+      } catch (error: any) {
+        status.textContent = error?.message || String(error);
+        status.style.color = "var(--ainote-danger)";
+        showToast(status.textContent || "", "error");
+      }
+    },
+    {
+      pendingText: runtimeT({
+        "en-US": "Fetching…",
+        "zh-CN": "正在获取…",
+        "zh-TW": "正在取得…",
+      }),
+    },
+  );
 
-  bindButtonAction(testButton, async () => {
-    status.textContent = getString("prefs-model-testing");
-    status.style.color = "var(--ainote-text-muted)";
-    try {
-      const latest = getProfiles().find((item) => item.id === profile.id);
-      if (!latest) throw new Error(getString("error-profile-not-found" as any));
-      const result = await AIService.testConnection(latest);
-      status.textContent = result;
-      status.style.color = "var(--ainote-success)";
-    } catch (error: any) {
-      status.textContent = error?.message || String(error);
-      status.style.color = "var(--ainote-danger)";
-    }
-  });
+  bindButtonAction(
+    testButton,
+    async () => {
+      status.textContent = getString("prefs-model-testing");
+      status.style.color = "var(--ainote-text-muted)";
+      try {
+        const latest = getProfiles().find((item) => item.id === profile.id);
+        if (!latest)
+          throw new Error(getString("error-profile-not-found" as any));
+        const result = await AIService.testConnection(latest);
+        status.textContent = result;
+        status.style.color = "var(--ainote-success)";
+        showToast(result, "success");
+      } catch (error: any) {
+        status.textContent = error?.message || String(error);
+        status.style.color = "var(--ainote-danger)";
+        showToast(status.textContent || "", "error");
+      }
+    },
+    {
+      pendingText: runtimeT({
+        "en-US": "Testing…",
+        "zh-CN": "正在测试…",
+        "zh-TW": "正在測試…",
+      }),
+    },
+  );
 
   card.appendChild(row);
 }

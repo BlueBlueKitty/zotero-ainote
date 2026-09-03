@@ -21,6 +21,7 @@ import {
 import { debugLog, errorLog, setLogLevel } from "./debug.js";
 import {
   clearExecutionTabId,
+  clearPairingToken,
   getExecutionTabId,
   getInstallId,
   getPairingToken,
@@ -28,6 +29,7 @@ import {
   saveExecutionTabId,
   savePairingToken,
 } from "./storage.js";
+import { reuseExistingPairing } from "./pairing.js";
 
 const CHATGPT_HOME = "https://chatgpt.com/";
 const SCRIPT_FILES = ["page-contract.js", "result-extractor.js", "content.js"];
@@ -515,6 +517,16 @@ async function workerLoop() {
 }
 
 async function startPairing() {
+  const existing = await reuseExistingPairing({
+    getToken: getPairingToken,
+    getSession,
+    clearToken: clearPairingToken,
+  });
+  if (existing) {
+    void workerLoop();
+    return existing;
+  }
+
   const installId = await getInstallId();
   const created = await createPairingRequest({
     installId,
@@ -530,7 +542,7 @@ async function startPairing() {
       await savePairingToken(status.token);
       const session = await getSession();
       void workerLoop();
-      return session;
+      return { session, alreadyPaired: false };
     }
     if (["rejected", "expired"].includes(status.request.status)) {
       throw new Error(
@@ -567,7 +579,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "ainote-start-pairing") {
     void startPairing()
-      .then((session) => sendResponse({ ok: true, session }))
+      .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) =>
         sendResponse({ ok: false, error: errorMessage(error) }),
       );

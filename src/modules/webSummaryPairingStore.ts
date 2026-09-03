@@ -7,6 +7,7 @@ import {
   WebSummaryPairedExecutor,
   WEB_SUMMARY_PAIRING_REQUEST_COOLDOWN_MS,
   WEB_SUMMARY_PAIRING_REQUEST_TTL_MS,
+  WEB_SUMMARY_EXTENSION_ONLINE_TTL_MS,
   WEB_SUMMARY_PROTOCOL_VERSION,
   WEB_SUMMARY_REQUIRED_CAPABILITIES,
 } from "./webSummaryTypes";
@@ -28,6 +29,7 @@ export interface PairingStoreOptions {
   randomToken?: () => string;
   requestTtlMs?: number;
   requestCooldownMs?: number;
+  executorOnlineTtlMs?: number;
 }
 
 function bridgeError(
@@ -68,6 +70,7 @@ export class WebSummaryPairingStore {
   private readonly randomToken: () => string;
   private readonly requestTtlMs: number;
   private readonly requestCooldownMs: number;
+  private readonly executorOnlineTtlMs: number;
 
   constructor(
     private readonly persistence: PairingPersistence,
@@ -83,6 +86,10 @@ export class WebSummaryPairingStore {
     this.requestCooldownMs = Math.max(
       0,
       options.requestCooldownMs ?? WEB_SUMMARY_PAIRING_REQUEST_COOLDOWN_MS,
+    );
+    this.executorOnlineTtlMs = Math.max(
+      1_000,
+      options.executorOnlineTtlMs ?? WEB_SUMMARY_EXTENSION_ONLINE_TTL_MS,
     );
     this.activePairing = persistence.load();
   }
@@ -218,12 +225,23 @@ export class WebSummaryPairingStore {
     return this.getStatus();
   }
 
+  public isExecutorOnline(): boolean {
+    const lastSeenAt = this.activePairing?.executor.lastSeenAt;
+    if (!lastSeenAt) return false;
+    const lastSeen = Date.parse(lastSeenAt);
+    return (
+      Number.isFinite(lastSeen) &&
+      this.now() - lastSeen <= this.executorOnlineTtlMs
+    );
+  }
+
   public getStatus(running = true): WebSummaryBridgeStatus {
     this.expirePendingRequestIfNeeded();
     return {
       running,
       protocolVersion: WEB_SUMMARY_PROTOCOL_VERSION,
       paired: !!this.activePairing,
+      extensionOnline: this.isExecutorOnline(),
       executor: this.activePairing
         ? {
             ...this.activePairing.executor,

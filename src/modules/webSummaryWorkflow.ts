@@ -301,7 +301,11 @@ async function waitForTaskTerminalState(
         "浏览器扩展未在限定时间内领取任务",
       );
       finish(() =>
-        reject(new Error("浏览器扩展未领取任务，请检查扩展配对状态")),
+        reject(
+          new Error(
+            "未检测到已配对的浏览器扩展，请确认浏览器已打开且扩展已启用",
+          ),
+        ),
       );
     }, EXTENSION_CLAIM_TIMEOUT_MS);
     const totalTimer = setTimeout(() => {

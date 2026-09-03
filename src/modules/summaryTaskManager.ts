@@ -35,7 +35,7 @@ function getActiveProfile() {
   return profiles.find((profile) => profile.id === activeId) || profiles[0] || null;
 }
 
-async function removeLinkedWebTask(task?: SummaryTask): Promise<void> {
+export async function removeLinkedWebTask(task?: SummaryTask): Promise<void> {
   if (!task?.webTaskId) {
     return;
   }
@@ -44,9 +44,7 @@ async function removeLinkedWebTask(task?: SummaryTask): Promise<void> {
       task.webTaskId,
       "已从活动任务列表移除",
     ).catch(() => {});
-    if (task.status !== "running") {
-      await WebSummaryBridgeClient.removeTask(task.webTaskId);
-    }
+    await WebSummaryBridgeClient.removeTask(task.webTaskId);
   } catch (error) {
     ztoolkit.log("[AiNote][SummaryTaskManager] failed to remove linked web task", {
       taskId: task.id,

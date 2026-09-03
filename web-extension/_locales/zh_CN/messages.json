@@ -39,7 +39,7 @@
     "message": "与 Zotero 配对"
   },
   "forgetButton": {
-    "message": "忘记本地令牌"
+    "message": "取消与 Zotero 的配对"
   },
   "testButton": {
     "message": "测试连接"
@@ -73,5 +73,8 @@
   },
   "statusPairSuccess": {
     "message": "配对完成。"
+  },
+  "statusAlreadyPaired": {
+    "message": "已经与 Zotero 配对，无需重复操作。"
   }
 }

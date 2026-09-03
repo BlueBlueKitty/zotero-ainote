@@ -1,6 +1,7 @@
 {
   "name": "ainote-web-extension",
   "private": true,
+  "type": "module",
   "version": "0.2.0",
   "description": "MV3 extension for AiNote web summary workflow",
   "scripts": {
